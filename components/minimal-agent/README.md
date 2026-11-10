@@ -28,7 +28,7 @@ To stay minimal it keeps no working plan, never summarizes old context (it drops
 
 ## Prerequisites
 
-- [`wash`](https://wasmcloud.com/docs/installation) 2.8.0 or newer
+- [`wash`](https://wasmcloud.com/docs/installation) 2.7.0 or newer
 - Rust 1.94 or newer with the `wasm32-wasip2` target: `rustup target add wasm32-wasip2`
 
 ## Build
