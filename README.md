@@ -8,6 +8,7 @@ This repository is the canonical source for:
 | --- | --- | --- |
 | [`wit/cosmonic-agent`](wit/cosmonic-agent) | `cosmonic:agent`, the WIT package agents, tools and hosts are built against | `ghcr.io/cosmonic-labs/cosmonic/agent` |
 | [`components/minimal-agent`](components/minimal-agent) | A small reference agent harness in Rust | `ghcr.io/cosmonic-labs/components/minimal-agent` and `minimal-agent-small` |
+| [`components/units-tool`](components/units-tool) | A small typed tool in Rust, the one [Write a typed tool](https://cosmonic.com/docs/agent-sdk/write-a-typed-tool/) builds | Source only |
 
 Everything here is licensed Apache-2.0.
 

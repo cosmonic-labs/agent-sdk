@@ -1,0 +1,48 @@
+/// Convert between units of measure. Needs no network and no files.
+package example:units@0.1.0;
+
+/// Temperature conversions.
+@since(version = 0.1.0)
+interface temperature {
+  /// A temperature scale.
+  enum scale {
+    /// Degrees Celsius.
+    celsius,
+    /// Degrees Fahrenheit.
+    fahrenheit,
+    /// Kelvin.
+    kelvin,
+  }
+
+  /// Why a conversion failed.
+  variant error {
+    /// The value is below absolute zero. The payload says by how much.
+    below-absolute-zero(string),
+  }
+
+  /// Arguments for `convert`.
+  record convert-args {
+    /// The temperature to convert.
+    value: f64,
+    /// The scale `value` is in.
+    %from: scale,
+    /// The scale to convert to.
+    to: scale,
+  }
+
+  /// What `convert` returns.
+  record convert-result {
+    /// The converted temperature, rounded to two decimal places.
+    value: f64,
+  }
+
+  /// Convert a temperature from one scale to another. Use it rather than
+  /// doing the arithmetic yourself.
+  convert: async func(args: convert-args) -> result<convert-result, error>;
+}
+
+/// A component that converts units, reaching nothing.
+@since(version = 0.1.0)
+world converter {
+  export temperature;
+}
