@@ -341,9 +341,10 @@ async fn work(events: &mut Events, req: &Request, acc: &mut Accepted) -> Result<
         let completion = match reply {
             Answer::Done(completion) => completion,
             // Too long for the model: forget the oldest half of the stored
-            // conversation and try once more.
+            // conversation and try once more, if the step limit allows
+            // another model call.
             Answer::Refused(RequestError::ContextLengthExceeded(_))
-                if !shortened && acc.conversation.halve() =>
+                if !shortened && !last && acc.conversation.halve() =>
             {
                 shortened = true;
                 continue;
