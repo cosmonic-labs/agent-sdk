@@ -450,6 +450,8 @@ fn user_text(message: &Message) -> Option<String> {
 /// - its own paused reply: carry on and finish;
 /// - "echo X": a reasoning delta, a text part, and a call to `echo`;
 /// - "shout X": a call to the plain text `shout` with X as its text;
+/// - "stall X": a call to `stall`, then one to `echo` with X;
+/// - "too long": the request refused as too long for the context;
 /// - "pause": a reply that ends `pause-turn`;
 /// - "decline": a refusal part, ending `refusal`;
 /// - "json": a JSON object in a fenced code block;
@@ -506,6 +508,37 @@ fn script(messages: &[Message]) -> Script {
                 FinishReason::ToolCalls,
             )),
         };
+    }
+    if let Some(rest) = text.strip_prefix("stall ") {
+        let stall = ToolCall {
+            id: "call-stall".into(),
+            name: "stall".into(),
+            arguments: ToolArguments::Json("{}".into()),
+        };
+        let echo = ToolCall {
+            id: "call-after-stall".into(),
+            name: "echo".into(),
+            arguments: ToolArguments::Json(serde_json::json!({ "text": rest }).to_string()),
+        };
+        return Script::Reply {
+            chunks: vec![],
+            outcome: Ok(completion(
+                vec![
+                    part(AssistantContent::ToolUse(stall)),
+                    part(AssistantContent::ToolUse(echo)),
+                ],
+                FinishReason::ToolCalls,
+            )),
+        };
+    }
+    if text.starts_with("too long") {
+        return Script::Refuse(RequestError::ContextLengthExceeded(
+            types::ContextOverflow {
+                prompt_tokens: Some(9000),
+                context_length: Some(8192),
+                detail: "scripted overflow".into(),
+            },
+        ));
     }
     if text.starts_with("pause") {
         return text_reply("Working on it.".into(), FinishReason::PauseTurn);
@@ -658,7 +691,7 @@ impl<T: Send> session::HostWithStore<T> for HasSelf<State> {
     }
 }
 
-// ----- tools: echo, and one that always fails -----
+// ----- tools: echo, one that always fails, and one whose outcome is unknown -----
 
 impl tools::Host for State {}
 
@@ -698,6 +731,11 @@ impl<T: Send> tools::HostWithStore<T> for HasSelf<State> {
             ),
             tool_def("shout", "Say the text louder", ToolInput::Text),
             tool_def(
+                "stall",
+                "Never answers in time",
+                ToolInput::JsonSchema(r#"{"type": "object"}"#.into()),
+            ),
+            tool_def(
                 "count",
                 "Count to a number",
                 ToolInput::Grammar(Grammar {
@@ -730,6 +768,12 @@ impl<T: Send> tools::HostWithStore<T> for HasSelf<State> {
                 )));
             }
             ("explode", _) => ("the tool exploded".to_string(), true),
+            // Dispatched, and timed out: whether it took effect is unknown.
+            ("stall", _) => {
+                return Ok(Err(tool_types::CallError::OutcomeUnknown(
+                    tool_types::OutcomeError::TimedOut,
+                )));
+            }
             (other, _) => {
                 return Ok(Err(tool_types::CallError::NotDispatched(
                     tool_types::DispatchError::UnknownTool(other.to_string()),

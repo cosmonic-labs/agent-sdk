@@ -92,6 +92,7 @@ struct Ask<'a> {
     text: &'a str,
     schema: Option<&'a str>,
     effort: Option<Effort>,
+    max_steps: u32,
     /// Drop the event stream after this many events.
     limit: Option<usize>,
 }
@@ -103,6 +104,7 @@ impl<'a> Ask<'a> {
             text,
             schema: None,
             effort: None,
+            max_steps: 8,
             limit: None,
         }
     }
@@ -157,7 +159,7 @@ impl Fixture {
             run_id: ask.id.into(),
             instructions: Some("Be brief.".into()),
             schema: ask.schema.map(str::to_string),
-            max_steps: Some(8),
+            max_steps: Some(ask.max_steps),
             max_total_tokens: None,
             max_duration: Some(60_000_000_000),
             effort: ask.effort,
@@ -302,7 +304,7 @@ async fn tool_turn(f: &Fixture) -> Result<()> {
     ensure!(host.chats.len() == 2, "{} model calls", host.chats.len());
     let first = &host.chats[0];
     ensure!(
-        first.tools == ["echo", "explode", "shout", "count"],
+        first.tools == ["echo", "explode", "shout", "stall", "count"],
         "tools offered: {:?}",
         first.tools
     );
@@ -311,6 +313,7 @@ async fn tool_turn(f: &Fixture) -> Result<()> {
             ToolInput::JsonSchema(echo),
             ToolInput::JsonSchema(_),
             ToolInput::Text,
+            ToolInput::JsonSchema(_),
             ToolInput::Grammar(count),
         ] if echo.contains("\"required\"") && count.definition == "[0-9]+"),
         "tool inputs not passed through: {:?}",
@@ -591,13 +594,85 @@ async fn freeform(f: &Fixture) -> Result<()> {
     Ok(())
 }
 
+/// A tool call whose outcome is unknown stops the run: it is recorded as
+/// unresolved, the calls after it are not made, the model is not called
+/// again, and the stored conversation does not move past it.
+async fn unresolved(f: &Fixture) -> Result<()> {
+    let (from, chats, calls, turns) = {
+        let host = f.host();
+        (
+            host.entries.len(),
+            host.chats.len(),
+            host.tool_calls.len(),
+            host.turns(),
+        )
+    };
+    match f.run(Ask::new("r-stall", "stall then echo")).await? {
+        Ran::Started {
+            outcome: Err(RunError::Failed(why)),
+            ..
+        } => ensure!(why.contains("call-stall"), "failure: {why}"),
+        Ran::Started { outcome, .. } => bail!("expected failed, got {outcome:?}"),
+        Ran::Refused(e) => bail!("did not start: {e:?}"),
+    }
+    let host = f.host();
+    ensure!(
+        host.chats.len() == chats + 1,
+        "the model was called again after an unresolved call"
+    );
+    let made: Vec<&str> = host.tool_calls[calls..]
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    ensure!(made == ["stall"], "tool calls made: {made:?}");
+    let entries: Vec<serde_json::Value> = host.entries[from..].iter().map(|e| e.json()).collect();
+    ensure!(
+        entries
+            .iter()
+            .any(|e| e["op"] == "call-stall" && e["outcome"] == "unresolved"),
+        "the call is not recorded as unresolved"
+    );
+    ensure!(
+        !entries.iter().any(|e| e["op"] == "call-after-stall"),
+        "the call after it was recorded"
+    );
+    let result = entries.last().context("empty journal")?;
+    ensure!(
+        result["run"] == "r-stall" && result["outcome"] == "failed",
+        "{result}"
+    );
+    ensure!(host.turns() == turns, "the stored conversation moved on");
+    Ok(())
+}
+
+/// A request too long for the model's context is retried once with a
+/// shorter conversation, but never past the run's step limit.
+async fn too_long_at_the_limit(f: &Fixture) -> Result<()> {
+    let chats = f.host().chats.len();
+    let ask = Ask {
+        max_steps: 1,
+        ..Ask::new("r-long", "too long for one step")
+    };
+    let outcome = match f.run(ask).await? {
+        Ran::Started { outcome, .. } => outcome,
+        Ran::Refused(e) => bail!("did not start: {e:?}"),
+    };
+    let calls = f.host().chats.len() - chats;
+    ensure!(calls == 1, "{calls} model calls with max-steps 1");
+    ensure!(
+        matches!(outcome, Err(RunError::ModelRefused(_))),
+        "expected model-refused, got {outcome:?}"
+    );
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "../target/wasm32-wasip2/release/minimal_agent.wasm".into());
     let f = Fixture::new(&path)?;
-    let checks: [(&str, _); 10] = [
+    let checks: [(&str, _); 12] = [
         ("a run with a tool call", tool_turn(&f).await),
         ("the next run continues", second_turn(&f).await),
         ("a repeated run id is a duplicate", duplicate(&f).await),
@@ -608,6 +683,14 @@ async fn main() -> Result<()> {
         ("a paused reply is continued", paused(&f).await),
         ("a freeform tool gets its text", freeform(&f).await),
         ("dropping the events cancels", cancelled(&f).await),
+        (
+            "an unknown tool outcome stops the run",
+            unresolved(&f).await,
+        ),
+        (
+            "a retry stays within max-steps",
+            too_long_at_the_limit(&f).await,
+        ),
     ];
     let mut failed = 0;
     for (name, result) in &checks {
