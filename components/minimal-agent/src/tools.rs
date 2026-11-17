@@ -37,6 +37,10 @@ pub(crate) enum Called {
     Superseded,
     /// The driver dropped the event stream after the call returned.
     Gone,
+    /// Whether the call took effect is unknown. The run stops here, before
+    /// the model can ask for it again and before the stored conversation
+    /// moves past it: a person resolves it.
+    Unresolved(String),
 }
 
 /// Make one tool call the model asked for, recorded around the dispatch: the
@@ -57,6 +61,7 @@ pub(crate) async fn call_tool(
         return Called::Superseded;
     }
 
+    let mut unresolved = None;
     let (output, is_error, outcome) = match tools::call(call.clone()).await {
         Ok(r) if r.is_error => (r.output, true, "failed"),
         Ok(r) => (r.output, false, "succeeded"),
@@ -65,8 +70,11 @@ pub(crate) async fn call_tool(
             (vec![ToolOutput::Text(e.describe())], true, "failed")
         }
         // Made, or perhaps made, and whether it took effect is not known.
+        // The session conventions say never to advance state past it.
         Err(e @ CallError::OutcomeUnknown(_)) => {
-            (vec![ToolOutput::Text(e.describe())], true, "unresolved")
+            let why = e.describe();
+            unresolved = Some(why.clone());
+            (vec![ToolOutput::Text(why)], true, "unresolved")
         }
     };
     let text = output_text(&output);
@@ -97,7 +105,14 @@ pub(crate) async fn call_tool(
     if !events.tools(vec![result.clone()], seq).await {
         return Called::Gone;
     }
-    Called::Done(result)
+    match unresolved {
+        Some(why) => Called::Unresolved(format!(
+            "the {} tool call {} stopped the run: {why}. It was not made again; check \
+             whether it took effect before asking again",
+            call.name, call.id
+        )),
+        None => Called::Done(result),
+    }
 }
 
 /// A tool call the run will not make because its time limit passed: no op,

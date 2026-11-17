@@ -150,6 +150,7 @@ fn run_error(f: Failure) -> RunError {
         Failure::NotRecorded(d) => RunError::NotRecorded(d),
         Failure::Superseded => RunError::Superseded,
         Failure::OutputRejected(d) => RunError::OutputRejected(d),
+        Failure::Unresolved(d) => RunError::Failed(d),
     }
 }
 

@@ -149,6 +149,9 @@ pub(crate) enum Failure {
     NotRecorded(String),
     Superseded,
     OutputRejected(String),
+    /// A tool call's outcome is unknown: the session conventions say never
+    /// to advance state past it, so the run ends without saving it.
+    Unresolved(String),
 }
 
 impl Failure {
@@ -156,7 +159,7 @@ impl Failure {
     pub(crate) fn describe(&self) -> String {
         match self {
             Self::Cancelled => "the run was cancelled".into(),
-            Self::NoModel(d) | Self::NotRecorded(d) => d.clone(),
+            Self::NoModel(d) | Self::NotRecorded(d) | Self::Unresolved(d) => d.clone(),
             Self::Refused(e) => describe_refused(e),
             Self::Generation(e) => describe_failed(e),
             Self::Superseded => "another request changed this session during the run; the \
@@ -177,6 +180,7 @@ impl Failure {
             Self::NotRecorded(_) => "not-recorded",
             Self::Superseded => "superseded",
             Self::OutputRejected(_) => "output-rejected",
+            Self::Unresolved(_) => "failed",
         }
     }
 }
@@ -412,6 +416,7 @@ async fn work(events: &mut Events, req: &Request, acc: &mut Accepted) -> Result<
                 Called::Done(result) => results.push(result),
                 Called::Superseded => return Err(Failure::Superseded),
                 Called::Gone => return Err(Failure::Cancelled),
+                Called::Unresolved(why) => return Err(Failure::Unresolved(why)),
             }
         }
         let calls = asked.into_iter().map(StoredCall::from).collect();
