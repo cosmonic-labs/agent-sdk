@@ -607,14 +607,17 @@ async fn unresolved(f: &Fixture) -> Result<()> {
             host.turns(),
         )
     };
-    match f.run(Ask::new("r-stall", "stall then echo")).await? {
+    let events = match f.run(Ask::new("r-stall", "stall then echo")).await? {
         Ran::Started {
+            events,
             outcome: Err(RunError::Failed(why)),
-            ..
-        } => ensure!(why.contains("call-stall"), "failure: {why}"),
+        } => {
+            ensure!(why.contains("call-stall"), "failure: {why}");
+            events
+        }
         Ran::Started { outcome, .. } => bail!("expected failed, got {outcome:?}"),
         Ran::Refused(e) => bail!("did not start: {e:?}"),
-    }
+    };
     let host = f.host();
     ensure!(
         host.chats.len() == chats + 1,
@@ -626,11 +629,26 @@ async fn unresolved(f: &Fixture) -> Result<()> {
         .collect();
     ensure!(made == ["stall"], "tool calls made: {made:?}");
     let entries: Vec<serde_json::Value> = host.entries[from..].iter().map(|e| e.json()).collect();
+    let run = &host.entries[from..];
+    let recorded = run
+        .iter()
+        .position(|e| {
+            let j = e.json();
+            j["op"] == "call-stall" && j["outcome"] == "unresolved"
+        })
+        .context("the call is not recorded as unresolved")?;
+    // The tool result is journaled as the step after the op's result, and the
+    // event carries that step's seq.
+    let step = run[recorded..]
+        .iter()
+        .find(|e| e.kind == "agent.step.v1")
+        .context("no journaled step for the unresolved call")?;
     ensure!(
-        entries
-            .iter()
-            .any(|e| e["op"] == "call-stall" && e["outcome"] == "unresolved"),
-        "the call is not recorded as unresolved"
+        events.iter().any(|e| matches!(e, RunEvent::Step(s)
+            if s.seq == Some(step.seq)
+                && matches!(&s.content, StepContent::Tool(r)
+                    if r.first().is_some_and(|r| r.call_id == "call-stall" && r.is_error)))),
+        "no error tool step for the unresolved call at its journal seq"
     );
     ensure!(
         !entries.iter().any(|e| e["op"] == "call-after-stall"),
