@@ -114,10 +114,32 @@ impl Describe for session::Error {
     }
 }
 
+/// What the model reads when a tool call reached its time limit, in either
+/// case: `dispatch-error::timed-out` (it never started) and
+/// `outcome-error::timed-out` (no result came back, and the call may have
+/// done some of its work, or may even go on: the host may not stop it). `timed-out` carries no text, so the harness words it; this is the
+/// wording every harness should give its model, so it asks for less rather
+/// than repeating a call that will run out of time again.
+pub(crate) fn tool_timed_out(started: bool) -> String {
+    let what = if started {
+        "the call reached its time limit and no result came back, so it may have done some or \
+         all of its work"
+    } else {
+        "the call reached its time limit before the tool started it, so it had no effect"
+    };
+    format!("{what}. {TIMED_OUT_ADVICE}")
+}
+
+/// The advice in [`tool_timed_out`].
+const TIMED_OUT_ADVICE: &str = "Do not repeat the same call: ask for less in one call (a \
+     narrower query, a smaller folder or file, fewer items, or one page at a time)";
+
 impl Describe for CallError {
     fn describe(&self) -> String {
         match self {
             Self::NotDispatched(e) => e.describe(),
+            // Its text already says it may have taken effect.
+            Self::OutcomeUnknown(e @ OutcomeError::TimedOut) => e.describe(),
             Self::OutcomeUnknown(e) => {
                 format!("{}; whether it took effect is unknown", e.describe())
             }
@@ -133,7 +155,7 @@ impl Describe for DispatchError {
             Self::Upstream(d) => format!("the tool could not run: {d}"),
             Self::Denied(d) => format!("the call was declined: {d}"),
             Self::Cancelled => "the call was cancelled".into(),
-            Self::TimedOut => "the call timed out".into(),
+            Self::TimedOut => tool_timed_out(false),
             Self::Other(d) => d.clone(),
         }
     }
@@ -144,7 +166,7 @@ impl Describe for OutcomeError {
         match self {
             Self::Upstream(d) => format!("the tool failed: {d}"),
             Self::Cancelled => "the call was cancelled".into(),
-            Self::TimedOut => "the call timed out".into(),
+            Self::TimedOut => tool_timed_out(true),
             Self::Other(d) => d.clone(),
         }
     }
@@ -157,5 +179,34 @@ impl Describe for ListError {
             Self::Denied(d) => format!("listing the tools was denied ({d})"),
             Self::Other(d) => d.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Both kinds of tool timeout tell the model to ask for less, and say
+    /// truthfully whether the call may have done anything.
+    #[test]
+    fn a_tool_timeout_tells_the_model_what_to_do() {
+        let stopped = CallError::OutcomeUnknown(OutcomeError::TimedOut).describe();
+        assert!(
+            stopped.contains("may have done some or all of its work"),
+            "{stopped}"
+        );
+        assert!(!stopped.contains("whether it took effect"), "{stopped}");
+        let never = CallError::NotDispatched(DispatchError::TimedOut).describe();
+        assert!(never.contains("had no effect"), "{never}");
+        for text in [stopped, never] {
+            assert!(text.contains("Do not repeat the same call"), "{text}");
+            assert!(text.contains("one page at a time"), "{text}");
+        }
+        // Other unknown outcomes still say so.
+        let failed = CallError::OutcomeUnknown(OutcomeError::Cancelled).describe();
+        assert!(
+            failed.ends_with("whether it took effect is unknown"),
+            "{failed}"
+        );
     }
 }

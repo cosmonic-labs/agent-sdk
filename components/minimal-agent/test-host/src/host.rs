@@ -451,6 +451,7 @@ fn user_text(message: &Message) -> Option<String> {
 /// - "echo X": a reasoning delta, a text part, and a call to `echo`;
 /// - "shout X": a call to the plain text `shout` with X as its text;
 /// - "stall X": a call to `stall`, then one to `echo` with X;
+/// - "queue X": a call to `queue`;
 /// - "too long": the request refused as too long for the context;
 /// - "pause": a reply that ends `pause-turn`;
 /// - "decline": a refusal part, ending `refusal`;
@@ -527,6 +528,20 @@ fn script(messages: &[Message]) -> Script {
                     part(AssistantContent::ToolUse(stall)),
                     part(AssistantContent::ToolUse(echo)),
                 ],
+                FinishReason::ToolCalls,
+            )),
+        };
+    }
+    if text.starts_with("queue ") {
+        let call = ToolCall {
+            id: "call-queue".into(),
+            name: "queue".into(),
+            arguments: ToolArguments::Json("{}".into()),
+        };
+        return Script::Reply {
+            chunks: vec![],
+            outcome: Ok(completion(
+                vec![part(AssistantContent::ToolUse(call))],
                 FinishReason::ToolCalls,
             )),
         };
@@ -736,6 +751,11 @@ impl<T: Send> tools::HostWithStore<T> for HasSelf<State> {
                 ToolInput::JsonSchema(r#"{"type": "object"}"#.into()),
             ),
             tool_def(
+                "queue",
+                "Never starts in time",
+                ToolInput::JsonSchema(r#"{"type": "object"}"#.into()),
+            ),
+            tool_def(
                 "count",
                 "Count to a number",
                 ToolInput::Grammar(Grammar {
@@ -772,6 +792,12 @@ impl<T: Send> tools::HostWithStore<T> for HasSelf<State> {
             ("stall", _) => {
                 return Ok(Err(tool_types::CallError::OutcomeUnknown(
                     tool_types::OutcomeError::TimedOut,
+                )));
+            }
+            // Timed out before it started: it had no effect.
+            ("queue", _) => {
+                return Ok(Err(tool_types::CallError::NotDispatched(
+                    tool_types::DispatchError::TimedOut,
                 )));
             }
             (other, _) => {

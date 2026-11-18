@@ -304,7 +304,7 @@ async fn tool_turn(f: &Fixture) -> Result<()> {
     ensure!(host.chats.len() == 2, "{} model calls", host.chats.len());
     let first = &host.chats[0];
     ensure!(
-        first.tools == ["echo", "explode", "shout", "stall", "count"],
+        first.tools == ["echo", "explode", "shout", "stall", "queue", "count"],
         "tools offered: {:?}",
         first.tools
     );
@@ -313,6 +313,7 @@ async fn tool_turn(f: &Fixture) -> Result<()> {
             ToolInput::JsonSchema(echo),
             ToolInput::JsonSchema(_),
             ToolInput::Text,
+            ToolInput::JsonSchema(_),
             ToolInput::JsonSchema(_),
             ToolInput::Grammar(count),
         ] if echo.contains("\"required\"") && count.definition == "[0-9]+"),
@@ -613,6 +614,12 @@ async fn unresolved(f: &Fixture) -> Result<()> {
             outcome: Err(RunError::Failed(why)),
         } => {
             ensure!(why.contains("call-stall"), "failure: {why}");
+            // The person reads what the model would: the call ran out of
+            // time, and what to ask for instead.
+            ensure!(
+                why.contains("reached its time limit") && why.contains("ask for less"),
+                "failure: {why}"
+            );
             events
         }
         Ran::Started { outcome, .. } => bail!("expected failed, got {outcome:?}"),
@@ -647,7 +654,8 @@ async fn unresolved(f: &Fixture) -> Result<()> {
         events.iter().any(|e| matches!(e, RunEvent::Step(s)
             if s.seq == Some(step.seq)
                 && matches!(&s.content, StepContent::Tool(r)
-                    if r.first().is_some_and(|r| r.call_id == "call-stall" && r.is_error)))),
+                    if r.first().is_some_and(|r| r.call_id == "call-stall" && r.is_error
+                        && tool_text(r).contains("may have done some or all of its work"))))),
         "no error tool step for the unresolved call at its journal seq"
     );
     ensure!(
@@ -661,6 +669,42 @@ async fn unresolved(f: &Fixture) -> Result<()> {
     );
     ensure!(host.turns() == turns, "the stored conversation moved on");
     Ok(())
+}
+
+/// A tool call that timed out before it started had no effect, so the run
+/// goes on: the model gets the timeout's text, which tells it to ask for less
+/// rather than repeat the call.
+async fn timed_out_before_start(f: &Fixture) -> Result<()> {
+    let (events, outcome) = started(f.run(Ask::new("r-queue", "queue it")).await?)?;
+    ensure!(
+        matches!(outcome.finish, Finish::Done),
+        "finish: {:?}",
+        outcome.finish
+    );
+    let said = reply_text(&outcome);
+    ensure!(
+        said.contains("had no effect") && said.contains("Do not repeat the same call"),
+        "reply: {said}"
+    );
+    ensure!(
+        events.iter().any(|e| matches!(e, RunEvent::Step(s)
+            if matches!(&s.content, StepContent::Tool(r)
+                if r.first().is_some_and(|r| r.call_id == "call-queue" && r.is_error)))),
+        "no error tool step for the call"
+    );
+    Ok(())
+}
+
+/// A tool result's text parts, joined.
+fn tool_text(r: &host::types::ToolResult) -> String {
+    r.output
+        .iter()
+        .filter_map(|o| match o {
+            host::types::ToolOutput::Text(t) => Some(t.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A request too long for the model's context is retried once with a
@@ -690,7 +734,7 @@ async fn main() -> Result<()> {
         .nth(1)
         .unwrap_or_else(|| "../target/wasm32-wasip2/release/minimal_agent.wasm".into());
     let f = Fixture::new(&path)?;
-    let checks: [(&str, _); 12] = [
+    let checks: [(&str, _); 13] = [
         ("a run with a tool call", tool_turn(&f).await),
         ("the next run continues", second_turn(&f).await),
         ("a repeated run id is a duplicate", duplicate(&f).await),
@@ -704,6 +748,10 @@ async fn main() -> Result<()> {
         (
             "an unknown tool outcome stops the run",
             unresolved(&f).await,
+        ),
+        (
+            "a timeout before a call starts goes back to the model",
+            timed_out_before_start(&f).await,
         ),
         (
             "a retry stays within max-steps",

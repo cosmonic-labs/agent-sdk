@@ -22,7 +22,7 @@ It exports one interface, `cosmonic:agent/run@0.4.2`: a message in, a stream of 
 
 ## How it works
 
-Each run reads the stored conversation from the session, opens the model, lists the tools, and loops: call the model, run any tool calls it asks for, send the results back. It stops when the model answers, or after eight model calls unless the driver sets another limit (at most 64). Every model call and tool call is written to the session journal before and after it happens, so the next run continues the conversation even on a fresh instance after a restart, and a tool call cut off by a restart is never repeated. A tool call whose outcome is unknown, such as one that timed out, ends the run as failed: the run makes no further calls and does not save the conversation past it. Start reading at [`src/turn.rs`](src/turn.rs).
+Each run reads the stored conversation from the session, opens the model, lists the tools, and loops: call the model, run any tool calls it asks for, send the results back. It stops when the model answers, or after eight model calls unless the driver sets another limit (at most 64). Every model call and tool call is written to the session journal before and after it happens, so the next run continues the conversation even on a fresh instance after a restart, and a tool call cut off by a restart is never repeated. A tool call whose outcome is unknown, such as one that timed out, ends the run as failed: the run makes no further calls and does not save the conversation past it. A tool call that reaches its time limit (`timed-out`, which carries no text) gets advice to ask for less in one call rather than repeat it. When it never started (`not-dispatched`), the model reads that it had no effect, with the advice, and the run goes on. When no result came back (`outcome-unknown`), the run fails as above, and the person reads that it may have done some or all of its work, with the same advice. Other harnesses can reuse the wording in `tool_timed_out` ([`src/describe.rs`](src/describe.rs)). Start reading at [`src/turn.rs`](src/turn.rs).
 
 To stay minimal it keeps no working plan, never summarizes old context (it drops the oldest half when the model's context is full), and never asks the person a question.
 
@@ -61,7 +61,7 @@ Keep the feature list as it is. With `--all-features`, `wasm-opt` uses proposals
 cargo test
 ```
 
-covers the parts of a run that need no host. [`test-host/`](test-host/) runs the built component end to end in a small [Wasmtime](https://wasmtime.dev) host that plays the model, the session store and four tools, starting every run on a fresh instance:
+covers the parts of a run that need no host. [`test-host/`](test-host/) runs the built component end to end in a small [Wasmtime](https://wasmtime.dev) host that plays the model, the session store and a few tools, starting every run on a fresh instance:
 
 ```shell
 cd test-host
