@@ -304,7 +304,10 @@ async fn tool_turn(f: &Fixture) -> Result<()> {
     ensure!(host.chats.len() == 2, "{} model calls", host.chats.len());
     let first = &host.chats[0];
     ensure!(
-        first.tools == ["echo", "explode", "shout", "stall", "queue", "count"],
+        first.tools
+            == [
+                "echo", "explode", "shout", "stall", "peek", "queue", "count"
+            ],
         "tools offered: {:?}",
         first.tools
     );
@@ -313,6 +316,7 @@ async fn tool_turn(f: &Fixture) -> Result<()> {
             ToolInput::JsonSchema(echo),
             ToolInput::JsonSchema(_),
             ToolInput::Text,
+            ToolInput::JsonSchema(_),
             ToolInput::JsonSchema(_),
             ToolInput::JsonSchema(_),
             ToolInput::Grammar(count),
@@ -695,6 +699,59 @@ async fn timed_out_before_start(f: &Fixture) -> Result<()> {
     Ok(())
 }
 
+/// A read-only tool that timed out has no effects to resolve, so the run goes
+/// on: the call is closed as failed, the model gets the timeout's text, and
+/// the stored conversation moves on.
+async fn read_only_timed_out(f: &Fixture) -> Result<()> {
+    let (from, turns) = {
+        let host = f.host();
+        (host.entries.len(), host.turns().len())
+    };
+    let (events, outcome) = started(f.run(Ask::new("r-peek", "peek at it")).await?)?;
+    ensure!(
+        matches!(outcome.finish, Finish::Done),
+        "finish: {:?}",
+        outcome.finish
+    );
+    let said = reply_text(&outcome);
+    ensure!(
+        said.contains("may have done some or all of its work")
+            && said.contains("Do not repeat the same call"),
+        "reply: {said}"
+    );
+    ensure!(
+        events.iter().any(|e| matches!(e, RunEvent::Step(s)
+            if matches!(&s.content, StepContent::Tool(r)
+                if r.first().is_some_and(|r| r.call_id == "call-peek" && r.is_error
+                    && tool_text(r).contains("Do not repeat the same call"))))),
+        "no error tool step with the timeout's text for the call"
+    );
+    let host = f.host();
+    ensure!(
+        host.entries[from..].iter().any(|e| {
+            let j = e.json();
+            j["op"] == "call-peek" && j["outcome"] == "failed"
+        }),
+        "the call is not closed as failed"
+    );
+    let stored = host.turns();
+    ensure!(
+        stored.len() > turns,
+        "the stored conversation did not move on"
+    );
+    ensure!(
+        stored[turns..]
+            .iter()
+            .any(|t| t["results"].as_array().is_some_and(|rs| rs
+                .iter()
+                .any(|r| r["call_id"] == "call-peek"
+                    && r["is_error"] == true
+                    && r["text"].as_str().is_some_and(|t| t.contains("time limit"))))),
+        "the stored conversation has no error result for the call"
+    );
+    Ok(())
+}
+
 /// A tool result's text parts, joined.
 fn tool_text(r: &host::types::ToolResult) -> String {
     r.output
@@ -734,7 +791,7 @@ async fn main() -> Result<()> {
         .nth(1)
         .unwrap_or_else(|| "../target/wasm32-wasip2/release/minimal_agent.wasm".into());
     let f = Fixture::new(&path)?;
-    let checks: [(&str, _); 13] = [
+    let checks: [(&str, _); 14] = [
         ("a run with a tool call", tool_turn(&f).await),
         ("the next run continues", second_turn(&f).await),
         ("a repeated run id is a duplicate", duplicate(&f).await),
@@ -752,6 +809,10 @@ async fn main() -> Result<()> {
         (
             "a timeout before a call starts goes back to the model",
             timed_out_before_start(&f).await,
+        ),
+        (
+            "a read-only tool's timeout goes back to the model",
+            read_only_timed_out(&f).await,
         ),
         (
             "a retry stays within max-steps",

@@ -114,12 +114,16 @@ impl Describe for session::Error {
     }
 }
 
-/// What the model reads when a tool call reached its time limit, in either
-/// case: `dispatch-error::timed-out` (it never started) and
+/// What a tool call that reached its time limit reports, in either case:
+/// `dispatch-error::timed-out` (it never started) and
 /// `outcome-error::timed-out` (no result came back, and the call may have
-/// done some of its work, or may even go on: the host may not stop it). `timed-out` carries no text, so the harness words it; this is the
-/// wording every harness should give its model, so it asks for less rather
-/// than repeating a call that will run out of time again.
+/// done some of its work, or may even go on: the host may not stop it). The
+/// model reads it when the call never started or the tool says it is read
+/// only; otherwise the run stops on it and the person reads it
+/// (`tools::stops_the_run`). `timed-out` carries no text, so the harness
+/// words it; this is the wording every harness should give its model, so it
+/// asks for less rather than repeating a call that will run out of time
+/// again.
 pub(crate) fn tool_timed_out(started: bool) -> String {
     let what = if started {
         "the call reached its time limit and no result came back, so it may have done some or \

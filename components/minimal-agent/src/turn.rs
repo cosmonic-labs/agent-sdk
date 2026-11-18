@@ -20,7 +20,9 @@ use crate::journal::{
 use crate::model::{
     Answer, MODEL_ALIAS, answer, describe_failed, describe_refused, options, text_of,
 };
-use crate::tools::{Called, call_tool, offered_tools, skip_tool, stored_result, tool_calls};
+use crate::tools::{
+    Called, Offered, call_tool, offered_tools, skip_tool, stored_result, tool_calls,
+};
 
 /// Model calls per run when the driver sets no `max-steps`. The last one is
 /// made without tools, so a run ends with an answer.
@@ -270,7 +272,7 @@ async fn work(events: &mut Events, req: &Request, acc: &mut Accepted) -> Result<
         ))
     })?;
     let offered = match offered_tools().await {
-        Ok(tools) => tools,
+        Ok(offered) => offered,
         // Recorded for the person, and the run goes on without tools.
         Err(e) => {
             let text = format!(
@@ -282,7 +284,7 @@ async fn work(events: &mut Events, req: &Request, acc: &mut Accepted) -> Result<
             if !events.error(text, seq).await {
                 return Err(Failure::Cancelled);
             }
-            Vec::new()
+            Offered::default()
         }
     };
     let instructions = instructions(req);
@@ -332,7 +334,7 @@ async fn work(events: &mut Events, req: &Request, acc: &mut Accepted) -> Result<
             .append(vec![entry(OP_KIND, &call)])
             .await
             .map_err(|()| Failure::Superseded)?;
-        let opts = options(&offered, last, req.effort, req.trace_parent.as_deref());
+        let opts = options(&offered.defs, last, req.effort, req.trace_parent.as_deref());
         let reply = answer(events, &model, messages, opts).await;
         let outcome = reply.outcome();
         acc.journal
@@ -411,7 +413,7 @@ async fn work(events: &mut Events, req: &Request, acc: &mut Accepted) -> Result<
                 skip_tool(events, &mut acc.journal, call, run).await
             } else {
                 counts.tool_calls += 1;
-                call_tool(events, &mut acc.journal, call, run).await
+                call_tool(events, &mut acc.journal, &offered, call, run).await
             };
             match called {
                 Called::Done(result) => results.push(result),

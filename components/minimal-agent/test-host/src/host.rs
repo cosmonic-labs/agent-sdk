@@ -452,6 +452,7 @@ fn user_text(message: &Message) -> Option<String> {
 /// - "shout X": a call to the plain text `shout` with X as its text;
 /// - "stall X": a call to `stall`, then one to `echo` with X;
 /// - "queue X": a call to `queue`;
+/// - "peek X": a call to `peek`;
 /// - "too long": the request refused as too long for the context;
 /// - "pause": a reply that ends `pause-turn`;
 /// - "decline": a refusal part, ending `refusal`;
@@ -528,6 +529,20 @@ fn script(messages: &[Message]) -> Script {
                     part(AssistantContent::ToolUse(stall)),
                     part(AssistantContent::ToolUse(echo)),
                 ],
+                FinishReason::ToolCalls,
+            )),
+        };
+    }
+    if text.starts_with("peek ") {
+        let call = ToolCall {
+            id: "call-peek".into(),
+            name: "peek".into(),
+            arguments: ToolArguments::Json("{}".into()),
+        };
+        return Script::Reply {
+            chunks: vec![],
+            outcome: Ok(completion(
+                vec![part(AssistantContent::ToolUse(call))],
                 FinishReason::ToolCalls,
             )),
         };
@@ -745,9 +760,22 @@ impl<T: Send> tools::HostWithStore<T> for HasSelf<State> {
                 ToolInput::JsonSchema(r#"{"type": "object"}"#.into()),
             ),
             tool_def("shout", "Say the text louder", ToolInput::Text),
+            // Not read only: its timeout stops the run.
+            tools::ToolDef {
+                annotations: tool_types::ToolAnnotations {
+                    read_only: Some(false),
+                    ..tool_def("", "", ToolInput::Text).annotations
+                },
+                ..tool_def(
+                    "stall",
+                    "Never answers in time",
+                    ToolInput::JsonSchema(r#"{"type": "object"}"#.into()),
+                )
+            },
+            // Read only, so its timeout goes back to the model.
             tool_def(
-                "stall",
-                "Never answers in time",
+                "peek",
+                "Reads, and never answers in time",
                 ToolInput::JsonSchema(r#"{"type": "object"}"#.into()),
             ),
             tool_def(
@@ -789,7 +817,7 @@ impl<T: Send> tools::HostWithStore<T> for HasSelf<State> {
             }
             ("explode", _) => ("the tool exploded".to_string(), true),
             // Dispatched, and timed out: whether it took effect is unknown.
-            ("stall", _) => {
+            ("stall" | "peek", _) => {
                 return Ok(Err(tool_types::CallError::OutcomeUnknown(
                     tool_types::OutcomeError::TimedOut,
                 )));
