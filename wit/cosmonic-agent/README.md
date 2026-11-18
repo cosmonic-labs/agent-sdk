@@ -137,7 +137,7 @@ a component that drives an agent.
 | --- | --- |
 | `needs-input` | The host holds something for a person: a tool call or outbound request waiting to be allowed, a tool waiting to be added, a change waiting for review. |
 | `working` | A run or a compaction is in progress, and nothing is held for a person. |
-| `failed` | Nothing is in progress, and the last run ended with an error or was cut off. |
+| `failed` | Nothing is in progress, and the last run ended with an error other than cancellation, or was cut off. |
 | `done` | Nothing is in progress, and the last run ended with a reply. |
 | `idle` | Nothing is in progress, and no run has ended since the session began or was cleared, or the last run was cancelled. |
 
