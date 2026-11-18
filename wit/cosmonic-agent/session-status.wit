@@ -42,8 +42,9 @@ interface session-status {
         /// A run or a compaction is in progress, and nothing is held for a
         /// person.
         working,
-        /// Nothing is in progress and the last run ended with an error, or
-        /// was cut off (the host stopped or restarted under it).
+        /// Nothing is in progress and the last run ended with an error other
+        /// than `cancelled`, or was cut off (the host stopped or restarted
+        /// under it). A cancelled run is `idle`.
         failed,
         /// Nothing is in progress and the last run ended with a reply, for
         /// any finish (`done`, `input-required`, a limit, `refusal` or
@@ -66,9 +67,9 @@ interface session-status {
         /// session that has never run.
         since-ms: option<u64>,
         /// The run the state concerns, by the `run-id` its driver gave: the
-        /// run or compaction in progress for `working`, and for
-        /// `needs-input` when one is in progress; the last run for `done`
-        /// and `failed`. `none` otherwise.
+        /// run in progress for `working` and `needs-input`, and the last run
+        /// for `done` and `failed`. Only runs: `none` while a compaction is
+        /// in progress (a compaction may reuse a run's id), and otherwise.
         run: option<string>,
     }
 
