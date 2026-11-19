@@ -5,8 +5,8 @@ package cosmonic:agent@0.4.4;
 ///
 /// The implementer keeps the catalog and answers for this caller only,
 /// leaving out offers policy would never grant. Asking starts and loads
-/// nothing. This is the harness-facing form of the model-facing `find_tools`
-/// tool, over the same catalog. Tool names and descriptions are written by
+/// nothing. The host's `find_tools` tool is an adapter over `list-offers`.
+/// Tool names and descriptions are written by
 /// toolset authors: treat them as untrusted input to a model.
 @unstable(feature = agent-tool-loading)
 interface tool-discovery {

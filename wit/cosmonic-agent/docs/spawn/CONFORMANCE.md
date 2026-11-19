@@ -319,6 +319,15 @@ For implementers that place sessions across machines.
 
 ## Tool loading
 
+- **One mechanism, two entry points.** The host's model-facing tools
+  `find_tools` and `load_tools` are an adapter over `tool-discovery` and
+  `tool-loading`: calling `load_tools` is `tool-loading.load` made on the
+  agent's behalf, with the same catalog, admission, session approval,
+  function budget and same-run behaviour, and `find_tools` answers from
+  `list-offers`. Offer the adapter in every session that has discovery, so a
+  harness that never imports the interfaces still gets it. The names
+  `find_tools` and `load_tools` are reserved: no tool may take them.
+
 - **Same run where possible.** Tools are dispatched, so a new toolset can be
   callable while the caller's instance keeps running: roll the workload out
   to a revision that adds the component, route calls to it there, and retire

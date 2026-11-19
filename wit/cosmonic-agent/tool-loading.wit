@@ -5,9 +5,8 @@ package cosmonic:agent@0.4.4;
 ///
 /// A loaded toolset is one more component in the caller's own workload, with
 /// its own grants, offered through the caller's `tools` import to the
-/// component that loaded it only. This is the harness-facing form of the
-/// model-facing `load_tools` tool, with the same admission, so a harness may
-/// use either.
+/// component that loaded it only. The host's `load_tools` tool is an
+/// adapter over `load`, made on the agent's behalf.
 ///
 /// Admission. A catalog load within the caller's ceiling (its own reach,
 /// plus toolsets a person approved earlier in this session) needs no
