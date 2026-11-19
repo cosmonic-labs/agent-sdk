@@ -1,0 +1,139 @@
+package cosmonic:agent@0.4.4;
+
+/// Types for describing a component's reach and the toolsets an agent may
+/// load or hand to a child. No functions: importing it grants nothing.
+/// Unstable behind `agent-tool-loading`. What an implementer must enforce is
+/// in `docs/spawn/CONFORMANCE.md`.
+///
+/// Reach is what a component can actually touch: its grants, limited to the
+/// interfaces it imports. A grant for an interface the component does not
+/// import adds nothing. An implementer reads a component's imports from the
+/// pinned binary before it runs anything, refuses a component that imports a
+/// capability its grants and its world do not cover, and shows the import
+/// list to whoever approves it.
+///
+/// A toolset is one component with its own grants that offers tools: a tool
+/// provider (exports `cosmonic:agent/tools`) or a typed tool (exports its own
+/// interfaces). The caller reaches it only through the implementer's
+/// dispatch, never by linking, and inherits none of its grants.
+@unstable(feature = agent-tool-loading)
+interface toolset-types {
+    /// A component image pinned by content digest, so a moving tag cannot
+    /// change what was approved.
+    @unstable(feature = agent-tool-loading)
+    record component-ref {
+        /// An OCI reference, for display; `digest` is authoritative.
+        image: string,
+        /// An OCI digest, `sha256:<hex>`.
+        digest: string,
+    }
+
+    /// A named volume mounted into one component.
+    @unstable(feature = agent-tool-loading)
+    record volume-mount {
+        /// A volume the implementer knows, by name. Never a host path.
+        volume: string,
+        /// Where the component sees it.
+        mount-path: string,
+        /// True mounts it read-only.
+        read-only: bool,
+    }
+
+    /// An interface granted to one component, with its configuration (such
+    /// as a bucket or topic). Never a `cosmonic:agent` interface: those powers
+    /// reach a component only through its world or a parent's grant of
+    /// powers.
+    @unstable(feature = agent-tool-loading)
+    record interface-grant {
+        /// Fully qualified, with version.
+        name: string,
+        /// Interface-specific configuration.
+        config: list<tuple<string, string>>,
+    }
+
+    /// What one component may touch. Empty grants nothing.
+    @unstable(feature = agent-tool-loading)
+    record grants {
+        /// Hosts it may reach.
+        allowed-hosts: list<string>,
+        /// Volumes mounted into it.
+        volumes: list<volume-mount>,
+        /// Interfaces it may import beyond its world.
+        interfaces: list<interface-grant>,
+        /// Secret names delivered into its memory. Refused on a spawned
+        /// agent's own component.
+        secrets: list<string>,
+        /// Credential references the implementer applies to its outbound
+        /// requests; the value never enters the component.
+        credentials: list<string>,
+    }
+
+    /// A toolset the caller describes itself.
+    @unstable(feature = agent-tool-loading)
+    record toolset-spec {
+        /// A DNS label of at most 32 characters, unique among one agent's
+        /// toolsets. Display only; never used for routing or authorization.
+        name: string,
+        /// A tool provider or a typed tool.
+        component: component-ref,
+        /// What it may touch.
+        grants: grants,
+        /// The functions to offer, by name; none offers all of them.
+        functions: option<list<string>>,
+    }
+
+    /// Where a toolset comes from.
+    @unstable(feature = agent-tool-loading)
+    variant toolset-source {
+        /// An entry of the implementer's catalog, by name, as
+        /// `tool-discovery` lists it. The implementer supplies its component
+        /// and grants.
+        catalog(string),
+        /// A toolset the caller describes.
+        custom(toolset-spec),
+        /// A source not captured above.
+        other(option<string>),
+    }
+
+    /// A request waiting on a grantor (policy, an auditor, or a person).
+    @unstable(feature = agent-tool-loading)
+    record pending-approval {
+        /// Implementer-issued, to match the approval interface and audit
+        /// log.
+        id: string,
+        /// What the grantor is asked, as the implementer wrote it.
+        summary: string,
+    }
+
+    /// Where a toolset stands in the caller's session.
+    @unstable(feature = agent-tool-loading)
+    variant toolset-state {
+        /// Waiting on a grantor. Nothing is bound.
+        awaiting-approval(pending-approval),
+        /// Refused by a grantor. Listed until the caller loads it again or
+        /// the refusal's cooldown ends.
+        denied(option<string>),
+        /// Admitted; its component is starting. Not callable yet.
+        loading,
+        /// Admitted and bound, but callable only from the caller's next run,
+        /// on an implementer that cannot change the tools of a run in
+        /// progress. A harness ends its run rather than wait.
+        next-run,
+        /// In the model's tool list and callable.
+        offered,
+        /// Bound and approved but set aside, out of the model's tool list. A
+        /// `load` returns it to `offered` at once.
+        ready,
+        /// A state not captured above.
+        other(option<string>),
+    }
+
+    /// Why a read of the implementer's state failed.
+    @unstable(feature = agent-tool-loading)
+    variant store-error {
+        /// The state could not be read now. Retry may succeed.
+        unavailable(string),
+        /// A failure not captured above.
+        other(option<string>),
+    }
+}

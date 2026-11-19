@@ -96,58 +96,66 @@ world compact-client {
 }
 
 
-/// Start child agents and read their final replies. Holds only `spawn`; an
-/// agent includes `agent` or `runnable-agent` itself.
+/// Ask which toolsets are available.
+@unstable(feature = agent-tool-loading)
+world tool-discovery-client {
+    import tool-discovery;
+}
+
+/// Change one's own toolsets while running.
+@unstable(feature = agent-tool-loading)
+world tool-loading-client {
+    import tool-loading;
+}
+
+/// Read one's own place in a spawn tree and remaining budget.
+@unstable(feature = agent-spawn)
+world lineage-client {
+    import lineage;
+}
+
+/// See the sessions below one, without driving them.
+@unstable(feature = agent-spawn)
+world children-client {
+    import children;
+}
+
+/// Start and drive child agent sessions.
 @unstable(feature = agent-spawn)
 world spawn-client {
     import spawn;
 }
 
-/// Ask which toolsets are available. Holds only `tool-discovery`.
-@unstable(feature = agent-spawn)
-world tool-discovery-client {
-    import tool-discovery;
-}
-
-/// Change one's own toolsets while running. Holds only `tool-loading`,
-/// which implies neither discovery nor spawning.
-@unstable(feature = agent-spawn)
-world tool-loading-client {
-    import tool-loading;
-}
-
-/// A runnable agent that can find tools, load them into itself, and start
-/// child agents. An agent that needs fewer powers includes only the client
-/// worlds it uses.
+/// A runnable agent with every power in this group. An agent that needs
+/// fewer includes only the client worlds it uses.
 @unstable(feature = agent-spawn)
 world spawning-agent {
     include runnable-agent;
-    include spawn-client;
     include tool-discovery-client;
     include tool-loading-client;
+    include lineage-client;
+    include children-client;
+    include spawn-client;
 }
 
-/// An implementer of `spawn`, such as a host plugin or a test double. It
-/// exports `spawn-types` because it creates the `approval` resources it
-/// returns.
-@unstable(feature = agent-spawn)
-world spawn-provider {
-    export spawn-types;
-    export spawn;
-}
-
-/// An implementer of tool discovery.
-@unstable(feature = agent-spawn)
+/// An implementer of tool discovery, or a test double.
+@unstable(feature = agent-tool-loading)
 world tool-discovery-provider {
     export tool-discovery;
 }
 
-/// An implementer of tool loading. It also serves the caller's `tools`
-/// import, since a loaded toolset's tools are offered there, and exports
-/// `spawn-types` because it creates the `approval` resources it returns.
-@unstable(feature = agent-spawn)
+/// An implementer of tool loading. It also serves the caller's `tools`, where
+/// loaded toolsets are offered.
+@unstable(feature = agent-tool-loading)
 world tool-loading-provider {
-    export spawn-types;
     export tool-loading;
     export tools;
+}
+
+/// An implementer of the spawn powers, or a test double.
+@unstable(feature = agent-spawn)
+world spawn-provider {
+    export lineage;
+    export children;
+    export spawn;
 }

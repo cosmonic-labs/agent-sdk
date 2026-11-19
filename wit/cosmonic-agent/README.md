@@ -128,16 +128,17 @@ tools appear in the next `tools.list`, so a harness that lets its model load
 tools lists them again before its next model call.
 
 A harness can also do the same itself. `tool-discovery` and `tool-loading`
-(0.4.4, unstable behind the `agent-spawn` feature) are the harness-facing form
-of the same mechanism, with one catalog, one admission and one session
-ceiling: a person's approval lasts for the session, a load serves the run in
-progress, and the host keeps the model's tool list within a per-model function
-budget by setting aside the least recently called tools. `spawn`, in the same
-group, starts child agent sessions in a tree under the caller's session,
-addressed by session id so a child may run on another host, and bounded so
-a child's reach never exceeds its parent's. See
-[docs/spawn](docs/spawn/README.md) and its
-[rationale](docs/spawn/RATIONALE.md).
+(0.4.4, unstable behind the `agent-tool-loading` feature) are the
+harness-facing form of the same mechanism, with one catalog and one
+admission: a person's approval lasts for the session, a load serves the run
+in progress, and the implementer keeps the model's tool list within a
+per-model function budget by setting aside the least recently called tools.
+`lineage`, `children` and `spawn` (unstable behind `agent-spawn`) let an
+agent start named child agent sessions, possibly on other machines, see the
+tree below it, and read its remaining budget; a child's reach never exceeds
+its ancestors'. See [docs/spawn](docs/spawn/README.md), its
+[rationale](docs/spawn/RATIONALE.md) and
+[conformance](docs/spawn/CONFORMANCE.md) requirements.
 
 ## Session status
 
@@ -238,5 +239,6 @@ hosts and agents adopt it.
   `other(option<string>)`, and the released ones move to that shape at the
   next breaking version.
 - Published artifacts never change. Interfaces that may still move are behind
-  `@unstable` features (`agent-run`, `session-status` and `agent-spawn` today).
+  `@unstable` features (`agent-run`, `session-status`, `agent-tool-loading`
+  and `agent-spawn` today).
 - Versions never contain "draft".

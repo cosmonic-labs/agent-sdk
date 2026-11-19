@@ -1,0 +1,41 @@
+package cosmonic:agent@0.4.4;
+
+/// The caller may see the sessions below it and how they stand, without
+/// driving them. Unstable behind `agent-spawn`.
+///
+/// Only children the caller's own component spawned are listed, and their
+/// descendants.
+@unstable(feature = agent-spawn)
+interface children {
+    @unstable(feature = agent-spawn)
+    use toolset-types.{store-error};
+    @unstable(feature = agent-spawn)
+    use spawn-types.{child-info};
+
+    /// A change in the caller's subtree.
+    @unstable(feature = agent-spawn)
+    variant child-event {
+        /// A session as it stands when the watch starts. These come first.
+        existing(child-info),
+        /// The snapshot is complete.
+        synced,
+        /// A session appeared or changed. Usage-only changes are coalesced
+        /// to at most one per session per second.
+        changed(child-info),
+        /// A session left the listing, by session id.
+        removed(string),
+        /// An event not captured above. Safe to ignore.
+        other(option<string>),
+    }
+
+    /// The caller's direct children, oldest first; with `descendants`, its
+    /// whole subtree, each session after its parent. Ended children stay
+    /// listed for a while.
+    @unstable(feature = agent-spawn)
+    list-children: async func(descendants: bool) -> result<list<child-info>, store-error>;
+
+    /// The same listing, then each change. A slow reader may miss an
+    /// intermediate change but always gets each session's latest record.
+    @unstable(feature = agent-spawn)
+    watch-children: async func(descendants: bool) -> result<stream<child-event>, store-error>;
+}
