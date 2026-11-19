@@ -78,7 +78,11 @@ Everything else applies to both.
   executable digest and import list, and every default the request left open.
   Show it to the grantor; never return it to the caller. Admitting re-resolves
   and compares; any difference asks again.
-- **Spawn.** The child exists from the first accepted `spawn`, in `pending`.
+- **Spawn.** A child's toolset beyond the parent's ceiling goes to a grantor
+  only if the ceiling of every ancestor above the parent covers it (none, for
+  a root parent); otherwise `spawn` answers `denied`. Record that dependency
+  for later re-checks. The child exists from the first accepted `spawn`, in
+  `pending`.
   The grant admits that child in place; a refusal stops it (`denied`). One
   approval admits one child: it is a property of that session, so there is
   nothing to resend or consume. Pending children hold no instance and no
@@ -111,12 +115,22 @@ Everything else applies to both.
 
 ## Children
 
-- **Names.** A child's name is scoped to the spawning component in its
-  session. A run's name is scoped to the child. Keep at least the 256 most
-  recent run names per child and the 16 most recent outcomes; `wait` on an
-  older run answers `failed(expired)`. Keep ended children listed for a
-  retention window (recommended the 100 most recent per tree); while listed,
-  `get-child`, `wait`, `cancel` and `end` work on them.
+- **Names are never reused.** A child's name is scoped to the spawning
+  component in its session, and a run's name to its child. Keep a record of
+  every name used, with the request and first run (or message) it was
+  accepted with, for the life of the caller's session, so a retry is always
+  recognized and a handle can never reach a different child. Outcomes are
+  kept separately: at least the 16 most recent per child; `wait` on an older
+  run answers `failed(expired)`. Ended children stay listed for a retention
+  window (recommended the 100 most recent per tree), and `get-child` finds
+  an ended child by name for the session's life; `wait`, `cancel` and `end`
+  on it are ok.
+- **Joint acceptance.** A child and its first run are accepted in one atomic,
+  durable step, including their limit reservations. If either cannot be
+  accepted, neither is. A retry compares both the request and the first
+  run; any difference is `name-taken`.
+- **Powers.** A child that receives `spawn` also gets `children`. Every
+  spawned child may import `lineage`.
 - **Authority by provenance.** For each of a child's grants and entries,
   record what it rested on: an ancestor's grant or entry, or a grantor's
   approval of this child. At each run acceptance and each child load,
@@ -192,7 +206,9 @@ For implementers that place sessions across machines.
 - **Subtree charging.** A session's spend counts against it and every
   ancestor. When a budget is spent, runs below it finish `max-total-tokens`
   or `max-duration`, and the sessions below it are `stopped(exhausted)` until
-  an operator or person raises it.
+  an operator or person raises it. A child's own `max-duration` is different:
+  it is measured from admission (never while `pending`), and passing it ends
+  the child.
 - **Metering.** The broker serving model calls reserves the estimated prompt
   plus the call's maximum output before each call, refuses when any budget on
   the path cannot cover it, and settles real usage afterwards. A provider

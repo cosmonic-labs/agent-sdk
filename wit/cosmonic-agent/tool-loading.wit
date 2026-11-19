@@ -127,10 +127,11 @@ interface tool-loading {
         other(option<string>),
     }
 
-    /// Load a toolset, or return it as it stands if the caller already holds
-    /// the identical one. Resolves at admission; a toolset that must wait
-    /// for a grantor or a rollout comes back `awaiting-approval` or
-    /// `loading`, and a later identical `load` returns its progress.
+    /// Load a toolset. If the caller already holds the identical one, a
+    /// `ready` one returns to `offered` (after the same checks, setting
+    /// another aside if the budget needs room), and any other is returned as
+    /// it stands. Resolves at admission; a toolset that must wait for a
+    /// grantor or a rollout comes back `awaiting-approval` or `loading`.
     @unstable(feature = agent-tool-loading)
     load: async func(toolset: toolset-source) -> result<load-result, load-error>;
 

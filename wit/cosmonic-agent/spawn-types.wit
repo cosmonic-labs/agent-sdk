@@ -34,7 +34,7 @@ interface spawn-types {
         max-runs,
         /// Tokens, the session's or an ancestor's.
         max-total-tokens,
-        /// Time, the session's or an ancestor's.
+        /// An ancestor's time. (A session's own `max-duration` ends it.)
         max-duration,
         /// An item not captured above.
         other(option<string>),
@@ -148,8 +148,8 @@ interface spawn-types {
     record remaining-budget {
         /// Tokens left under its own budget; none if it sets no limit.
         tokens: option<u64>,
-        /// Time left under its own limit, on that limit's clock (since spawn
-        /// for a child, active time for a root); none if no limit.
+        /// Time left under its own limit, on that limit's clock (since
+        /// admission for a child, active time for a root); none if no limit.
         duration: option<duration>,
         /// Runs left under its own `max-runs`; none if no limit.
         runs: option<u32>,

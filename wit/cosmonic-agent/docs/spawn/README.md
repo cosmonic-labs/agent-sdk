@@ -19,7 +19,7 @@ powers, each its own import, so its world says exactly what it may do:
 | --- | --- |
 | `tool-discovery` | ask which toolsets are available |
 | `tool-loading` | load toolsets into itself and set them aside |
-| `lineage` | read its place in a spawn tree and its remaining budget |
+| `lineage` | read its place in a spawn tree and its remaining budget (every spawned child may) |
 | `children` | see the sessions below it |
 | `spawn` | start child agent sessions and drive them |
 
