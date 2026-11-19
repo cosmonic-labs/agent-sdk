@@ -92,6 +92,7 @@ match tool_loading::load(offer.spec, None).await {
         let tools = tools::list().await?;
         // ...carry on with this run's next model call.
     }
+    Ok(done) if done.next_run => { /* the host serves it from the next run: finish this one */ }
     Ok(_) => { /* still loading: check `loaded()` before the next step */ }
     Err(AdmissionError::NeedsApproval(approval)) => {
         // Returned at once. Finish the run asking the person, or keep working
@@ -157,7 +158,7 @@ let request = SpawnRequest::component(pinned("ghcr.io/acme/agents/reviewer:1.2.0
     .budget(Budget { max_runs: Some(3), max_steps: Some(12), ..Default::default() })
     .label("role", "reviewer");
 
-let child = spawn::spawn(request, Some(user("Start with the auth changes."))).await?;
+let child = spawn::spawn(request, Some(user("Start with the auth changes.")), "review-pr-42").await?;
 let first = child.run.unwrap();                       // run id, progress, outcome
 let review: Review = spawn::wait(&child.session, &first.run).await?.structured()?;
 let next = spawn::send(&child.session, user("Now the billing changes.")).await?;
@@ -171,12 +172,16 @@ and the structured verdict. It never sees the reviewer's tool calls, tool
 output or conversation; a person sees those by opening the child under the
 coder's session in the host's own view.
 
-A child's reach never exceeds its parent's ceiling. Its own agent component
-gets only grants the parent already has; a toolset beyond the parent's ceiling
-asks the person, and their approval adds it to the parent's session ceiling. A
-child's toolsets stay exact toolsets: it can hand one down, never lend its
-reach to another component. The tree has a depth limit (default 3) and a limit
-on children running at once (default 20).
+A child's reach rests on its ancestors. Its own agent component gets only
+grants the parent already has; a toolset beyond the parent's ceiling asks the
+person, and their approval is for this one child as shown (its output, budget
+and powers), never something the parent can load or another child can reuse.
+The key (`review-pr-42`) makes a resend return the same child instead of a
+second one. A child's toolsets stay exact toolsets: it can hand one down,
+never lend its reach to another component. The host re-checks a child against
+its ancestors at every run, so a parent losing reach narrows its children
+too. Each tree has limits on depth (3), runs at once (20) and live child
+sessions (50), and a child's token budget covers everything below it.
 
 ## Scenario 4: work with children across runs and hosts
 
@@ -187,6 +192,7 @@ nothing depends on the store, instance or host that spawned them.
 let researcher = spawn::spawn(
     request.placement(Placement::Zone("eu-west".into())),  // a hint, never reach
     Some(user("Collect the release notes for 2.12.")),
+    "release-notes-2.12",
 ).await?;
 let run = researcher.run.unwrap().run;
 // ...this run ends; the caller keeps both ids in its own session...
@@ -199,10 +205,14 @@ for c in spawn::children(true).await? {                  // the whole subtree, p
 ```
 
 Dropping a progress stream or outcome future only stops listening; only
-`cancel` or `end` stops a child. If the host running a child goes away
-mid-run, its lease in the session store lapses: `wait` answers `host-lost`,
-the child's state is `failed` with `failure` saying why, and a later `send`
-starts a new run, placed again. Nothing hangs silently.
+`cancel` or `end` stops a child, and both reach everything below it (so does
+a person's stop in the host's UI). If the host running a child goes away
+mid-run, its lease in the session store expires: `wait` answers
+`host-lost`, the child's state is `failed` with `failure` saying why, and a
+later `send` starts a new run, placed again. Nothing hangs silently. The
+lease protects the session and what the store mediates; a cut-off host may
+still finish effects it had started with the child's own grants before it
+fenced itself, so a new run can overlap those.
 
 A parent acts only on its direct children (send, wait, cancel, end) and sees
 its whole subtree's state; hosts draw the same tree in their session lists.
@@ -222,7 +232,7 @@ let reader = SpawnRequest::component(pinned(QUARANTINE_READER, "sha256:…"))
     .model_alias("local-small")
     .output::<Triage>().max_bytes(256).structured_only()
     .budget(Budget { max_runs: Some(1), max_steps: Some(1), ..Default::default() });
-let child = spawn::spawn(reader, Some(user(&untrusted_email))).await?;
+let child = spawn::spawn(reader, Some(user(&untrusted_email)), "triage-msg-881").await?;
 let run = child.run.unwrap().run;
 let triage: Triage = spawn::wait(&child.session, &run).await?.structured()?;
 ```

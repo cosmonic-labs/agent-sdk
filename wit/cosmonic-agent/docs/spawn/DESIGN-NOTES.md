@@ -43,6 +43,11 @@ the ceiling rules in `spawn-types`.
   `discovery-result.truncated` (D15), `progress.cancelling`, the package's
   error style (D19), and the session id in caller identity and the digest
   (D20).
+- **Third review round** (an independent Claude review and a fresh Codex
+  round): spawn approvals are for one child and add nothing to the parent's
+  ceiling, children are re-checked as their ancestors change, one session
+  per workload, honest fencing, subtree cancellation and budgets, and the
+  fixes listed under "Review" (D2, D5, D7, D8, D10 to D13, D20, D26 to D29).
 - **Dropped from #76:** the separate package version and its `wkg.toml`
   override, the `harness` world (now `spawning-agent`), store-scoped child
   handles, and the history of review rounds, which stays in #76.
@@ -81,7 +86,7 @@ The WIT states these on `spawn-types`; here is why.
   channel by nature. Everything else in an outcome is the implementer's own
   (D16). Nothing here blocks prompt injection.
 - **Caller identity** is the workload incarnation, the component name and
-  the session id (D20).
+  the session id, with one session per workload (D20).
 
 ## Decisions
 
@@ -111,66 +116,63 @@ versions of one package and a `wkg.toml` override to build at all. One gate
 per power: all three share `spawn-types` and an item carries one gate, so it
 would need a fourth gate that every consumer enables anyway.
 
-### D2. Approvals feed a session-only ceiling, and removal is a barrier
+### D2. Load approvals feed a session-only ceiling, and removal withdraws what rests on it
 
 *Basis: Eric, 2026-11-18 (session tool set design, Decisions; Cosmonic
 Desktop implements the same rule as its session approval envelope). The
-ticket and revocation details are decided here, after the Codex review.*
+ticket and revocation details are decided here, after three review rounds.*
 
-A person's approval of a toolset adds it to the **session ceiling**: entries
-keyed to the caller, the toolset's request digest and its admission snapshot.
-A later load of the identical toolset, after the host set it aside or
-unbound it, after a rollback, or after a failed rollout was put back, is a
-load within the ceiling and needs no prompt.
+A person's approval of a toolset **load** adds it to the **session
+ceiling**: an entry keyed to the caller, the `toolset-spec` digest and the
+admission snapshot. A later load of the identical toolset, after the host set
+it aside or unbound it, after a rollback, or after a failed rollout was put
+back, is a load within the ceiling and needs no prompt.
 
 - **Loads have no separate ticket.** A granted load approval adds the entry
   at once, and any identical load is admitted through it. The "already held"
-  rule keeps concurrent identical loads to one rollout, so nothing is
-  multiplied. (#76's single-use grant for loads expired independently of the
-  entry, which could admit a first load after the grant had expired.)
-- **Spawns keep a one-time ticket,** consumed once across every waiter and
-  resend, with expiry checked in the same step. A resend matching a pending
-  or granted ticket is decided by the ticket before any ceiling check, so one
-  decision never admits several children through coalescing. When the child
-  is admitted, its beyond-ceiling toolsets join the parent's session ceiling.
-  After that, an identical spawn fits the ceiling: the person approved reach
-  for the session, and how many children use it is bounded by the tree
-  limits. An operator who wants a prompt per child sets policy to ask; those
-  approvals are marked as repeats.
+  rule keeps concurrent identical loads to one rollout.
+- **Spawn approvals add nothing to the ceiling** (D8): they admit one child
+  and anchor that child's reach only.
 - **Re-checked at each use,** in the step that admits it: the request is
   resolved again and compared with the entry's snapshot, and current policy
   is checked again. On Control, admission policy is cluster policy, so a
   session ceiling never becomes a way around a policy change made
   mid-session.
 - **Never widens.** An entry admits its exact snapshot only.
-- **Only the person removes, and removal is a barrier.** Removal drops the
-  entry and advances the session's revocation generation. Every admission
-  records its generation and is checked against it when a rollout
-  publishes, when a set-aside toolset returns, and when a call is
-  dispatched: a pending approval for the toolset resolves `expired`, a
-  rollout adding it is not published, it is unbound, and an old revision
-  cannot restore it. Descendant sessions holding it through that entry lose
-  it the same way.
-- **Session-scoped and audited.** It lives in the session's state, moves
-  with the session, ends with it, and every admission through it names the
+- **Only the person removes, and removal withdraws what rests on it.**
+  Removal drops the entry, and the implementer withdraws everything resting
+  on it: a pending approval for it resolves `expired`, an unconsumed spawn
+  ticket naming it is void, a rollout adding it is not published (that load
+  answers `denied`), it is unbound, a call to it in flight is cancelled, and
+  a descendant's admission that rested on it is withdrawn. Admissions resting
+  on other entries are untouched. The session's revocation generation, a
+  counter every removal advances, is only a race detector: a step that
+  started before a removal re-checks that its own entry still stands, and
+  proceeds if it does.
+- **Removal starts the cooldown** for that toolset in the session, so the
+  model cannot prompt for it again at once.
+- **Visible and audited.** The entry lives in the session's state, moves
+  with the session and ends with it; the host's UI lists every entry, bound
+  or not, so the person can remove any; every admission through it names the
   approval it rests on.
 
 *Why this fits single-use approvals.* Single use protected against N
 coalesced requests riding one decision, reflex approval of a repeat, a name
 rebound after review, and standing authority hidden in a reusable token. The
-first three still hold (spawn tickets, repeat marking, snapshot comparison).
-The fourth is answered as #76 already allowed: standing permission belongs
-in policy a person wrote. An approval that adds to a session ceiling is
-exactly that, a person writing "this session may hold this toolset at this
-digest and reach", visible in the prompt ("Your answer lasts for this
-session") and removable only by them.
+first three still hold (spawn tickets per idempotency key, repeat marking,
+snapshot comparison). The fourth is answered as #76 already allowed:
+standing permission belongs in policy a person wrote. An approval that adds
+to a session ceiling is exactly that, a person writing "this session may
+hold this toolset at this digest and reach", visible in the prompt ("Your
+answer lasts for this session") and removable only by them.
 
 *Alternatives.* Loads after `unload` as new requests that always ask
 (defeats setting tools aside); treating a host-initiated unbind as "not an
-unload" (bends what an admission means, no rule for rollbacks); a ceiling per
-agent across sessions (an approval should not outlive the conversation it
-was given in); keeping a single-use ticket for loads too (Codex review:
-conflicts with the entry, as above).
+unload" (bends what an admission means); a ceiling per agent across sessions
+(an approval should not outlive the conversation it was given in); a
+single-use ticket for loads too (conflicts with the entry); a session-wide
+generation that withdraws every earlier admission (over-revokes unrelated
+toolsets; review finding 11).
 
 ### D3. `unload` sets aside; only a person removes
 
@@ -263,7 +265,7 @@ for a new toolset to be callable.
    in the old revision, and the session's tool dispatcher routes calls to the
    new toolset in the new revision. The old revision retires once the run
    ends (a drain), and the next run starts on the new revision. The rollout
-   publishes only if the revocation generation is unchanged (D2).
+   publishes only if the toolset's own entry or admission still stands (D2).
 4. The toolset becomes `offered` and `load` resolves.
 
 **The deadline.** `load(spec, wait)` resolves when the toolset is callable,
@@ -277,6 +279,19 @@ answers `needs-approval` at once. The harness finishes the run
 (`input-required`) and lets the person's answer start the next one, or keeps
 working and loads again once `wait-for-decision` resolves `granted`. A held
 approval shows as `needs-input` in the session's state.
+
+**Next-run fallback.** Same-run loading needs the old revision to keep
+serving the run while the new one serves calls, and a dispatcher that routes
+across both. Desktop today serves the next run, and Control's tools plugin
+keys its state by runtime workload and has no revisions yet. So a host that
+cannot yet drain may make the toolset callable from the caller's next run:
+that is conformant, and `load-result.next-run` says so, so a harness ends its
+run instead of polling. Same-run stays the goal and the preferred behaviour.
+
+**Rollout deadline.** Every rollout has a deadline (the operator's,
+recommended two minutes). A rollout not finished by then is abandoned: the
+toolset leaves `loaded()`, frees its name and place, a joined load answers
+`unavailable`, and an identical load starts again. `loading` always ends.
 
 *Alternatives.* Keep "next run" semantics with an immediate next run
 (Desktop today): the agent loses its in-memory plan and the model sees a
@@ -320,88 +335,103 @@ interface works in session ids:
 
 | Operation | What it does |
 | --- | --- |
-| `spawn(request, input)` | Admits and creates a child session; with `input`, starts its first run. Returns the session id and the run's id. |
-| `send(session, message)` | Starts a run in a direct child. Returns a host-minted run id, a progress stream and an outcome future. |
-| `wait(session, run)` | The outcome of that exact run, from any store and host. The host keeps the outcome of every run the caller started until the child ends. |
-| `cancel(session)` | Requests cancellation of the run in progress. |
+| `spawn(request, input, key)` | Admits and creates a child session; with `input`, starts its first run. `key` is the caller's idempotency key: a resend with a key that already admitted a child returns that child. |
+| `send(session, message)` | Re-checks the child's admission, then starts a run in a direct child. Returns a host-minted run id, a progress stream and an outcome future. |
+| `wait(session, run)` | The outcome of that exact run, from any store and host. The host keeps at least the 16 most recent outcomes of runs the caller started in a child, until the child ends. |
+| `cancel(session)` | Cancels the child's run in progress and every run in progress below it. |
 | `end(session)` | Ends the child session and every session below it. |
-| `children(descendants)` | Direct children, or the whole subtree in parent-first order, each with parent, depth, labels, `session-status` state, failure reason, location and whether it ended. |
+| `children(descendants)` | Direct children, or the whole subtree in parent-first order, each with parent, depth, labels (direct children only), `session-status` state, failure reason, location and whether it ended. |
 | `get-lineage()` | The caller's own session id, parent and depth. |
 
 - **Acting is on direct children only; seeing is on the subtree.** A parent
-  sends, waits, cancels and ends its own children; it lists its
+  sends, waits, cancels and ends its own children, and lists its
   descendants' state to draw its tree. The host records with each child the
-  full identity of the caller that spawned it (workload incarnation,
-  component and session) and acts only for that caller, so a sibling
-  component bound to the same session neither sees nor drives another
-  component's children. A session id authorizes nothing on its own.
+  identity of the component that spawned it and acts only for that
+  component, so a sibling component neither sees nor drives another
+  component's children. When that identity ceases to exist (the workload is
+  deleted or recreated), its children end, so none is orphaned. A session id
+  authorizes nothing on its own.
 - **Only the caller's own text comes back.** `children` returns labels only
-  for direct children (the caller wrote them). A grandchild's labels were
-  written by a child, and would let it pass text around its
-  `structured-only` schema, so they stay in the host's view.
-- **Runs are named.** `send` returns a host-minted run id and `wait` takes
-  it, so a parent that reconnects after a person talked to the child still
-  collects its own run's outcome, not the latest one.
+  for direct children; a grandchild's labels were written by a child and
+  stay in the host's view.
+- **Runs are named,** so a parent that reconnects after a person talked to
+  the child still collects its own run's outcome.
 - **States reuse `session-status`** (needs input, working, failed, done,
-  idle), derived by the host. A child's reason for failing is the separate
-  `child-failure` (host lost, start failed, budget exhausted), since
-  `session-status` carries no reason.
-- **Hosts show the tree** from their session store: the same parent links
-  the interface reports. Desktop lists a child under its parent, open to step
-  into and talk to; a CLI or Control's session API shows the same tree. A
-  child's approvals reach the root session's person, labelled with the
-  child's place in the tree.
-- **Lifetime.** A child lives until `end`, its `max-duration`, or its parent
-  session's end; ending cascades. A child with no run in progress holds no
-  instance. Tree limits: `depth` 3 and `concurrent-agents` (children with a
-  run in progress at once in one tree) 20 by default, always set (D10).
-- **Explicit cancellation.** Dropping a progress stream or an outcome future
-  only stops listening. Only `cancel` or `end` cancels. A child may run on
+  idle), derived by the host. The reason is `child-failure` (host lost, start
+  failed, budget exhausted, revoked).
+- **Hosts show the tree** from their session store. A child's approvals
+  reach the root session's person, labelled with the child's place.
+- **Stopping reaches the subtree.** `cancel` cancels the child's run and
+  every run in progress below it; `end` ends the subtree; a person's stop in
+  the host's UI cancels the subtree's runs. A run that ends any other way
+  (done, failed, host lost) leaves the runs it started in its children
+  going: they are durable work a later run can collect, bounded by the tree
+  limits and the budgets, which now cover the subtree (D10).
+- **Dropping a stream or future only stops listening.** A child may run on
   another host and outlive the caller's store, and a caller that gets a
   fresh store per run must not cancel its children by finishing its own run.
   This differs from the `run` export, where dropping the stream cancels; that
-  rule suits a driver that owns one in-process run, not a parent of durable
-  sessions.
+  rule suits a driver that owns one in-process run.
 
-*Alternatives.* The #76 `agent` resource, store-scoped, ending on drop: a
-child could not outlive one parent run, could not be shared with a later
-store, and assumed the child was local. Detach and attach on that resource
-(this PR's first revision): Codex found that a dropped stream still
-cancelled an active run on store teardown and that `attach` could not
-recover its outcome; session ids with `wait` remove both problems. Letting a
-parent act on grandchildren: authority would skip a level, and the middle
-agent could not reason about its own children.
+*Alternatives.* The #76 `agent` resource, store-scoped and ending on drop: a
+child could not outlive one parent run and was assumed local. Detach and
+attach on that resource: a dropped stream still cancelled an active run on
+store teardown. Letting a parent act on grandchildren: authority would skip a
+level. Cascading every run end to descendants: kills the across-runs pattern
+`wait` exists for. Opt-in cascade on stop: a person's Stop must stop the
+tree without the agent's cooperation (review finding 8).
 
-### D8. A child's reach is bounded by every ancestor's ceiling
+### D8. A child's reach rests on its ancestors, and is re-checked as they change
 
 *Basis: Eric, 2026-11-18 (a child spawned with reach beyond its parent's
 approval envelope never happens; the subagents milestone: a subagent's
-grants are no wider than its parent's, enforced by the host); the mechanism
-is decided here, with Codex's provenance fix.*
+grants are no wider than its parent's, enforced by the host); mechanism
+decided here, revised after the third review (findings 1 to 3).*
 
-- The child agent component's own `grants` must fit the parent's own grants,
-  or the spawn is `denied`. Reach the parent lacks goes in a toolset
-  ("components follow reach").
-- A child's toolset that fits the parent's ceiling (own grants by
-  containment, or an exact toolset entry, so tools the parent set aside
-  count) is admitted. One beyond it goes to a grantor only if it fits the
-  ceiling of every ancestor above the parent (none, for a root parent);
-  otherwise it is `denied`. The grant adds it to the parent's session
-  ceiling when the child is admitted, so the child stays within its
-  parent's ceiling.
-- A child's toolsets become *toolset entries* in its own ceiling, never its
-  own grants. So a child cannot give a grandchild's agent component the
-  reach of one of its toolsets; it can only hand down that exact toolset.
-- A child's loads follow the same rule: beyond its ceiling but within every
-  ancestor's goes to the person, labelled with the child's place in the
-  tree; beyond any ancestor's is `denied`.
+- **Agent grants fit the parent's own grants,** and the model alias is one
+  the parent was granted; otherwise `denied`. Reach the parent lacks goes in a
+  toolset ("components follow reach").
+- **Toolsets.** A child's toolset that fits the parent's ceiling is
+  admitted, resting on the parent's grant or entry it matched. One beyond it
+  goes to a grantor only if it fits every ancestor above the parent (none,
+  for a root parent); otherwise `denied`.
+- **A spawn approval is for one child.** It is a one-time ticket consumed by
+  the first resend's idempotency key; coalesced waiters with other keys get a
+  new approval, marked as a repeat. It adds nothing to the parent's session
+  ceiling. The approved toolsets become the child's own entries, bound to the
+  spawn's digest, so they carry exactly the output (schema, `max-bytes`,
+  `structured-only`), budget and powers the person was shown. The parent
+  cannot load them, and a later child with a wider output cannot use them.
+  In the person's terms, the parent's envelope holds "this one child, as
+  shown", never the toolset on its own.
+- **Ticket consumption re-checks everything** in one step: expiry, a fresh
+  snapshot, current policy, every ancestor's current ceiling, and that no
+  removal since the grant touched a toolset it names. A removal voids
+  unconsumed tickets that name the removed toolset.
+- **Provenance and re-checks.** The implementer records, for each of a
+  child's grants and entries, which ancestor grant or entry it rested on. At
+  each run acceptance (`send`, `spawn` with input) and each child load, it
+  re-checks the child's whole admission against every ancestor's current
+  ceiling and policy. A toolset that no longer fits is withdrawn; a child
+  whose own grants no longer fit is `revoked` and takes no more runs. A
+  person's Remove withdraws dependents at once, by provenance. A change to an
+  ancestor's own grants (an operator edit, a policy change) takes effect at
+  the next acceptance or dispatch, never mid-call: the runtime cannot narrow
+  a running instance's allowed hosts (see "Still not decided").
+- **Toolset entries stay toolsets.** A child's toolsets are entries in its
+  ceiling, never its own grants, so a child can hand one down exactly but
+  never lend its reach to another component.
+- **A child's loads follow the same rule:** beyond its ceiling but within
+  every ancestor's goes to a grantor, labelled with the child's place;
+  beyond any ancestor's is `denied`.
 
 *Alternatives.* The #76 shape, where a person could approve a child beyond
-the parent: "no wider than the parent" became a default rather than an
-invariant. Bounding by what the parent has *offered* rather than its whole
-ceiling: setting a tool aside would shrink what a child may get. Treating a
-child's toolsets as its own reach (this PR's first revision): Codex showed
-this lends one approved toolset's reach to any component a child spawns.
+the parent with no record on the parent's side. This PR's second revision,
+where a spawn approval added the toolset to the parent's session ceiling:
+review finding 1 showed the parent could then load it, and a later child
+could use it with no schema and a large `max-bytes`, undoing a quarantine
+the person approved. Admission-time checks only: the invariant would hold at
+spawn and decay as the tree changed (finding 2).
 
 ### D9. Children may receive discovery and loading
 
@@ -412,18 +442,31 @@ had no bound; D8 gives it one. A parent still cannot load a toolset into a
 child: it spawns a new child, so a child's tool set never changes under it by
 someone else's hand.
 
-### D10. Tree limits are always set
+### D10. Tree limits, budgets and prompts are bounded by default
 
-*Basis: decided here; answers #76's (y).* `depth` (default 3) and
-`concurrent-agents` (default 20 per tree, counting runs from acceptance
-until they have ended, cancelling included) are always set; the operator may change them. `total-agents` is
-unset unless the operator sets it. These are the Claude Agent SDK's defaults
-(`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` 3,
-`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` 20). Budgets stay the caller's
-choice and are not carved from the parent's, as in every SDK surveyed.
-Every run acceptance (`send`, or `spawn` with input) reserves its place
-atomically across the tree, and `send` answers `start-error.over-limit` when
-it cannot, so idle children cannot all start at once past the limit.
+*Basis: decided here; answers #76's (y), revised after review finding 9.*
+
+- **Limits always set,** operator-adjustable: `depth` 3, `concurrent-agents`
+  20 (runs from acceptance until ended, cancelling included), and
+  `live-sessions` 50 (child sessions not yet ended) per tree. `total-agents`
+  is unset unless the operator sets it. Every spawn and every run
+  acceptance reserves its place atomically across the tree; `send` answers
+  `start-error.over-limit` when it cannot. Depth and concurrency follow the
+  Claude Agent SDK's defaults (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` 3,
+  `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` 20).
+- **Budgets cover the subtree.** Tokens a child's descendants spend count
+  against the child's `max-total-tokens` and every ancestor's; a run stops
+  (`max-total-tokens`) when any of them is spent. Budgets are still chosen by
+  the caller and not carved from the parent's, as in every SDK surveyed, but
+  a parent's budget now bounds everything it causes.
+- **Prompts are bounded per tree.** The denial cooldown matches requests by
+  executable digests and resolved reach anywhere in the tree, not by caller
+  or name, so a fresh child, a renamed toolset or a one-byte change to
+  `max-bytes` cannot ask again at once. Pending approvals are capped per
+  caller (three) and per tree (five).
+- **Kept state is bounded:** ended children stay listed up to a retention
+  (recommended the 100 most recent per tree), and at least the 16 most
+  recent outcomes per child are kept.
 
 ### D11. Remote children: location-transparent, with a placement hint
 
@@ -435,55 +478,74 @@ sessions is the biggest gap); the shape is decided here.*
   on another host, host group or zone, and move between hosts between runs.
   Control keeps sessions in a store it reconciles across zones; Desktop may
   run everything locally behind the same interface.
-- **Placement is a hint.** `spawn-request.placement` (`any`, `same-host`, a
-  named `host-group`, a named `zone`) is honoured where the host can. It is
-  not in the approval digest, because it never changes reach: a child runs
-  only where its admission snapshot resolves identically (the same storage
-  behind its volumes, the same credential bindings), and a hint that cannot
-  be honoured without changing reach is ignored. `child.location` reports
-  where it last ran, for display.
+- **Placement is a hint** (`any`, `same-host`, a named `host-group`, a named
+  `zone`; `other` is reserved and refused as input). It is not in the
+  approval digest because it never changes reach: a child runs only where its
+  admission snapshot resolves identically. Allowed hosts are names, and some
+  names mean different services in different places, so a child whose
+  grants (or toolsets') name a loopback, link-local or private-range
+  address, a single-label name or a cluster-local name is placed on the
+  parent's host whatever the hint (review finding 10). The audit records
+  where each child was placed; `child.location` shows it.
 - **Streams are proxied.** `send` returns the same progress stream and
-  outcome future whether the child is local or remote; the parent's host
-  relays them from the session store.
+  outcome future whether the child is local or remote.
+- **Attachments are re-issued** (D27).
 
 *Alternatives.* A remote handle type separate from a local one: doubles the
-surface and makes every harness branch. A mandatory placement: a hard
-placement that cannot be met would fail spawns for reasons the agent cannot
-see; policy is where hard residency rules belong.
+surface. A mandatory placement: fails spawns for reasons the agent cannot
+see; hard residency belongs in policy. Putting placement in the digest:
+the prompt would change with a hint the host may ignore.
 
-### D12. A lost host fails the run, never hangs
+### D12. A lost host fails the run, never hangs; what fencing does and does not stop
 
 *Basis: Eric, Bailey and Victor, 2026-11-19 (define what happens if a remote
-child's host goes away); mechanism decided here, with fencing added after
-the Codex review.* A child's run holds an exclusive lease in the session
-store with a fencing generation (a counter the store advances for each new
-lease) that every write, completion and tool dispatch for the run carries.
-The host running it renews the lease, and stops starting model and tool
-calls once it cannot. If the lease lapses (the operator sets the timeout;
-recommended 60 seconds), the parent's host ends that run: waiters get `run-error.host-lost`, the child's state becomes
-`failed`, and `child.failure` is `host-lost` naming the host. The store and
-the tool dispatcher reject anything carrying the old generation, so a host
-that was only cut off cannot write into the session or call tools for the
-lost run once a new one starts. The child's session is durable, so a later
-`send` starts a new run, placed again, under a new generation. A
-store the parent cannot reach answers `unavailable`, never a silent wait.
+child's host goes away); mechanism decided here, revised after review
+finding 5.*
 
-*Alternatives.* Resuming the lost run elsewhere automatically: a run's
-effects (tool calls with unknown outcomes) cannot safely be replayed, the
-same reason the `run` contract records unresolved calls. Waiting
-indefinitely for the host to return: the silent hang the direction rules
-out.
+- **The store decides expiry.** A run holds an exclusive lease with a
+  fencing generation. The store (or any host serving a read from it) decides
+  expiry against its timeout (recommended 60 seconds after the last
+  renewal), and expiry closes the generation at once: the store rejects any
+  later write, outcome or dispatch it mediates for that run, so `wait` cannot
+  change its answer after waiters were told `host-lost`. No particular host,
+  not even the parent's, has to be alive for the run to be reported failed.
+- **The running host fences itself** on its monotonic clock: once the time
+  since it sent its last successful renewal passes the store's timeout minus
+  a margin (recommended 15 seconds), it stops starting model and tool calls
+  and cancels those in flight. A partitioned host cannot consult the store,
+  so this is the only fence on its side.
+- **A linearizable store.** Leases, generations, spawn tickets and limit
+  reservations need compare-and-swap. A store or zone that cannot answer
+  consistently (a partition) answers `unavailable`.
+- **What fencing does not stop, plainly.** It protects the session and
+  effects the store mediates. It does not stop what a cut-off instance does
+  directly with its own network, volume and interface grants before its own
+  fence fires, calls already in flight that ignore cancellation, or a host
+  whose clock misbehaves (a paused virtual machine). Those may overlap a new
+  run. They are limited to the child's own reach, never more.
+- **The session survives.** A later `send` starts a new run, placed again,
+  under a new generation.
 
-### D13. A child's agent may be a catalog definition
+*Alternatives.* Fencing every effectful capability on the store (review
+finding 5, Codex's form): a partitioned host cannot reach the store to
+check, so it would fail closed on every call; self-fencing plus store-side
+expiry is what can actually be built. Resuming the lost run elsewhere: a
+run's effects cannot safely be replayed. Waiting indefinitely: the silent
+hang the direction rules out.
 
-*Basis: decided here.* `agent-source` is a pinned `component` with the
-request's own model, grants and toolsets, or the name of an agent
-`definition` in the operator's catalog, whose component, model, grants and
-toolsets are the definition's. The admission snapshot resolves the name to
-the definition's content, so a changed definition is a new request. This is
-what "an agent definition or reference" needs without a second request
-shape, and it answers #76's (l) (labeled imports for preset agents): a preset
-is a catalog definition.
+### D13. A child's agent may be a catalog definition, admitted by the same rules
+
+*Basis: decided here; tightened after review finding 7.* `agent-source` is a
+pinned `component` with the request's own model, grants and toolsets, or the
+name of an agent `definition` in the operator's catalog. A definition is
+expanded into its component, alias, grants and toolsets and admitted by
+exactly the same rules as a component request: its grants must fit the
+caller's own, its toolsets fit or ask, and its alias must be one the caller
+was granted. A catalog entry is a convenience, not a privilege, so no agent
+can start a more privileged catalog agent and read its reply. A child may
+delegate only the alias it was given. The snapshot resolves the name to the
+definition's content, so a changed definition is a new request. This answers
+#76's (l): a preset is a catalog definition.
 
 ### D14. `toolset-spec.functions` trims a toolset
 
@@ -517,7 +579,9 @@ Codex review.* A record holding a `future` could never gain a field; a
 resource with `get-` accessors and `wait-for-decision` can gain methods. The
 provider worlds `spawn-provider` and `tool-loading-provider` export
 `spawn-types`, because a provider creates the approvals it returns; a world
-that imported it could not construct one.
+that imported it could not construct one. Both export it, so in practice
+one implementer serves both powers; two separate implementers would give a
+guest two `approval` types under one name.
 
 ### D18. Within the ceiling, only catalogued code loads without asking
 
@@ -532,14 +596,29 @@ catalog or matching a toolset entry; any other digest goes to a grantor.
 `other(string)`, as in `tool-types`, `run-types` and `session-status`. One
 package, one style.
 
-### D20. The session is part of caller identity
+### D20. One session per workload, and the session in caller identity
 
-*Basis: decided here, after the Codex review.* `run` allows one component to
-serve several sessions, so identity is the workload incarnation, the
-component name *and* the session id. Approvals, coalescing, spawn tickets,
-the cooldown, the cap and repeat tracking are partitioned by it, and the
-digest preimage includes it. Without it, an identical request from session B
-could coalesce onto, or consume, an approval shown to session A's person.
+*Basis: decided here, after review finding 4.*
+
+These imports are served only to a workload the host bound to exactly one
+session for its whole life; a host that binds several sessions to one
+workload answers `disabled`. Caller identity is the workload incarnation,
+the component name and that session id, and the digest preimage includes
+the session.
+
+*Why per-session workloads rather than a session context on the imports.*
+Toolsets are components of the workload: a workload shared by sessions
+would share their toolsets, instances, rollouts and removals, so a session
+context on `spawn` and `tool-loading` alone could not keep sessions apart,
+and `tools.call` would need the context too. Both hosts can implement the
+rule today. Desktop already gives each agent session its own workload.
+Control's tools plugin identifies callers by workload and component id, and
+wash-runtime 2.12 gives host plugins the caller's workload id and its
+per-workload bind configuration, so the host can put the session id in the
+bind configuration when it creates the session's workload and read it on
+every call. A session context would need a host-minted handle threaded
+through every import, a change to `tools` that guests export, and it would
+still leave toolsets shared.
 
 ### D21. Discovery shows what could be granted; powers start off
 
@@ -574,10 +653,74 @@ component, and loading is a rollout attached to the same session.
 one shared host plugin, `plugin-agent-spawn`, in Cosmonic Control, which
 Cosmonic Desktop uses the way it uses Control's typed tool crate.
 
+### D26. Toolsets are dispatched, never linked, and never hold agent powers
+
+*Basis: decided here, after review finding 6.*
+
+- An `interface-grant` may not name a `cosmonic:agent` interface
+  (`invalid-request`). Otherwise a toolset could import `spawn` or
+  `tool-loading` and become a caller with powers the child was spawned
+  without.
+- A toolset's exports are reachable only through the host's dispatch, never
+  linked to the agent or a sibling, and its imports are satisfied only by its
+  own grants. A sibling linked straight to a typed tool's interface would
+  bypass dispatch, the revocation check and the audit, and two separately
+  approved toolsets could pass data around the model.
+- A tool provider (a toolset exporting `cosmonic:agent/tools`) is linked
+  straight to the agent's `tools` import by a runtime's served-within-workload
+  rule, as Control's runtime does today. A host whose runtime would link a
+  toolset's exports refuses that toolset with `invalid-request` until the
+  runtime can keep it host-dispatched. Typed tools are unaffected.
+
+### D27. Attachments are re-issued across the parent and child boundary
+
+*Basis: decided here, after review finding 15.* A stored attachment id is
+sealed to its session, so one passed in a `send` message or returned in an
+outcome would be unusable on the other side. The host copies each stored
+attachment the sender can read into the receiving session and re-issues it
+there. Outcome attachments count toward `output.max-bytes`; with
+`structured-only` an outcome carries none.
+
+### D28. Fit rules
+
+*Basis: decided here, after review finding 14.* Two implementers must agree
+on what "fits":
+
+- **Volumes.** A grant fits a caller's mount of the same storage, at the same
+  path within that storage or below it. A read-only grant fits a read-only or
+  read-write mount; a read-write grant fits only a read-write mount.
+- **Allowed hosts,** after normalization:
+
+  | Caller's entry | Contains |
+  | --- | --- |
+  | `*` | everything (never granted by default) |
+  | `h` (bare host) | `h`, and `scheme://h` on that scheme's default port, for `http`, `https`, `ws`, `wss` |
+  | `h:p` | `h:p`, and `scheme://h:p` |
+  | `scheme://h` or `scheme://h:p` | exactly that scheme, host and port |
+  | `*.d` | any host ending in `.d` (any depth), in the same forms as a bare host; never `d` itself |
+
+- **Model aliases** fit an alias the caller was granted.
+
+### D29. What the person is shown is the implementer's, not the caller's
+
+*Basis: decided here, after review finding 12.* The digest covers fields the
+caller chose (`component.image`, toolset `name`, `mount-path`, interface
+config), and the summary shows them. So the implementer shows its own catalog
+name for a catalogued digest; otherwise it shows the image reference only
+after confirming the repository serves that digest (and the tag only if it
+resolves to it now), and refuses a reference it cannot confirm. Caller-chosen
+names are shown as quoted identifiers limited to `[a-z0-9-_./:]`.
+
 ### Still not decided
 
-- **Taint propagation** (#76's (g)): narrowing a child's egress as it reads
-  needs runtime revocation of allowed hosts. Not in this version.
+- **Taint propagation** (#76's (g)): narrowing a child's egress as it reads,
+  and narrowing a running instance's allowed hosts when an ancestor loses
+  one (D8), both need runtime revocation of allowed hosts. Not in this
+  version.
+- **Records a guest builds** (`spawn-request`, `toolset-spec`, `grants`,
+  `budget`) cannot gain fields after `@since`. Goals, swarms and a tree
+  budget will want to extend them; decide before stabilizing whether they
+  become resources or carry an extension field.
 
 ## Next: goals and swarms
 
@@ -607,9 +750,14 @@ declare finished early. A goal makes it a first-class, host-checked loop:
 - **Progress:** contentless frames like `spawn-types.progress` plus a
   goal-level counter (runs, checks passed); the session's state stays the
   `session-status` one.
-- **Shape:** probably `goal.start(spec) -> session id`, then the same
-  `wait`, `cancel` and `children` as spawn, so a goal is a child session
-  whose driver is the host rather than the parent's model.
+- **Shape:** probably `goal.start(spec) -> session id`, then `cancel` and
+  `children` as for spawn, so a goal is a child session whose driver is the
+  host rather than the parent's model. `wait` serves only runs the caller
+  started, so a host-driven goal needs a session-level wait and a goal-level
+  progress read, and rules for who owns the goal's runs. Both are new
+  functions on a host-served interface, which is additive.
+- **Slots:** a long-lived goal waiting on a person sits on a
+  `concurrent-agents` slot; the limit may need to tell waiting from working.
 
 ### A swarm interface: membership and messages
 
@@ -627,6 +775,10 @@ Several agents working as peers rather than as parent and children:
   hop, and a swarm's total reach is the union of its members', each admitted
   through spawn's ceiling rules. Inbox size and message rate limits keep a
   loop of agents from flooding each other.
+- **Who may join:** sibling messaging is a new free-text channel between
+  agents, so membership must be a power of its own that a `structured-only`
+  child cannot hold, and a member's reach must rest on its ancestors as D8
+  requires, so it cannot be re-used with a wider output.
 - **What spawn already provides:** member creation and placement (spawn and
   `placement`), lifetime and the tree limits, state for each member, and the
   host's audit of who started whom.
@@ -675,27 +827,38 @@ pass them.
 1. **Concurrent waiters.** N identical beyond-ceiling requests from one
    caller give one approval and one prompt. For a load, the grant adds one
    session ceiling entry, all N loads return the same toolset, and one
-   rollout runs. For a spawn, the ticket admits one child; the other resends
-   are decided by the consumed ticket (a new approval, marked as a repeat)
-   unless the ceiling now admits them without one, never several children on
-   one ticket.
+   rollout runs. For a spawn with N different keys, the ticket admits the
+   first key's child; the others get one new approval, marked as a repeat.
+   A resend with the admitted key returns the same child. The parent can
+   load none of the spawn's approved toolsets without asking, and a second
+   child with the same toolset and a wider output asks.
 2. **Sessions apart.** The same request from the same component in two
    sessions gives two approvals with different digests; granting one admits
    nothing in the other.
 3. **Session ceiling.** Grant a load. Set it aside and load again: `offered`,
    no prompt, no rollout. Unbind it at the component cap and load again: a
    rollout, no prompt. Have the person remove it, then load again:
-   `needs-approval`. Remove it while a load of it is `loading`: the rollout
-   is not published. Rebind its volume, publish a new digest, or change
-   policy: each asks or refuses again.
+   `denied` during the cooldown, then `needs-approval`. Remove it while a
+   load of it is `loading`: the rollout is not published and the load
+   answers `denied`; an unrelated rollout in flight still publishes. Remove
+   it while a granted spawn ticket naming it is unconsumed: the resend asks
+   again. Rebind its volume, publish a new digest, or change policy: each
+   asks or refuses again.
 4. **Same run.** Load a toolset mid-run and call it in the same run on the
    same instance. Fail the new component's start: `unavailable` and the
    toolsets are unchanged. Use a short `wait`: `loading`, then `offered`.
+   On a host using the next-run fallback: `next-run` true, and the tools in
+   the next run's `tools.list`. Hang a rollout: after the deadline the
+   toolset leaves `loaded()` and an identical load starts again.
 5. **Budget.** With the budget full, a load sets aside the least recently
    called unpinned toolset outside the residency window and lists it; with
    every offered toolset pinned, `over-limit(offered-functions)`.
-6. **Children.** A child whose agent grants exceed the parent's own grants:
-   `denied`. A child's toolset among the parent's set-aside tools: admitted.
+6. **Children.** A child whose agent grants exceed the parent's own grants,
+   or whose catalog definition does: `denied`. Remove a parent's entry a
+   child's toolset rested on: the child loses it. Narrow the parent's own
+   grants: the child's next `send` answers `denied` and its failure is
+   `revoked`. Cancel a child: runs in progress in its whole subtree end
+   `cancelled`. A child's toolset among the parent's set-aside tools: admitted.
    A grandchild requesting, as an agent grant, the reach of one of the
    child's toolsets: `denied`. Spawn past the depth limit:
    `over-limit(depth)`. `send` to a grandchild: `unknown`. `children(true)`
@@ -749,8 +912,9 @@ mints the child's run ids, turns the lifetime budget into per-run options,
 meters the child's model calls itself (it serves the child's `chat`), reads
 the child's events promptly, emits only `working`, `blocked`, `cancelling`
 and `counts`, replaces error details with its own, checks the outcome
-against `output.schema`, `max-bytes` and `structured-only`, and keeps the
-last outcome in the session store for `wait`.
+against `output.schema`, `max-bytes` and `structured-only`, re-issues
+attachments (D27), and keeps the outcomes of the runs the caller started,
+keyed by session and run id, in the session store for `wait`.
 
 ## Considered and dropped
 
@@ -796,10 +960,16 @@ last outcome in the session store for `wait`.
   request the revision, which admission policy checks like any other.
 - **Retire after drain,** with the tool dispatcher routing to a toolset in
   the incoming revision meanwhile (D5).
-- **A session store with parent links and leases.** Child sessions with
-  their parent id, depth, labels, last outcome and state, readable by any
-  host that serves the tree, and a run lease that a lost host stops renewing
-  (D11, D12). Control's session store (moving to SQLite, reconciled across
+- **A linearizable session store with parent links and leases.** Child
+  sessions with their parent id, spawner identity, depth, labels, state and
+  outcomes keyed by run id, readable by any host that serves the tree; run
+  leases with fencing generations the store expires itself; and
+  compare-and-swap for spawn tickets, idempotency keys and limit
+  reservations (D7, D10, D12).
+- **One session per workload,** with the session id in the per-workload
+  bind configuration so plugins can attribute every call (D20).
+- **Dispatch that never links toolsets,** including tool providers exporting
+  `cosmonic:agent/tools` (D26). Control's session store (moving to SQLite, reconciled across
   zones) is the natural home; Desktop keeps the same records locally.
 - **Session state for the ceiling and working set,** including the
   revocation generation, which toolsets are set aside or pinned, and the
@@ -848,3 +1018,34 @@ concurrency limit, with `start-error.over-limit` (D10); `send` returns a run
 id and `wait` takes it (D7); a toolset still loading cannot be set aside
 (D3); and the function budget is the smallest across the caller's model
 aliases (D4).
+
+### Third round (independent Claude review and a fresh Codex round)
+
+Each finding was checked against the WIT first. All highs and mediums are
+fixed; of the lows, all but one are fixed.
+
+| # | Finding | Outcome |
+| --- | --- | --- |
+| 1 | A spawn approval grants more than its prompt says | Fixed: one child per decision via an idempotency key; nothing joins the parent's ceiling; the child's entries are bound to the spawn digest (D8) |
+| 2 | "Never exceeds an ancestor" held only at admission | Fixed: provenance per entry, re-check at each run acceptance and child load, `revoked` (D8) |
+| 3 | Remove did not void an unconsumed spawn ticket | Fixed: removal voids tickets naming the toolset; consumption re-checks everything (D2, D8) |
+| 4 | Session attribution with several sessions per instance | Fixed: one session per workload, else `disabled`; chosen over a session context on the imports (D20) |
+| 5 | Fencing does not stop a cut-off host's effects | Fixed: store-side expiry closes the generation, monotonic self-fencing with a margin, a linearizable store, and a plain list of what fencing does not stop (D12) |
+| 6 | Toolsets could hold powers or be linked by siblings | Fixed: no `cosmonic:agent` interface grants; toolsets dispatched, never linked; linked tool providers refused (D26) |
+| 7 | Catalog agents had no ceiling check | Fixed: definitions admitted by the component rules; aliases a child may delegate (D13) |
+| 8 | Cancel and Stop did not reach the subtree | Fixed: `cancel`, `end` and a person's stop cascade (D7) |
+| 9 | Session creation, prompts and spend unbounded | Fixed: `live-sessions` limit, subtree budgets, cooldown and pending cap per tree by reach, bounded retention (D10) |
+| 10 | Placement could change network reach | Fixed: host-local names pin the child to the parent's host; placement audited (D11) |
+| 11 | The revocation generation was session-wide | Fixed: the entry is the authority, the generation only detects races; refused steps answer `denied`; in-flight calls cancelled (D2) |
+| 12 | Caller-chosen text reached the prompt | Fixed: catalog names or confirmed image references; quoted, limited identifiers (D29) |
+| 13 | No fallback for same-run loading; `loading` had no end | Fixed: next-run fallback with `load-result.next-run`; rollout deadline (D5) |
+| 14 | Fit rules underspecified | Fixed: volume access and sub-path rules, a host containment table (D28) |
+| 15 | Attachments could not cross the boundary | Fixed: re-issued by the host, counted in `max-bytes`, none with `structured-only` (D27) |
+| 16 | Notes said "keeps the last outcome" | Fixed ("The child's runs", "What implementing it needs") |
+| 17 | Children orphaned when the spawner's identity ends | Fixed: they end with it (D7) |
+| 18 | A prompt right after Remove | Fixed: removal starts the cooldown (D2) |
+| 19 | Entries with nothing bound invisible | Fixed: the host UI lists every entry (D2) |
+| 20 | Audit stated only for ceiling admissions | Fixed: every admission, refusal, removal, withdrawal, set-aside and unbind (`spawn-types`) |
+| 21 | Reserved aliases blocked the same name at a new digest | Fixed: the same toolset name takes its aliases back (`tool-loading`) |
+| 22 | Two providers give two `approval` types | Fixed: one implementer serves both (D17) |
+| 23 | Guest-built records cannot grow; `placement.other` as input | `placement.other` is `invalid-request`. Record growth is declined for now and recorded under "Still not decided": cheap to change while unstable, and the right shape depends on goals and swarms |
