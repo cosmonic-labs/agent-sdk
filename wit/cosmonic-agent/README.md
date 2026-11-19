@@ -93,7 +93,7 @@ A typed tool is not marked as a tool in its WIT. Which components a session
 offers as tools is the host's decision, from its catalog, so any component
 with a suitable interface can serve, including one published by someone else.
 
-Cosmonic hosts translate typed tools this way:
+A host translates typed tools like this:
 
 - Every function of each exported interface outside `wasi:*` and
   `cosmonic:agent/*` becomes a tool. Its name is the function name in snake
