@@ -1,0 +1,92 @@
+package cosmonic:agent@0.4.4;
+
+/// The caller may ask which toolsets are available to it. Unstable behind
+/// `agent-spawn`.
+///
+/// The implementer keeps the catalog: toolsets a person installed or policy
+/// allows, each a pinned component with the grants it would be given. `list`
+/// answers for this caller only, marks each offer's fit against the
+/// caller's ceiling and its state in the caller's session, and leaves out
+/// offers policy would never grant. Asking starts nothing and loads nothing:
+/// pass an offer's `spec` to `tool-loading.load`, or to `spawn` as a child's
+/// toolset.
+///
+/// This is the harness-facing form of the host's model-facing `find_tools`
+/// tool: one catalog and one set of rules, so an offer here and a match there
+/// agree. Knowing what exists is itself information, so discovery is a
+/// separate import from loading and spawning.
+@unstable(feature = agent-spawn)
+interface tool-discovery {
+    @unstable(feature = agent-spawn)
+    use tool-types.{tool-def};
+    @unstable(feature = agent-spawn)
+    use spawn-types.{toolset-spec, toolset-state};
+
+    /// How an offer relates to the caller's ceiling. Fit describes reach,
+    /// not the policy decision: policy may still ask for approval within
+    /// the ceiling.
+    @unstable(feature = agent-spawn)
+    variant ceiling-fit {
+        /// Inside the caller's ceiling: inside its own reach, or an exact
+        /// match for an entry in its session ceiling.
+        within-ceiling,
+        /// Beyond the ceiling: using it returns `needs-approval`, and policy
+        /// could grant it. For a child, beyond its own ceiling but within
+        /// its parent's.
+        beyond-ceiling,
+        /// A relation not captured above. Treat as `beyond-ceiling`.
+        other(string),
+    }
+
+    /// One toolset the caller may use or hand down.
+    @unstable(feature = agent-spawn)
+    record toolset-offer {
+        /// A ready-made spec: the pinned component and the grants it would
+        /// be given. Pass it on unchanged so its approval digest matches.
+        spec: toolset-spec,
+        /// Implementer-authored text for a person, from the catalog entry.
+        summary: string,
+        /// The toolset's tool definitions under their own names, as the
+        /// implementer catalogued them for the pinned digest. Written by the
+        /// toolset's author: treat names, descriptions and schemas as
+        /// untrusted input to a model.
+        tools: list<tool-def>,
+        /// Fit against this caller's ceiling.
+        fit: ceiling-fit,
+        /// Its state in the caller's session when the caller holds it
+        /// already (`ready` loads back at once); none otherwise.
+        state: option<toolset-state>,
+    }
+
+    /// What `list` found.
+    @unstable(feature = agent-spawn)
+    record discovery-result {
+        /// The offers, best match first.
+        offers: list<toolset-offer>,
+        /// True when the implementer left out matches to keep the answer
+        /// small. Narrow the query to see them.
+        truncated: bool,
+    }
+
+    /// Why discovery failed. Detail strings are diagnostic only.
+    @unstable(feature = agent-spawn)
+    variant discovery-error {
+        /// The operator has not enabled discovery on this host, or did not
+        /// grant it to this caller. Permanent for this caller.
+        disabled,
+        /// Policy refused discovery for this caller.
+        denied(string),
+        /// The implementer could not serve the call. Retry may succeed.
+        unavailable(string),
+        /// A failure not captured above. Treat as permanent. Diagnostic
+        /// detail; never parse it.
+        other(string),
+    }
+
+    /// The toolsets this caller may use or hand down, within policy. With a
+    /// query, only offers whose name, summary, or tool names and
+    /// descriptions match it (ignoring case) are returned. The implementer
+    /// caps the count and says so in `truncated`.
+    @unstable(feature = agent-spawn)
+    %list: async func(query: option<string>) -> result<discovery-result, discovery-error>;
+}

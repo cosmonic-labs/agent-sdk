@@ -1,5 +1,5 @@
 /// Inference, authorized model access, tools, and durable agent sessions.
-package cosmonic:agent@0.4.3;
+package cosmonic:agent@0.4.4;
 
 /// A provider owns the model resources used by its inference interfaces.
 @since(version = 0.3.0)
@@ -93,4 +93,56 @@ world compact-client {
     include run-client;
 
     import compact;
+}
+
+
+/// The power to start child agents and read their final replies. Holds only
+/// this import: an agent adds `include agent;` (or `runnable-agent`) itself.
+@unstable(feature = agent-spawn)
+world spawn-client {
+    import spawn;
+}
+
+/// The power to ask which toolsets are available. Holds only this import.
+@unstable(feature = agent-spawn)
+world tool-discovery-client {
+    import tool-discovery;
+}
+
+/// The power to change one's own toolsets while running. Holds only this
+/// import: loading implies neither discovery nor spawning.
+@unstable(feature = agent-spawn)
+world tool-loading-client {
+    import tool-loading;
+}
+
+/// A runnable agent with every power in this group: it can find tools,
+/// load them into itself, and start child agents. A convenience; an agent
+/// that needs fewer powers includes only the client worlds it uses.
+@unstable(feature = agent-spawn)
+world spawning-agent {
+    include runnable-agent;
+    include spawn-client;
+    include tool-discovery-client;
+    include tool-loading-client;
+}
+
+/// An implementer of `spawn`, such as a host plugin or a test double.
+@unstable(feature = agent-spawn)
+world spawn-provider {
+    export spawn;
+}
+
+/// An implementer of tool discovery.
+@unstable(feature = agent-spawn)
+world tool-discovery-provider {
+    export tool-discovery;
+}
+
+/// An implementer of tool loading. It also serves the caller's `tools`
+/// import, since a loaded toolset's tools are offered there.
+@unstable(feature = agent-spawn)
+world tool-loading-provider {
+    export tool-loading;
+    export tools;
 }
