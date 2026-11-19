@@ -760,6 +760,9 @@ interface spawn-types {
         host-lost(string),
         /// The child failed. Details are in the host's view of its session.
         failed(string),
+        /// The run ended and its outcome is no longer kept (for a run
+        /// returned again by an idempotency key, or waited on late).
+        expired,
         /// The implementer could not finish serving the run.
         unavailable(string),
         /// A failure not captured above. Treat as permanent. Diagnostic

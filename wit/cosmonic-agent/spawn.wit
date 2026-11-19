@@ -63,9 +63,13 @@ package cosmonic:agent@0.4.4;
 ///
 /// - Brokered calls carry the generation. Every call the host brokers for a
 ///   run (model calls, credential-brokered egress, tool dispatch, writes
-///   through a host-managed store) carries the run's fencing generation, and
-///   the host rejects one whose generation has closed. Direct egress through
-///   a component's own grants cannot be fenced this way.
+///   through a host-managed store) carries the run's fencing generation.
+///   A broker on the run's own host admits it only while that host's own
+///   lease view is valid (the same monotonic clock and margin as the
+///   self-fence). A broker elsewhere (a shared model or credential gateway)
+///   checks the generation with the store and fails closed when it cannot
+///   establish that the generation is open. Direct egress through a
+///   component's own grants cannot be fenced this way.
 /// - A lock delay before re-placement. After a lease expires, the child's
 ///   next run is accepted but not started until a re-placement delay has
 ///   passed (the operator's, at least the self-fencing margin, recommended
@@ -90,13 +94,18 @@ package cosmonic:agent@0.4.4;
 /// run can collect, bounded by the tree limits and budgets.
 ///
 /// Forced stop. Cancellation asks cooperatively first. After the host's
-/// grace period (the operator's, recommended 15 seconds), the host stops the
-/// instances of every run in the subtree still going, the same way a host
-/// fences itself: nothing new starts through any import, calls in flight are
-/// cancelled, and metering stops whatever the agent does. `cancel` and `end`
-/// resolve only when the whole subtree has stopped, so the caller learns it;
-/// dropping the future only stops waiting. A person's stop gets the same
-/// deadline.
+/// grace period (the operator's, recommended 15 seconds), each host still
+/// running a run in the subtree stops that run's instances, the same way a
+/// host fences itself: nothing new starts through any import, calls in
+/// flight are cancelled, and metering stops whatever the agent does. A host
+/// the request cannot reach is stopped by its lease instead: the store
+/// expires the lease (so the run ends `host-lost`), and that host fences
+/// itself by its own deadline. `cancel` and `end` resolve when every run in
+/// the subtree has stopped or had its lease expire, so at most the grace
+/// period or the lease timeout, whichever is longer; dropping the future
+/// only stops waiting. A person's stop gets the same deadline. As with any
+/// lost host, effects already under way when a run is stopped are not
+/// undone.
 ///
 /// Cancellation is a barrier. `cancel`, `end` and a person's stop mark the
 /// subtree as cancelling in the session store, atomically, before they
@@ -131,8 +140,8 @@ package cosmonic:agent@0.4.4;
 /// Knowing without polling. `watch` streams changes to the caller's
 /// children within a run. Across runs, the host keeps a notice for each run
 /// the caller started in a child when it ends (session id, run id, how it
-/// ended; never child text), and `take-notices` returns them in the
-/// caller's next run, so a parent that ended its run while children worked
+/// ended; never child text) until the caller acknowledges it, and
+/// `read-notices` returns them in the caller's next run, so a parent that ended its run while children worked
 /// learns what finished without polling. Whether a child's completion may
 /// start the parent's next run is a host trigger, not part of this
 /// interface.
@@ -224,16 +233,18 @@ interface spawn {
         model-calls: u32,
     }
 
-    /// What remains of a budget: the tightest of the session's own and
-    /// every ancestor's, since a subtree's spend counts against each. None
-    /// in a field means no limit applies to it below the root's.
+    /// What remains of a budget. Tokens and time are the tightest of the
+    /// session's own and every ancestor's, since a subtree's spend counts
+    /// against each. None in a field means no limit applies to it below the
+    /// root's.
     @unstable(feature = agent-spawn)
     record remaining-budget {
         /// Tokens left.
         tokens: option<u64>,
         /// Wall-clock time left.
         duration: option<duration>,
-        /// Runs left for this session.
+        /// Runs left for this session, from its own `max-runs` only: runs
+        /// are counted per session, not charged to ancestors.
         runs: option<u32>,
     }
 
@@ -285,6 +296,8 @@ interface spawn {
     /// A notice that a run the caller started in a child has ended.
     @unstable(feature = agent-spawn)
     record notice {
+        /// Its place in the caller's notice sequence, increasing by one.
+        seq: u64,
         /// The child's session id.
         session: string,
         /// The run's id, as `wait` takes it.
@@ -327,6 +340,16 @@ interface spawn {
         run: string,
         /// Progress, then the outcome.
         started: started-run,
+    }
+
+    /// Notices from `read-notices`.
+    @unstable(feature = agent-spawn)
+    record notice-batch {
+        /// The notices, oldest first.
+        notices: list<notice>,
+        /// True when the host dropped unacknowledged notices older than
+        /// these, past its retention.
+        gap: bool,
     }
 
     /// What `spawn` started.
@@ -372,7 +395,10 @@ interface spawn {
     /// the same `sent` (the same run id, a fresh view of its progress and
     /// outcome) and starts nothing, whether that run is in progress or has
     /// ended. The host keeps the keys of the 256 most recent runs per child;
-    /// an older key starts a new run. With none, every call starts a run.
+    /// an older key starts a new run. A known key whose outcome is no longer
+    /// kept still returns the same run, and its outcome resolves to
+    /// `run-error.expired`; it never starts the run again. With none, every
+    /// call starts a run.
     @unstable(feature = agent-spawn)
     send: async func(
         session: string,
@@ -417,12 +443,19 @@ interface spawn {
     @unstable(feature = agent-spawn)
     watch: async func(descendants: bool) -> result<stream<child-event>, child-error>;
 
-    /// The notices of runs the caller started in its children that have
-    /// ended since it last took them, oldest first; taking them clears
-    /// them. The host keeps them durably until taken (at least the 256 most
-    /// recent per session), so a harness calls this at the start of each run.
+    /// Unacknowledged notices of runs the caller started in its children,
+    /// oldest first. Reading clears nothing, so a reply lost before the
+    /// caller recorded it is read again. The host keeps at least the 256
+    /// most recent unacknowledged notices per session; `gap` is true when
+    /// older ones were dropped. A harness reads them at the start of each
+    /// run and acknowledges what it has recorded.
     @unstable(feature = agent-spawn)
-    take-notices: async func() -> result<list<notice>, child-error>;
+    read-notices: async func() -> result<notice-batch, child-error>;
+
+    /// Acknowledge every notice up to and including `through`; they are no
+    /// longer returned. Acknowledging again is harmless.
+    @unstable(feature = agent-spawn)
+    ack-notices: async func(through: u64) -> result<_, child-error>;
 
     /// The caller's own session id, parent, depth and remaining budget.
     @unstable(feature = agent-spawn)
