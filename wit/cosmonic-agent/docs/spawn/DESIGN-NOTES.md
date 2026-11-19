@@ -352,7 +352,7 @@ interface works in session ids:
 | `end(session)` | Ends the child session and every session below it; resolves when the subtree has stopped. |
 | `children(descendants)` | Direct children, or the whole subtree in parent-first order, each with parent, depth, labels (direct children only), `session-status` state, failure reason, location and whether it ended. |
 | `watch(descendants)` | The subtree as it stands, then each change (D32). |
-| `take-notices()` | Notices of child runs that ended since the caller last asked, for the start of its next run (D32). |
+| `read-notices()`, `ack-notices(through)` | Notices of child runs that ended, read at the start of the next run and acknowledged once recorded (D32). |
 | `get-lineage()` | The caller's own session id, parent, depth and remaining budget (D33). |
 
 - **Acting is on direct children only; seeing is on the subtree.** A parent
@@ -747,7 +747,9 @@ names are shown as quoted identifiers limited to `[a-z0-9-_./:]`.
 takes an optional key, as `spawn` does. A resend with a key that already
 started a run in that child returns the same run id and starts nothing,
 whether the run is in progress or has ended; the host keeps the keys of the
-256 most recent runs per child. Without it, a caller whose reply was lost
+256 most recent runs per child, longer than the outcomes, and a known key
+whose outcome is gone answers `run-error.expired` rather than running again
+(fourth-round Codex finding). Without it, a caller whose reply was lost
 (a store hiccup, its own store torn down) cannot tell whether the run
 started, and once a short run has ended a resend repeats the child's
 effects; `busy` protects only while the run is still going.
@@ -769,9 +771,14 @@ Cancelling asks cooperatively first; after the host's grace period
 (recommended 15 seconds) the host stops the instances of every run in the
 subtree still going, the same way a host fences itself (D12): nothing new
 starts through any import, calls in flight are cancelled, and metering
-stops whatever the agent does. `cancel` and `end` resolve only when the
-whole subtree has stopped, so "cancelled" means the tree is quiet. A
-person's stop gets the same deadline.
+stops whatever the agent does. A host the request cannot reach is stopped by
+its lease: the store expires it (the run ends `host-lost`) and that host
+fences itself by its own deadline. `cancel` and `end` resolve when every run
+in the subtree has stopped or had its lease expire, so within the longer of
+the grace period and the lease timeout; "cancelled" then means nothing the
+store mediates is still running. As with a lost host (D12), effects already
+under way are not undone, and an unreachable host's direct effects may run
+until its self-fence. A person's stop gets the same deadline.
 
 *Prior art.* Erlang/OTP supervisors ask a child to shut down and kill it
 after a timeout ([OTP supervisor principles](https://www.erlang.org/doc/system/sup_princ.html));
@@ -795,9 +802,13 @@ separate "stopped" signal (two calls for one question).
   does, so nothing is lost between a read and a subscribe. Contentless and
   host-authored, like `progress`.
 - **Across runs:** when a run the caller started in a child ends, the host
-  keeps a notice (session id, run id, how it ended; never child text) until
-  the caller takes it, and `take-notices` returns them at the start of the
-  caller's next run. This is what D7's "start work, end your run, collect
+  keeps a numbered notice (session id, run id, how it ended; never child
+  text). `read-notices` returns the unacknowledged ones at the start of the
+  caller's next run, and `ack-notices(through)` clears them once the caller
+  has recorded them, so a reply lost in between is read again (the same
+  lost-reply problem D30 fixes for `send`). The host keeps at least the 256
+  most recent unacknowledged notices and says when it dropped older ones
+  (`gap`). This is what D7's "start work, end your run, collect
   later" pattern was missing. Whether a child's completion may *start* the
   parent's next run is a host trigger, left to the goal interface.
 
@@ -819,8 +830,9 @@ ingress).
 
 *Basis: Eric, 2026-11-19 (prior-art survey); decided here.* `child.usage`
 carries the host-metered tokens, runs and model calls of the child and
-everything below it; `lineage.remaining` carries what the caller has left,
-the tightest of its own budget and every ancestor's. Both are the
+everything below it; `lineage.remaining` carries what the caller has left:
+tokens and time as the tightest of its own budget and every ancestor's, runs
+from its own `max-runs` only, since runs are counted per session. Both are the
 implementer's numbers, never the child's, so they carry no child text.
 Every root session has a finite token and wall-clock budget that an operator
 can raise but never remove, in the same spirit as the tree limits that are
@@ -848,8 +860,14 @@ until a re-placement delay has passed (at least the self-fencing margin,
 recommended 30 seconds); its progress shows `blocked(placement-delay)`.
 And every call the host brokers for a run (model calls, credential-brokered
 egress, tool dispatch, writes through a host-managed store) carries the run's
-fencing generation, which the host rejects once closed. Direct egress
-through a component's own grants still cannot be fenced, as D12 says.
+fencing generation. A broker on the run's own host admits it only while that
+host's own lease view is valid, on the same monotonic clock and margin as
+its self-fence; a broker elsewhere (a shared model or credential gateway)
+checks the generation with the store and fails closed when it cannot
+establish that it is open. This refines D12: the store-side check D12
+declined is the one a partitioned host cannot make for itself; a broker that
+is not partitioned from the store can, and does. Direct egress through a
+component's own grants still cannot be fenced.
 
 *Prior art.* Chubby's lock-delay keeps a lost holder's lock from being taken
 again for a while, to shield resources that cannot check sequencers
@@ -1069,7 +1087,9 @@ pass them.
    key after the run ended: the same run id, one run. Cancel a child whose
    agent ignores cancellation: after the grace period its instances stop,
    metering stops, and `cancel` resolves. Start runs in three children and
-   end the caller's run: the next run's `take-notices` lists the three, once.
+   end the caller's run: the next run's `read-notices` lists the three, and
+   again until `ack-notices`. A resend of an old key whose outcome is gone:
+   the same run id and `run-error.expired`, no new run.
    `watch(true)` starts with `existing` records and `synced`. Lose a child's
    host: the next run shows `blocked(placement-delay)` until the delay
    passes, and a brokered call from the old host is rejected.
@@ -1275,3 +1295,13 @@ fixed; of the lows, all but one are fixed.
 | 4 | Alias reclamation could retarget a call made against the old definitions | Fixed: calls are bound to the digest each alias denoted in the tool list sent with the model call (tool naming) |
 | 5 | Idempotency keys kept for the session were unbounded | Fixed: `total-agents` defaults to 500 per tree, bounding key records (D10) |
 | 6 | The rollout deadline could discard a revision staged for the next run | Fixed: the deadline covers preparation; a staged revision is kept until the next run or removal (D5) |
+
+### Fifth round (Codex review of the prior-art additions)
+
+| # | Finding | Outcome |
+| --- | --- | --- |
+| 1 | Forced cancellation overpromised for an unreachable host | Fixed: an unreachable host is stopped by its lease; `cancel` resolves within the longer of the grace period and the lease timeout; the effects caveat is kept (D31) |
+| 2 | Fenced brokered calls contradicted D12's partition policy | Fixed: a local broker uses the host's lease view; a remote broker checks the store and fails closed (D34) |
+| 3 | Send keys outlived kept outcomes | Fixed: `run-error.expired` for a known key whose outcome is gone; never a second run (D30) |
+| 4 | Clear-on-read notices lost completions on a lost reply | Fixed: `read-notices` and `ack-notices`, numbered, with a `gap` flag (D32) |
+| 5 | Ancestors' run budgets constrained `remaining.runs` | Fixed: runs from the session's own budget; tokens and time from the tightest ancestor (D33) |
