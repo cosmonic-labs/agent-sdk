@@ -70,12 +70,14 @@ match done.toolset.state {
     }
     ToolsetState::NextRun => { /* finish this run; the tools arrive on the next */ }
     ToolsetState::AwaitingApproval(p) => { /* finish the run asking the person: p.summary */ }
-    _ => {}
+    _ => {} // `ready` and others are returned only for a toolset already held
 }
+// A rollout that fails or runs out of time is an error (`unavailable`).
 ```
 
-Within the caller's ceiling, a catalog toolset loads at once and serves the
-run in progress. Beyond it, `load` returns `awaiting-approval` without
+`load` resolves once the toolset is callable, will be on the next run, or
+waits on a grantor, so there is nothing to poll. Within the caller's ceiling,
+a catalog toolset loads without asking and serves the run in progress. Beyond it, `load` returns `awaiting-approval` without
 waiting. A person's approval lasts for the session: setting the toolset aside
 and loading it again later needs no prompt, until the person removes it.
 
@@ -121,7 +123,8 @@ let more: Review = reviewer.wait("billing").await?.structured()?;
 Child::end(reviewer).await?;
 ```
 
-The name is the child's address and its idempotency key: spawning
+Names are `[a-z0-9-]`. The name is the child's address and its idempotency
+key: spawning
 `reviewer-pr-42` again returns the same child, and sending run `auth` again
 returns the same run. If the request needs a grantor, the child exists in
 state `pending` and its first run waits as `blocked(admission)` until the
@@ -157,7 +160,7 @@ another machine; if that machine is lost mid-run, its `last-run` becomes
 
 ```rust
 let reader = SpawnRequest {
-    agent: AgentSource::Catalog("quarantine-reader".into()), // imports no network
+    agent: AgentSource::Catalog("quarantine-reader".into()), // imports only chat
     output: OutputShape::StructuredOnly(schema_for::<Triage>()), // no free strings
     max_bytes: 256,
     budget: Budget { max_runs: Some(1), max_steps: Some(1), ..Default::default() },
@@ -169,9 +172,11 @@ let triage: Triage = child.wait("triage").await?.structured()?;
 ```
 
 With `structured-only`, the parent receives only the validated structured
-value. The reader's component imports nothing that reaches the network, which
-the approver can see. This narrows what a manipulated child can do and say;
-it does not stop it being manipulated.
+value. The reader's component imports nothing beyond `chat`, which the
+approver can see, and its prompts reach only its model's provider (use a
+model binding without provider-run tools). An import list shows what a
+component can call directly, not where data flows. This narrows what a
+manipulated child can do and say; it does not stop it being manipulated.
 
 ## Files
 

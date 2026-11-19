@@ -37,7 +37,8 @@ interface tool-discovery {
         /// Its tools under their own names.
         tools: list<tool-def>,
         /// The interfaces its pinned component imports, read from the
-        /// binary: it can call nothing else.
+        /// binary: it can call nothing else directly. This does not show
+        /// where data flows through those interfaces or their configuration.
         imports: list<string>,
         /// Fit against the caller's ceiling.
         fit: ceiling-fit,

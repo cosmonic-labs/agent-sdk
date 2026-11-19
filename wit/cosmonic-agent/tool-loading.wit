@@ -9,12 +9,12 @@ package cosmonic:agent@0.4.4;
 /// model-facing `load_tools` tool, with the same admission, so a harness may
 /// use either.
 ///
-/// Admission. A load within the caller's ceiling (its own reach, plus
-/// toolsets a person approved earlier in this session) is admitted at once;
-/// anything else waits on a grantor as `awaiting-approval`, and `load`
-/// returns without waiting. A person's approval lasts for the session:
-/// loading the identical toolset again later needs no prompt, until the
-/// person removes it.
+/// Admission. A catalog load within the caller's ceiling (its own reach,
+/// plus toolsets a person approved earlier in this session) needs no
+/// grantor; anything else waits on one as `awaiting-approval`. A person's
+/// approval lasts for the session: loading the identical toolset again later
+/// needs no prompt, until the person removes it. A request nobody decides
+/// expires after a while.
 ///
 /// Timing. A load serves the run in progress where the implementer can: the
 /// caller's `tools.list` includes the toolset's tools once it is `offered`.
@@ -115,11 +115,13 @@ interface tool-loading {
     /// Why a set-aside did nothing.
     @unstable(feature = agent-tool-loading)
     variant unload-error {
+        /// This power is not enabled for the caller. Permanent.
+        disabled,
         /// The caller holds no toolset of that name.
         unknown-toolset,
         /// It is pinned (declared, or added by a person).
         pinned,
-        /// It is still loading or awaiting approval.
+        /// It is still loading.
         not-offered,
         /// Could not be served now.
         unavailable(string),
@@ -127,17 +129,20 @@ interface tool-loading {
         other(option<string>),
     }
 
-    /// Load a toolset. If the caller already holds the identical one, a
-    /// `ready` one returns to `offered` (after the same checks, setting
-    /// another aside if the budget needs room), and any other is returned as
-    /// it stands. Resolves at admission; a toolset that must wait for a
-    /// grantor or a rollout comes back `awaiting-approval` or `loading`.
+    /// Load a toolset. Resolves when it is `offered`, `next-run` or
+    /// `awaiting-approval`, or with an error if it cannot load (a rollout
+    /// that fails or runs out of time answers `unavailable`). If the caller
+    /// already holds the identical one, a `ready` one returns to `offered`
+    /// (after the same checks, setting another aside if the budget needs
+    /// room), a `loading` one is joined, and any other is returned as it
+    /// stands. Dropping the call stops waiting; the load goes on.
     @unstable(feature = agent-tool-loading)
     load: async func(toolset: toolset-source) -> result<load-result, load-error>;
 
     /// Set aside a toolset the caller loaded: its tools leave the model's
     /// list from the next `tools.list`, and it becomes `ready`. Its component
-    /// and approval stay. A call in progress finishes.
+    /// and approval stay. A call in progress finishes. On one still
+    /// `awaiting-approval`, this withdraws the request instead.
     @unstable(feature = agent-tool-loading)
     set-aside: async func(name: string) -> result<_, unload-error>;
 

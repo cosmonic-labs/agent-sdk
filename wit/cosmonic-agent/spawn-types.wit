@@ -14,8 +14,13 @@ package cosmonic:agent@0.4.4;
 /// What a caller sees of a child is the implementer's own: state, usage,
 /// progress, and the final outcome. Only the outcome's reply carries text the
 /// child wrote, and it can carry anything the child read; nothing here blocks
-/// prompt injection. A child can still signal through how much it spends and
-/// when, as seen in usage, remaining budgets and `watch-children` events.
+/// prompt injection. Records about sessions below the caller's direct
+/// children carry no text a child chose. A child can still signal through how
+/// much it spends and when, and through tree-wide limits, as seen in usage,
+/// remaining budgets, `over-limit` answers and `watch-children` events.
+///
+/// Session ids and names authorize nothing on their own: the implementer
+/// acts only for the component that spawned a child.
 @unstable(feature = agent-spawn)
 interface spawn-types {
     @unstable(feature = agent-spawn)
@@ -45,6 +50,9 @@ interface spawn-types {
     variant child-failure {
         /// A grantor refused it.
         denied(option<string>),
+        /// Its approval request was withdrawn (the caller ended it) or
+        /// expired undecided.
+        withdrawn,
         /// Its components could not start.
         start-failed(option<string>),
         /// A budget is spent, until an operator or person raises it.
@@ -59,13 +67,16 @@ interface spawn-types {
     @unstable(feature = agent-spawn)
     variant child-state {
         /// Waiting on a grantor. Holds no instance and no reach; runs sent
-        /// to it wait too.
+        /// to it wait too. Below the caller's direct children the summary is
+        /// empty.
         pending(pending-approval),
-        /// Admitted, with its session status.
+        /// Admitted, with its session status. Below the caller's direct
+        /// children, `status.run` is none.
         live(status),
         /// Admitted, but takes no more runs, for this reason.
         stopped(child-failure),
-        /// Ended; the reason, when it was not an orderly end.
+        /// Ended; the reason, when it was not an orderly end. A refused or
+        /// withdrawn pending child ends this way, freeing its place.
         ended(option<child-failure>),
         /// A state not captured above.
         other(option<string>),
@@ -77,8 +88,12 @@ interface spawn-types {
     variant child-run-error {
         /// Cancelled. Effects caused before the child stopped remain.
         cancelled,
-        /// The outcome broke the output shape or size limit.
+        /// The outcome broke the output shape or size limit. The detail never
+        /// quotes the rejected output.
         output-rejected(string),
+        /// The child was never admitted (refused, withdrawn or expired), so
+        /// the run never started.
+        not-admitted,
         /// A person or auditor declined to release the outcome.
         withheld,
         /// The machine running the child was lost mid-run. Effects already
@@ -153,10 +168,10 @@ interface spawn-types {
         duration: option<duration>,
         /// Runs left under its own `max-runs`; none if no limit.
         runs: option<u32>,
-        /// The tightest ancestor's tokens left, coarse. Always set: every
-        /// root has a finite budget.
+        /// The tightest ancestor's tokens left, coarse. Always set, since
+        /// every root is finite; for a root it is its own budget, coarse.
         ancestor-tokens: u64,
-        /// The tightest ancestor's time left, coarse. Always set.
+        /// The tightest ancestor's time left, coarse; for a root, its own.
         ancestor-duration: duration,
     }
 

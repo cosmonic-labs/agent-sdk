@@ -110,8 +110,8 @@ interface toolset-types {
     variant toolset-state {
         /// Waiting on a grantor. Nothing is bound.
         awaiting-approval(pending-approval),
-        /// Refused by a grantor. Listed until the caller loads it again or
-        /// the refusal's cooldown ends.
+        /// Refused by a grantor, or the request was withdrawn or expired.
+        /// Listed until the caller loads it again or the cooldown ends.
         denied(option<string>),
         /// Admitted; its component is starting. Not callable yet.
         loading,
@@ -122,16 +122,23 @@ interface toolset-types {
         /// In the model's tool list and callable.
         offered,
         /// Bound and approved but set aside, out of the model's tool list. A
-        /// `load` returns it to `offered` at once.
+        /// `load` returns it to `offered` at once; until then its tools
+        /// answer `unknown-tool`.
         ready,
+        /// Its rollout failed or ran out of time. Listed until the caller
+        /// loads it again, which starts over.
+        failed(option<string>),
         /// A state not captured above.
         other(option<string>),
     }
 
-    /// Why a read of the implementer's state failed.
+    /// Why a call that reads or changes the implementer's state failed.
     @unstable(feature = agent-tool-loading)
     variant store-error {
-        /// The state could not be read now. Retry may succeed.
+        /// This power is not enabled for the caller. Permanent.
+        disabled,
+        /// Not served now (the state could not be read, or a limit on open
+        /// streams was reached). Retry may succeed.
         unavailable(string),
         /// A failure not captured above.
         other(option<string>),
