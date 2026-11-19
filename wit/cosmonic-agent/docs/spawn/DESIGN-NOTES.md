@@ -288,10 +288,13 @@ cannot yet drain may make the toolset callable from the caller's next run:
 that is conformant, and `load-result.next-run` says so, so a harness ends its
 run instead of polling. Same-run stays the goal and the preferred behaviour.
 
-**Rollout deadline.** Every rollout has a deadline (the operator's,
-recommended two minutes). A rollout not finished by then is abandoned: the
-toolset leaves `loaded()`, frees its name and place, a joined load answers
-`unavailable`, and an identical load starts again. `loading` always ends.
+**Rollout deadline.** Preparing a rollout (pulling, starting and checking
+its components) has a deadline (the operator's, recommended two minutes). A
+rollout not prepared by then is abandoned: the toolset leaves `loaded()`,
+frees its name and place, a joined load answers `unavailable`, and an
+identical load starts again. A revision prepared and staged for the next run
+is kept until that run starts on it or the toolset is removed, so a pause
+before the next run never discards it. `loading` always ends.
 
 *Alternatives.* Keep "next run" semantics with an immediate next run
 (Desktop today): the agent loses its in-memory plan and the model sees a
@@ -361,9 +364,12 @@ interface works in session ids:
   failed, budget exhausted, revoked).
 - **Hosts show the tree** from their session store. A child's approvals
   reach the root session's person, labelled with the child's place.
-- **Stopping reaches the subtree.** `cancel` cancels the child's run and
-  every run in progress below it; `end` ends the subtree; a person's stop in
-  the host's UI cancels the subtree's runs. A run that ends any other way
+- **Stopping reaches the subtree, behind a barrier.** `cancel` cancels the
+  child's run and every run in progress below it; `end` ends the subtree; a
+  person's stop in the host's UI cancels the subtree's runs. Each first marks
+  the subtree as cancelling in the store, atomically, and every `spawn` or
+  `send` from a run in that subtree (one already in flight included) is
+  refused at acceptance, so nothing started during the stop survives it. A run that ends any other way
   (done, failed, host lost) leaves the runs it started in its children
   going: they are durable work a later run can collect, bounded by the tree
   limits and the budgets, which now cover the subtree (D10).
@@ -409,7 +415,12 @@ decided here, revised after the third review (findings 1 to 3).*
   removal since the grant touched a toolset it names. A removal voids
   unconsumed tickets that name the removed toolset.
 - **Provenance and re-checks.** The implementer records, for each of a
-  child's grants and entries, which ancestor grant or entry it rested on. At
+  child's grants and entries, the authority it rested on: an ancestor's
+  grant or entry, or the person's approval of this exact child. An entry
+  resting on that approval is re-checked against the approval (its snapshot,
+  and that the toolset was not removed) and the ancestors above the parent,
+  never against the parent's ceiling, which never held it (fourth-round
+  finding 1). At
   each run acceptance (`send`, `spawn` with input) and each child load, it
   re-checks the child's whole admission against every ancestor's current
   ceiling and policy. A toolset that no longer fits is withdrawn; a child
@@ -448,8 +459,9 @@ someone else's hand.
 
 - **Limits always set,** operator-adjustable: `depth` 3, `concurrent-agents`
   20 (runs from acceptance until ended, cancelling included), and
-  `live-sessions` 50 (child sessions not yet ended) per tree. `total-agents`
-  is unset unless the operator sets it. Every spawn and every run
+  `live-sessions` 50 (child sessions not yet ended) and `total-agents` 500
+  (children spawned in all, which also bounds the idempotency keys a tree
+  keeps) per tree. Every spawn and every run
   acceptance reserves its place atomically across the tree; `send` answers
   `start-error.over-limit` when it cannot. Depth and concurrency follow the
   Claude Agent SDK's defaults (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` 3,
@@ -511,18 +523,19 @@ finding 5.*
   not even the parent's, has to be alive for the run to be reported failed.
 - **The running host fences itself** on its monotonic clock: once the time
   since it sent its last successful renewal passes the store's timeout minus
-  a margin (recommended 15 seconds), it stops starting model and tool calls
-  and cancels those in flight. A partitioned host cannot consult the store,
-  so this is the only fence on its side.
+  a margin (recommended 15 seconds), it stops the child's instances (agent
+  and toolsets), so nothing new can start through any import, model calls,
+  tool calls and direct network, volume and interface use alike, and
+  cancels what is in flight. A partitioned host cannot consult the store, so
+  this is the only fence on its side.
 - **A linearizable store.** Leases, generations, spawn tickets and limit
   reservations need compare-and-swap. A store or zone that cannot answer
   consistently (a partition) answers `unavailable`.
-- **What fencing does not stop, plainly.** It protects the session and
-  effects the store mediates. It does not stop what a cut-off instance does
-  directly with its own network, volume and interface grants before its own
-  fence fires, calls already in flight that ignore cancellation, or a host
-  whose clock misbehaves (a paused virtual machine). Those may overlap a new
-  run. They are limited to the child's own reach, never more.
+- **What fencing does not stop, plainly.** Effects already under way when
+  the fence fires (a request already sent, a write already issued) and a
+  host whose clock misbehaves (a paused virtual machine that resumes after
+  the store expired its lease). Those may overlap a new run. They are
+  limited to the child's own reach, never more.
 - **The session survives.** A later `send` starts a new run, placed again,
   under a new generation.
 
@@ -890,8 +903,12 @@ pass them.
 - **Aliases are the model's selection key.** A tool keeps its own name if no
   alias in the session has it; a later colliding tool is offered as
   `<toolset>__<tool>`. An alias is fixed for the session and stays reserved
-  after its toolset leaves, so one alias never means two tools in one
-  conversation and definitions stay byte-stable. `alias-prefix` is the
+  for its toolset name after the toolset leaves; the same name at a new
+  digest takes it back, so a replaced toolset keeps its tools' names. A call
+  always reaches the tool its model was offered: the host records which
+  digest each alias denoted in the tool list it sent with a model call, and
+  refuses a call whose alias now denotes another digest (`unknown-tool`).
+  Definitions stay byte-stable except when a toolset is replaced. `alias-prefix` is the
   operator's override; a requested alias that is taken refuses the request
   rather than renaming.
 - **Display is for people:** the tool's `title` and the toolset's name.
@@ -1049,3 +1066,14 @@ fixed; of the lows, all but one are fixed.
 | 21 | Reserved aliases blocked the same name at a new digest | Fixed: the same toolset name takes its aliases back (`tool-loading`) |
 | 22 | Two providers give two `approval` types | Fixed: one implementer serves both (D17) |
 | 23 | Guest-built records cannot grow; `placement.other` as input | `placement.other` is `invalid-request`. Record growth is declined for now and recorded under "Still not decided": cheap to change while unstable, and the right shape depends on goals and swarms |
+
+### Fourth round (Codex re-review of the fixed head)
+
+| # | Finding | Outcome |
+| --- | --- | --- |
+| 1 | Re-checks would withdraw a toolset approved for one child, since the parent's ceiling never held it | Fixed: the approval of the child is an authority source in re-checks (D8) |
+| 2 | Self-fencing stopped model and tool calls but not direct effects | Fixed: the fence stops the child's instances, so nothing new starts through any import; only effects already under way remain (D12) |
+| 3 | Subtree cancellation had no admission barrier | Fixed: a cancelling mark set atomically first, checked at every spawn and send acceptance in the subtree (D7) |
+| 4 | Alias reclamation could retarget a call made against the old definitions | Fixed: calls are bound to the digest each alias denoted in the tool list sent with the model call (tool naming) |
+| 5 | Idempotency keys kept for the session were unbounded | Fixed: `total-agents` defaults to 500 per tree, bounding key records (D10) |
+| 6 | The rollout deadline could discard a revision staged for the next run | Fixed: the deadline covers preparation; a staged revision is kept until the next run or removal (D5) |

@@ -118,12 +118,17 @@ package cosmonic:agent@0.4.4;
 ///   toolset entry bound to the spawn's digest, so it carries the exact
 ///   output, budget and powers the person approved.
 /// - Re-checked as the tree changes. The implementer records, for each of a
-///   child's grants and entries, what it rested on in its ancestors. At each
-///   run acceptance and each child load, it re-checks the child's whole
-///   admission against every ancestor's current ceiling and current policy;
-///   a toolset that no longer fits is withdrawn, and a child whose own
-///   grants no longer fit takes no more runs (`revoked`). A change takes
-///   effect at the next acceptance or dispatch, never mid-call.
+///   child's grants and entries, the authority it rested on: an ancestor's
+///   grant or entry, or the person's approval of this exact child. At each
+///   run acceptance and each child load, it re-checks each against that
+///   authority as it stands now and against current policy. An entry resting
+///   on an approval of this child is checked against that approval (its
+///   snapshot, and that the person has not removed the toolset) and against
+///   the ancestors above the parent it was checked against when approved,
+///   not against the parent's ceiling, which never held it. A toolset that
+///   no longer fits is withdrawn, and a child whose own grants no longer fit
+///   takes no more runs (`revoked`). A change takes effect at the next
+///   acceptance or dispatch, never mid-call.
 /// - A child's loads follow the same rule: beyond its ceiling but within
 ///   every ancestor's goes to a grantor, labelled with the child's place in
 ///   the tree; beyond any ancestor's is `denied`.
@@ -593,7 +598,8 @@ interface spawn-types {
         /// started is at depth 1. Does not clear. Default 3.
         depth,
         /// Child sessions spawned in total by one spawn tree, ended ones
-        /// included. Does not clear. Unset by default.
+        /// included. Does not clear. Default 500, so the idempotency keys
+        /// a tree has used stay bounded.
         total-agents,
         /// Memory the implementer reserves for a child.
         memory,

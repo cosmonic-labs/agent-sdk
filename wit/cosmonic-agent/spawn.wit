@@ -49,16 +49,16 @@ package cosmonic:agent@0.4.4;
 ///   `child.failure` says why. No host has to be alive for that to happen.
 /// - The running host fences itself: on its monotonic clock, once the time
 ///   since it sent its last successful renewal passes the store's timeout
-///   minus a margin (recommended 15 seconds), it stops starting model and
-///   tool calls and cancels the ones in flight.
-/// - What fencing does not stop. It protects the session and effects the
-///   store mediates (journal writes, outcomes, dispatch through a store-aware
-///   dispatcher). It does not stop effects a cut-off host's instance makes
-///   directly (its network, volume and interface grants) before its own
-///   fence fires, calls already in flight that do not stop when cancelled,
-///   or a host whose clock misbehaves (a paused virtual machine). Those may
-///   overlap a new run. Placement keeps such overlap to the reach the child
-///   was granted, never more.
+///   minus a margin (recommended 15 seconds), it stops the child's
+///   instances (the agent and its toolsets), so no new model call, tool
+///   call or direct effect through any of their imports can start, and
+///   cancels what is in flight.
+/// - What fencing does not stop. It does not undo or stop effects already
+///   under way when the fence fires (a request already sent, a write
+///   already issued), and it cannot help when the host's clock misbehaves
+///   (a paused virtual machine resumes after the store has expired its
+///   lease). Those may overlap a new run, within the child's own reach and
+///   never more.
 ///
 /// The child's session is durable, so a later `send` starts a new run,
 /// placed again, under a new generation.
@@ -70,13 +70,21 @@ package cosmonic:agent@0.4.4;
 /// the runs it started in its children going: they are durable work a later
 /// run can collect, bounded by the tree limits and budgets.
 ///
+/// Cancellation is a barrier. `cancel`, `end` and a person's stop mark the
+/// subtree as cancelling in the session store, atomically, before they
+/// cancel its runs. Every `spawn` and `send` (including one already in
+/// flight) from a run in that subtree is checked against the mark at
+/// acceptance and refused (`denied` or `start-error.denied`), so a
+/// descendant cannot start new work that outlives the stop. The mark lifts
+/// for a session when its cancelled run has ended.
+///
 /// Lifetime and limits. A child lives until `end`, until its `max-duration`
 /// passes, or until its parent session ends; ending a session ends its
 /// descendants. A child with no run in progress holds no instance. Tree
 /// limits, always set, operator-adjustable: `depth` (default 3),
 /// `concurrent-agents` (runs from acceptance until ended, default 20), and
-/// `live-sessions` (child sessions not yet ended, default 50) per tree;
-/// `total-agents` is unset unless the operator sets it. Every run acceptance
+/// `live-sessions` (child sessions not yet ended, default 50) and
+/// `total-agents` (children spawned in all, default 500) per tree. Every run acceptance
 /// (`send`, or `spawn` with input) and every spawn reserves its place
 /// atomically across the tree. Tokens a child's subtree spends count against
 /// the child's `max-total-tokens` and every ancestor's, so a budget bounds
@@ -219,8 +227,9 @@ interface spawn {
     /// `key` is the caller's idempotency key for this spawn: any string up
     /// to 128 bytes, unique per intended child within the caller's session.
     /// A resend with a key that already admitted a child returns that same
-    /// child (and starts no second first run) whatever else it says; a
-    /// different key is a different child. When identical requests with
+    /// child (and starts no second first run) whatever else it says, for the
+    /// life of the caller's session; a different key is a different child.
+    /// Key records are bounded by `total-agents`. When identical requests with
     /// different keys share one pending approval, its grant admits the first
     /// key to resend, and the others get a new approval, marked as a repeat.
     /// So one decision admits one child.
