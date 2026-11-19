@@ -351,8 +351,8 @@ interface works in session ids:
 
 | Operation | What it does |
 | --- | --- |
-| `spawn(request, input, key)` | Admits and creates a child session; with `input`, starts its first run. `key` is the caller's idempotency key: a resend with a key that already admitted a child returns that child. |
-| `send(session, message, key)` | Re-checks the child's admission, then starts a run in a direct child. Returns a host-minted run id, a progress stream and an outcome future. A resend with the same key returns the same run (D30). |
+| `spawn(request, input, key, trace-parent)` | Admits and creates a child session; with `input`, starts its first run. `key` is the caller's idempotency key: a resend with a key that already admitted a child returns that child. |
+| `send(session, message, key, trace-parent)` | Re-checks the child's admission, then starts a run in a direct child. Returns a host-minted run id, a progress stream and an outcome future. A resend with the same key returns the same run (D30). |
 | `wait(session, run)` | The outcome of that exact run, from any store and host. The host keeps at least the 16 most recent outcomes of runs the caller started in a child, until the child ends. |
 | `cancel(session)` | Cancels the child's run in progress and every run in progress below it, by force after a grace period; resolves when the subtree has stopped (D31). |
 | `end(session)` | Ends the child session and every session below it; resolves when the subtree has stopped. |
@@ -476,8 +476,11 @@ someone else's hand.
   20 (runs from acceptance until ended, cancelling included), and
   `live-sessions` 50 (child sessions not yet ended) and `total-agents` 500
   (children spawned in all, which also bounds the idempotency keys a tree
-  keeps) per tree. Every spawn and every run
-  acceptance reserves its place atomically across the tree; `send` answers
+  keeps) per tree. A child's subtree is also held to its
+  `budget.max-spawns` (none takes a quarter of what is left of the tree's
+  `total-agents`), so one child cannot exhaust a limit that never clears and
+  lock its parent and siblings out (sixth round, finding 5). Every spawn and
+  every run acceptance reserves its place atomically across the tree; `send` answers
   `start-error.over-limit` when it cannot. Depth and concurrency follow the
   Claude Agent SDK's defaults (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` 3,
   `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` 20).
@@ -486,14 +489,19 @@ someone else's hand.
   (`max-total-tokens`) when any of them is spent. Budgets are still chosen by
   the caller and not carved from the parent's, as in every SDK surveyed, but
   a parent's budget now bounds everything it causes.
-- **Prompts are bounded per tree.** The denial cooldown matches requests by
-  executable digests and resolved reach anywhere in the tree, not by caller
-  or name, so a fresh child, a renamed toolset or a one-byte change to
-  `max-bytes` cannot ask again at once. Pending approvals are capped per
-  caller (three) and per tree (five).
+- **Prompts are bounded.** The denial cooldown matches requests by
+  executable digests and resolved reach, not by caller or name, so a fresh
+  child, a renamed toolset or a one-byte change to `max-bytes` cannot ask
+  again at once. A denial of the root's request covers the whole tree; a
+  denial of a descendant's covers only that descendant's subtree, so a child
+  cannot provoke a cooldown on a toolset its parent needs. Pending approvals
+  are capped per caller (three), per child subtree (three) and per tree
+  (five, one always kept for the root).
 - **Kept state is bounded:** ended children stay listed up to a retention
-  (recommended the 100 most recent per tree), and at least the 16 most
-  recent outcomes per child are kept.
+  (recommended the 100 most recent per tree), and while listed `wait` still
+  answers for their runs and `cancel` and `end` on them are ok; at least the
+  16 most recent outcomes per child and 256 notices per caller are kept, and
+  a caller has at most four `watch` streams open.
 
 ### D11. Remote children: location-transparent, with a placement hint
 
@@ -530,6 +538,10 @@ the prompt would change with a hint the host may ignore.
 child's host goes away); mechanism decided here, revised after review
 finding 5.*
 
+- **Every run holds a lease.** Root runs, runs a parent starts, and runs a
+  person starts by talking to a child alike; each counts against the child's
+  budget and `concurrent-agents`, and a parent's `cancel` stops it. The
+  generation closes when the run ends for any reason, not only on expiry.
 - **The store decides expiry.** A run holds an exclusive lease with a
   fencing generation. The store (or any host serving a read from it) decides
   expiry against its timeout (recommended 60 seconds after the last
@@ -538,11 +550,14 @@ finding 5.*
   change its answer after waiters were told `host-lost`. No particular host,
   not even the parent's, has to be alive for the run to be reported failed.
 - **The running host fences itself** on its monotonic clock: once the time
-  since it sent its last successful renewal passes the store's timeout minus
+  since it *sent* its last renewal that succeeded passes the store's timeout minus
   a margin (recommended 15 seconds), it stops the child's instances (agent
   and toolsets), so nothing new can start through any import, model calls,
   tool calls and direct network, volume and interface use alike, and
-  cancels what is in flight. A partitioned host cannot consult the store, so
+  cancels what is in flight. Measuring from the send, not the reply, keeps a
+  slow reply from stretching the host past the store's expiry, and a reply
+  that arrives after the fence fired does not revive the run. A partitioned
+  host cannot consult the store, so
   this is the only fence on its side.
 - **A linearizable store.** Leases, generations, spawn tickets and limit
   reservations need compare-and-swap. A store or zone that cannot answer
@@ -779,9 +794,15 @@ subtree still going, the same way a host fences itself (D12): nothing new
 starts through any import, calls in flight are cancelled, and metering
 stops whatever the agent does. A host the request cannot reach is stopped by
 its lease: the store expires it (the run ends `host-lost`) and that host
-fences itself by its own deadline. `cancel` and `end` resolve when every run
-in the subtree has stopped or had its lease expire, so within the longer of
-the grace period and the lease timeout; "cancelled" then means nothing the
+fences itself by its own deadline. Once the grace period has passed, the
+store refuses the run's lease renewals and its reply tells a renewing host
+to stop, so a host that reaches the store but not the cancel request cannot
+keep the run alive (sixth round, finding 1). `cancel` and `end` resolve when
+every run in the subtree has ended or lost its lease, so within the grace
+period plus the lease timeout. The cancelling mark covers the whole subtree
+until then, and refuses `send` into it from outside (`busy`) as well as
+spawns and sends from inside, so no part of it restarts while another part
+is still stopping (finding 4); "cancelled" then means nothing the
 store mediates is still running. As with a lost host (D12), effects already
 under way are not undone, and an unreachable host's direct effects may run
 until its self-fence. A person's stop gets the same deadline.
@@ -832,17 +853,35 @@ the parent's conversation journal (the agent owns its journal's commits, so
 a host write could conflict with them); a webhook (a component has no
 ingress).
 
-### D33. Spend is visible, and every root has a finite ceiling
+### D33. Spend is visible, every root is finite, and metering is the broker's
 
-*Basis: Eric, 2026-11-19 (prior-art survey); decided here.* `child.usage`
-carries the host-metered tokens, runs and model calls of the child and
-everything below it; `lineage.remaining` carries what the caller has left:
-tokens and time as the tightest of its own budget and every ancestor's, runs
-from its own `max-runs` only, since runs are counted per session. Both are the
-implementer's numbers, never the child's, so they carry no child text.
-Every root session has a finite token and wall-clock budget that an operator
-can raise but never remove, in the same spirit as the tree limits that are
-always set (D10).
+*Basis: Eric, 2026-11-19 (prior-art survey); decided here; revised in the
+sixth review round (findings 3, 6, 7).*
+
+- **Visible.** `child.usage` carries the host-metered tokens, runs and model
+  calls of a child and its subtree. `lineage.remaining` carries the caller's
+  own remainder exactly (tokens, active time and runs from its own budget)
+  and the tightest ancestor bound only coarsely (rounded down to a power of
+  two tokens or a whole minute, refreshed at most once a minute). An exact
+  ancestor figure would let a session read the spend of sessions outside its
+  subtree, a channel between siblings that bypasses the parent; the coarse
+  bound still tells a harness when it is near the edge. Usage, remaining
+  budgets and `watch` timing are listed among the steerable channels in
+  `spawn-types`.
+- **Finite at every root.** Every root session has a token budget and an
+  active-time budget, which an operator may raise but never remove. Tokens
+  count every model call in the tree, the root's own included. Active time
+  is time during which any run in the tree is in progress, so a session left
+  idle for days is not ended by the calendar. When a budget is spent, runs
+  below it finish `max-total-tokens` or `max-duration`, and no run is
+  accepted below it (`exhausted`) until an operator or person raises it.
+- **Metered by the broker.** The broker serving model calls reserves, before
+  each call, the estimated prompt plus the call's maximum output, refuses the
+  call when any budget on the path cannot cover it, and settles real usage
+  afterwards. The overshoot is bounded by the estimation error of calls in
+  flight, not by how many run at once. A provider that reports no usage is
+  charged the estimate. Spend is recorded by the host, not under the run's
+  fencing generation, so a fenced run's spend still counts.
 
 *Prior art.* The most common complaint in public agent issue trackers is
 spend without a ceiling or visibility: Claude Code
@@ -852,18 +891,20 @@ spend without a ceiling or visibility: Claude Code
 ships token and timeout termination conditions because a run can otherwise
 go on forever ([termination](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/termination.html)).
 Linux cgroup v2 charges a child group's use to every ancestor and enforces
-the tightest limit on the path ([cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html)),
-which is D10's rule.
+the tightest limit on the path ([cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html)).
 
-*Alternatives.* An unbounded root default that policy may cap (reproduces
-the complaint); child-reported counts (steerable by the child).
+*Alternatives.* An unbounded root default (reproduces the complaint);
+child-reported counts (steerable); exact ancestor remainders (a
+cross-subtree channel); calendar time for the root (ends idle sessions).
 
 ### D34. A lock delay and fenced brokered calls narrow overlap after a lost host
 
 *Basis: Eric, 2026-11-19 (prior-art survey); decided here; extends D12.*
 After a lease expires, the child's next run is accepted but does not start
-until a re-placement delay has passed (at least the self-fencing margin,
-recommended 30 seconds); its progress shows `blocked(placement-delay)`.
+until a re-placement delay, counted from expiry, has passed (at least the
+self-fencing margin, recommended 30 seconds); its progress shows
+`blocked(placement-delay)`, and the waiting run holds its
+`concurrent-agents` place and counts toward `max-duration`.
 And every call the host brokers for a run (model calls, credential-brokered
 egress, tool dispatch, writes through a host-managed store) carries the run's
 fencing generation. A broker on the run's own host admits it only while that
@@ -883,14 +924,18 @@ fencing token on every write ([How to do distributed locking](https://martin.kle
 
 ### D35. What a child's conversation holds after a run that did not finish
 
-*Basis: Eric, 2026-11-19 (prior-art survey); decided here.* Every step the
-store recorded under the run's generation before the run ended or the
-generation closed, then a host-written marker saying how it ended
-(cancelled, failed, host lost, revoked); nothing after the generation
-closed. A later `send` resumes from the last recorded step, and nothing is
-replayed. Without this, two hosts would differ (keep partial turns, roll
-back, or keep whatever arrived late), and a parent's retry would behave
-differently on each.
+*Basis: Eric, 2026-11-19 (prior-art survey); decided here; revised in the
+sixth review round (finding 10).* Every step the store recorded under the
+run's generation, then one host-reserved journal entry,
+`agent.run-interrupted.v1`, that the store appends after closing the
+generation and before any new lease opens, so it never races an agent's
+commit. It says how the run ended (cancelled, failed, host lost, revoked)
+and records each tool call that has no result as failed, so the history
+stays well-formed: major model APIs reject a conversation that ends on
+unanswered tool calls. Nothing after the generation closed is kept; a later
+`send` resumes from there and nothing is replayed. This does not conflict
+with D32's rule that the agent owns its journal: no run holds the session
+when the entry is written, and the kind is reserved for the host.
 
 *Prior art.* LangGraph resumes a thread from its last checkpoint
 ([subgraphs](https://docs.langchain.com/oss/python/langgraph/use-subgraphs));
@@ -900,11 +945,15 @@ away work whose effects already happened and invites repeating them.
 
 ### D36. Trace context flows from parent run to child run
 
-*Basis: Eric, 2026-11-19 (prior-art survey); decided here.* The implementer
-propagates the parent run's trace context (`run-options.trace-parent`) to
-every child run it starts, on any host, records spawn, send, cancel, end,
-lease expiry and revocation as span events, and uses the session id as the
-conversation id. No new WIT: `run-options` already carries the trace parent.
+*Basis: Eric, 2026-11-19 (prior-art survey); decided here; revised in the
+sixth review round (findings 11, 23).* The caller passes its own trace
+context to `spawn` and `send` as `trace-parent`, a W3C `traceparent`; the
+implementer never propagates `tracestate` or baggage, which can carry
+arbitrary text. Each child run starts in that trace: as a child span while
+the caller's run is in progress, and as a linked span when it outlives it.
+Spawn, send, cancel, end, lease expiry and revocation are span events, and
+the session id is the conversation id. Passing it explicitly means a host
+plugin does not have to infer the caller's trace from the calling instance.
 *Prior art:* the OpenTelemetry GenAI semantic conventions' agent spans and
 `gen_ai.conversation.id`
 ([semantic-conventions-genai](https://github.com/open-telemetry/semantic-conventions-genai)),
@@ -916,10 +965,12 @@ still in development status.
   and narrowing a running instance's allowed hosts when an ancestor loses
   one (D8), both need runtime revocation of allowed hosts. Not in this
   version.
-- **Records a guest builds** (`spawn-request`, `toolset-spec`, `grants`,
-  `budget`) cannot gain fields after `@since`. Goals, swarms and a tree
-  budget will want to extend them; decide before stabilizing whether they
-  become resources or carry an extension field.
+- **Records that cannot grow.** Records a guest builds (`spawn-request`,
+  `toolset-spec`, `grants`, `budget`) and records the host returns (`child`,
+  `lineage`, `usage-total`, `remaining-budget`, `notice`, `sent`) cannot
+  gain fields after `@since`. Goals, swarms and a tree budget will want to
+  extend them; decide before stabilizing whether they become resources,
+  accessors, or carry an extension field.
 
 ## Next: goals and swarms
 
@@ -1190,6 +1241,13 @@ keyed by session and run id, in the session store for `wait`.
 
 ## What implementing it needs
 
+- **The caller's run context on every call.** None of these imports names
+  the caller's run, yet the barrier ("from a run in that subtree"), fencing,
+  `load`'s wait cap ("what the caller's run has left") and budget checks
+  need it. The host passes the plugin, for each call, the calling run's id,
+  its fencing generation and its deadline, which it knows because it drives
+  the run. The one piece the WIT itself needs from the guest, the trace
+  context, is a `trace-parent` argument on `spawn` and `send`.
 - **A shared plugin.** One host plugin serves `tool-discovery`,
   `tool-loading` and `spawn`, and works with the tools plugin that serves
   `tools`, so admission, the session ceiling and the budget are one
@@ -1311,3 +1369,35 @@ fixed; of the lows, all but one are fixed.
 | 3 | Send keys outlived kept outcomes | Fixed: `run-error.expired` for a known key whose outcome is gone; never a second run (D30) |
 | 4 | Clear-on-read notices lost completions on a lost reply | Fixed: `read-notices` and `ack-notices`, numbered, with a `gap` flag (D32) |
 | 5 | Ancestors' run budgets constrained `remaining.runs` | Fixed: runs from the session's own budget; tokens and time from the tightest ancestor (D33) |
+
+### Sixth round (independent Fable review and a fresh Codex round, on the tightened comments)
+
+| # | Finding | Outcome |
+| --- | --- | --- |
+| 1 | Cancellation did not stop lease renewals for a host that reaches the store | Fixed: after the grace period the store refuses renewals and tells the host to stop; the bound is grace plus lease timeout (D31) |
+| 2 | The self-fence clock lost "sent" | Fixed: measured from the send of the last successful renewal; a late reply cannot revive a fenced run (D12) |
+| 3 | `lineage.remaining` disclosed sibling and parent spend | Fixed: own remainder exact, ancestor bound coarse; usage, remaining and watch timing listed as steerable channels (D33) |
+| 4 | The barrier lifted per session before the subtree stopped | Fixed: one mark on the whole subtree until the stop completes; outside sends answer `busy` (D31) |
+| 5 | One child could exhaust tree-wide limits and cooldowns | Fixed: `budget.max-spawns` share, per-subtree pending cap, cooldown scoped to the denied descendant's subtree (D10) |
+| 6 | The root budget was undefined | Fixed: per root session, tokens over the whole tree including the root, active time, and what happens when spent (D33) |
+| 7 | Token enforcement had holes | Fixed: the broker reserves an estimate before each call and settles after; unreported usage charged at the estimate; spend recorded outside the run's generation (D33) |
+| 8 | Outcomes lost when a child ends | Fixed: `wait`, `cancel` and `end` work on an ended child while it stays listed (D10, `spawn`) |
+| 9 | Unbinding lost its in-flight guard | Fixed: never with a call in flight (`tool-loading`) |
+| 10 | The conversation marker conflicted with journal ownership | Fixed: a host-reserved entry written after the generation closes, recording unanswered tool calls as failed (D35) |
+| 11 | A shared plugin needs the caller's run context | Fixed: the host passes run id, generation and deadline per call ("What implementing it needs"); `trace-parent` is an explicit argument (D36) |
+| 12 | `wait` reported a dropped outcome two ways | Fixed: `unknown-run` only for runs never started; a dropped outcome is `run(expired)` |
+| 13 | Notice scope, over-acknowledgement and `gap` | Fixed: per caller; acknowledging past the newest seq stops at it; `gap` stays until acknowledged past |
+| 14 | Generation close and which runs hold leases | Fixed: closes on any end; every run holds a lease, person-started ones included (D12) |
+| 15 | `cancel` said every run ends `cancelled` | Fixed: or `host-lost` when unreachable |
+| 16 | `exhausted` read as permanent | Fixed: until an operator or person raises the budget |
+| 17 | `remaining-budget` none versus finite roots | Fixed: ancestor bounds are always set; none only for the caller's own unset limits |
+| 18 | `usage-total.runs` versus `max-runs` | Fixed: stated that usage counts the subtree |
+| 19 | `watch` gaps | Fixed: new children arrive as `changed`, `removed` for retention, usage changes coalesced, a cap on open watches |
+| 20 | Idempotency key details | Fixed: keys 1 to 128 bytes; a spawn resend returns the first run too; a send key is answered before other checks; a reused key with another message is `invalid-input`; ticket, child and first run in one atomic step |
+| 21 | Runs a person starts in a child | Fixed: same budget, concurrency, lease and cancellation (D12) |
+| 22 | Host names in `location` and `host-lost` | Fixed: operator-named group or zone only |
+| 23 | Trace propagation details | Fixed: `traceparent` only; child span or link (D36) |
+| 24 | Re-placement delay timing | Fixed: counted from expiry; holds its concurrency place and counts toward `max-duration` (D34) |
+| 25 | Host containment only in the notes | Fixed: inlined in `spawn-types` |
+| 26 | Host-built records cannot grow either | Recorded under "Still not decided" |
+| 27 | Long or repeated comments | Fixed: shared rules stated once at the top of each interface, per-function comments kept to what each adds |

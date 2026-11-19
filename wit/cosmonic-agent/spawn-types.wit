@@ -38,11 +38,12 @@ package cosmonic:agent@0.4.4;
 /// - Own grants: those of the caller's own component (for a child, its
 ///   `spawn-request.grants`). A new grant fits when one of these contains
 ///   it. A volume fits a mount of the same storage at the same path or
-///   below, and read-write fits only a read-write mount. An allowed host
-///   fits by the containment rules in `docs/spawn/DESIGN-NOTES.md`
-///   (`*.github.com` contains `api.github.com`, not `github.com`; a bare
-///   host covers that host on any scheme's default port, never another
-///   port). A model alias fits one the caller was granted. A grant the
+///   below, and read-write fits only a read-write mount. Allowed hosts, after
+///   normalization: `*` contains everything; a bare `h` contains `h` and
+///   `scheme://h` at the default port for `http`, `https`, `ws` and `wss`;
+///   `h:p` contains `h:p` and `scheme://h:p`; `scheme://h[:p]` contains only
+///   itself; `*.d` contains hosts ending in `.d` at any depth, in the bare
+///   forms, never `d`. A model alias fits one the caller was granted. A grant the
 ///   implementer cannot see or compare does not fit.
 /// - Toolset entries: the toolsets the caller holds, each at an exact digest
 ///   and admission snapshot (declared toolsets, a child's spawned toolsets,
@@ -131,7 +132,10 @@ package cosmonic:agent@0.4.4;
 /// implementer's own. A child's conversation is visible only to a person,
 /// in the host's own view; what a person tells a child may reach the parent
 /// in a later reply. A child still steers how much work it does, how its run
-/// ends, whether its outcome exceeds `output.max-bytes`, and its timing.
+/// ends, whether its outcome exceeds `output.max-bytes`, and its timing, and
+/// through them what others see in `spawn`'s usage, remaining budgets and
+/// `watch` events: these are narrow channels, kept coarse where they cross
+/// subtrees.
 /// Nothing here closes covert or timing channels or blocks prompt
 /// injection.
 ///
@@ -288,6 +292,10 @@ interface spawn-types {
         /// Wall-clock time from spawn. Passing it ends any run in progress
         /// with finish `max-duration`, and ends the child's session.
         max-duration: option<duration>,
+        /// Child sessions this child's subtree may spawn in all, ended ones
+        /// included. None takes a quarter of what is left of the tree's
+        /// `total-agents`, so one child cannot use up the tree's limit.
+        max-spawns: option<u32>,
     }
 
     /// Powers a child may receive. Empty grants none. A child never
@@ -467,15 +475,15 @@ interface spawn-types {
     /// A pending approval whose names now resolve differently is withdrawn
     /// (`expired`) and one new approval is raised.
     ///
-    /// Cooldown and caps. After a denial, `other`, or the person removing the
-    /// toolset, matching requests answer `denied` with no prompt for the
-    /// host's cooldown (recommended one hour). Matching is by reach, not by
-    /// name: the same executable digests and resolved reach anywhere in the
-    /// spawn tree, so a fresh child, a renamed toolset or a changed
-    /// `max-bytes` cannot ask again at once. Pending approvals are capped per
-    /// caller (recommended three) and per tree (recommended five), each
-    /// operator-set and at least one; past either cap a request answers
-    /// `over-limit` with scope `pending-approvals` and raises no prompt.
+    /// Cooldown and caps. After a denial, `other`, or the person's removal of
+    /// a toolset, matching requests (same executable digests and resolved
+    /// reach, whatever the name) answer `denied` without a prompt for the
+    /// host's cooldown, recommended one hour. A denial of a root's request
+    /// applies to the whole tree; a denial of a descendant's applies to that
+    /// descendant's subtree only. Pending approvals are capped per caller
+    /// (recommended three), per child subtree (the same) and per tree
+    /// (recommended five, one always kept for the root); past a cap a
+    /// request answers `over-limit(pending-approvals)` with no prompt.
     @unstable(feature = agent-spawn)
     resource approval {
         /// Implementer-issued id, to correlate with the approval UI and the
@@ -547,8 +555,8 @@ interface spawn-types {
     /// Which implementer limit a request would exceed.
     @unstable(feature = agent-spawn)
     variant limit-scope {
-        /// Child sessions with a run in progress at once in one spawn tree
-        /// (the root session and every descendant). Clears when one ends.
+        /// Runs in progress at once in one spawn tree, from acceptance until
+        /// they end. Clears when one ends. Fails fast rather than queueing.
         /// Default 20.
         concurrent-agents,
         /// Nesting depth, where a child of a session a person or trigger
@@ -565,8 +573,8 @@ interface spawn-types {
         /// Functions offered to the model at once, when nothing can be set
         /// aside to make room. The budget comes from the model binding.
         offered-functions,
-        /// Approvals pending at once, per caller and per spawn tree. Always
-        /// set. Clears when one is decided or expires.
+        /// Approvals pending at once: per caller, per child subtree and per
+        /// tree. Always set. Clears when one is decided or expires.
         pending-approvals,
         /// Child sessions not yet ended in one spawn tree. Always set.
         /// Clears when one ends. Default 50.
@@ -656,6 +664,8 @@ interface spawn-types {
         max-total-tokens,
         /// `budget.max-duration` passed.
         max-duration,
+        /// `budget.max-spawns` children were spawned.
+        max-spawns,
         /// An item not captured above. Diagnostic detail; never parse it.
         other(string),
     }
@@ -666,17 +676,19 @@ interface spawn-types {
     /// run ids.
     @unstable(feature = agent-spawn)
     variant start-error {
-        /// A run is in progress, or a cancelled one has not stopped yet.
+        /// A run is in progress, a cancelled one has not stopped yet, or the
+        /// child's subtree is being stopped.
         busy,
         /// No session with that id is a direct child of the caller.
         unknown,
         /// The child's admission no longer fits its ancestors' current
-        /// ceilings or policy, so it takes no more runs.
+        /// ceilings or policy, or the caller's own subtree is being stopped.
         denied(string),
         /// Accepting the run would exceed a tree limit
         /// (`concurrent-agents`). May clear when another run ends.
         over-limit(over-limit),
-        /// A budget item is spent; the child takes no more runs.
+        /// A budget item is spent, the child's or an ancestor's; no runs
+        /// until an operator or person raises it.
         exhausted(budget-item),
         /// The message cannot be taken. A different message may succeed.
         invalid-input(string),
