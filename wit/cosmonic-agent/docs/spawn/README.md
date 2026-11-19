@@ -161,7 +161,7 @@ let request = SpawnRequest::component(pinned("ghcr.io/acme/agents/reviewer:1.2.0
 let child = spawn::spawn(request, Some(user("Start with the auth changes.")), "review-pr-42").await?;
 let first = child.run.unwrap();                       // run id, progress, outcome
 let review: Review = spawn::wait(&child.session, &first.run).await?.structured()?;
-let next = spawn::send(&child.session, user("Now the billing changes.")).await?;
+let next = spawn::send(&child.session, user("Now the billing changes."), Some("billing")).await?;
 let more: Review = spawn::wait(&child.session, &next.run).await?.structured()?;
 spawn::end(&child.session).await?;
 ```

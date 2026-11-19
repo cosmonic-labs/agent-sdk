@@ -48,6 +48,10 @@ the ceiling rules in `spawn-types`.
   ceiling, children are re-checked as their ancestors change, one session
   per workload, honest fencing, subtree cancellation and budgets, and the
   fixes listed under "Review" (D2, D5, D7, D8, D10 to D13, D20, D26 to D29).
+- **Prior-art additions** (D30 to D36): a key on `send`, forced cancellation
+  after a grace period, `watch` and run-ended notices, visible spend and a
+  finite root budget, a re-placement delay and fenced brokered calls, what a
+  child's conversation holds after a failed run, and trace propagation.
 - **Dropped from #76:** the separate package version and its `wkg.toml`
   override, the `harness` world (now `spawning-agent`), store-scoped child
   handles, and the history of review rounds, which stays in #76.
@@ -342,12 +346,14 @@ interface works in session ids:
 | Operation | What it does |
 | --- | --- |
 | `spawn(request, input, key)` | Admits and creates a child session; with `input`, starts its first run. `key` is the caller's idempotency key: a resend with a key that already admitted a child returns that child. |
-| `send(session, message)` | Re-checks the child's admission, then starts a run in a direct child. Returns a host-minted run id, a progress stream and an outcome future. |
+| `send(session, message, key)` | Re-checks the child's admission, then starts a run in a direct child. Returns a host-minted run id, a progress stream and an outcome future. A resend with the same key returns the same run (D30). |
 | `wait(session, run)` | The outcome of that exact run, from any store and host. The host keeps at least the 16 most recent outcomes of runs the caller started in a child, until the child ends. |
-| `cancel(session)` | Cancels the child's run in progress and every run in progress below it. |
-| `end(session)` | Ends the child session and every session below it. |
+| `cancel(session)` | Cancels the child's run in progress and every run in progress below it, by force after a grace period; resolves when the subtree has stopped (D31). |
+| `end(session)` | Ends the child session and every session below it; resolves when the subtree has stopped. |
 | `children(descendants)` | Direct children, or the whole subtree in parent-first order, each with parent, depth, labels (direct children only), `session-status` state, failure reason, location and whether it ended. |
-| `get-lineage()` | The caller's own session id, parent and depth. |
+| `watch(descendants)` | The subtree as it stands, then each change (D32). |
+| `take-notices()` | Notices of child runs that ended since the caller last asked, for the start of its next run (D32). |
+| `get-lineage()` | The caller's own session id, parent, depth and remaining budget (D33). |
 
 - **Acting is on direct children only; seeing is on the subtree.** A parent
   sends, waits, cancels and ends its own children, and lists its
@@ -735,6 +741,151 @@ after confirming the repository serves that digest (and the tag only if it
 resolves to it now), and refuses a reference it cannot confirm. Caller-chosen
 names are shown as quoted identifiers limited to `[a-z0-9-_./:]`.
 
+### D30. An idempotency key on `send`
+
+*Basis: Eric, 2026-11-19 (prior-art survey); shape decided here.* `send`
+takes an optional key, as `spawn` does. A resend with a key that already
+started a run in that child returns the same run id and starts nothing,
+whether the run is in progress or has ended; the host keeps the keys of the
+256 most recent runs per child. Without it, a caller whose reply was lost
+(a store hiccup, its own store torn down) cannot tell whether the run
+started, and once a short run has ended a resend repeats the child's
+effects; `busy` protects only while the run is still going.
+
+*Prior art.* A2A lets a server detect duplicate sends by `messageId`
+([A2A specification](https://a2a-protocol.org/latest/specification/));
+Temporal's workflow id conflict policy returns the open execution instead of
+starting another ([Temporal workflow id](https://docs.temporal.io/workflow-execution/workflowid-runid));
+Ray defaults to at-most-once and retries only methods marked idempotent.
+
+*Alternatives.* A required key (as on `spawn`): most sends are not retried,
+and a caller that wants retry safety opts in. Deduplicating on message
+content: two identical instructions may be meant as two runs.
+
+### D31. Cancellation is forced after a grace period, and the caller learns when it is done
+
+*Basis: Eric, 2026-11-19 (prior-art survey); mechanism decided here.*
+Cancelling asks cooperatively first; after the host's grace period
+(recommended 15 seconds) the host stops the instances of every run in the
+subtree still going, the same way a host fences itself (D12): nothing new
+starts through any import, calls in flight are cancelled, and metering
+stops whatever the agent does. `cancel` and `end` resolve only when the
+whole subtree has stopped, so "cancelled" means the tree is quiet. A
+person's stop gets the same deadline.
+
+*Prior art.* Erlang/OTP supervisors ask a child to shut down and kill it
+after a timeout ([OTP supervisor principles](https://www.erlang.org/doc/system/sup_princ.html));
+Temporal lets a parent wait until a child has finished cancelling; Kubernetes
+foreground deletion keeps the owner until its dependents are gone
+([garbage collection](https://kubernetes.io/docs/concepts/architecture/garbage-collection/)).
+A public report of the cost of the opposite: Claude Code
+[#82104](https://github.com/anthropics/claude-code/issues/82104), where
+stopping a task left its subagents running and billing.
+
+*Alternatives.* Cooperative cancellation only (an agent that ignores it
+keeps spending); resolving when the request is recorded and adding a
+separate "stopped" signal (two calls for one question).
+
+### D32. Knowing that children finished, without polling
+
+*Basis: Eric, 2026-11-19 (prior-art survey); shape decided here.*
+
+- **Within a run:** `watch(descendants)` streams the subtree as it stands
+  (`existing` records, then `synced`), then each change, as A2A's subscribe
+  does, so nothing is lost between a read and a subscribe. Contentless and
+  host-authored, like `progress`.
+- **Across runs:** when a run the caller started in a child ends, the host
+  keeps a notice (session id, run id, how it ended; never child text) until
+  the caller takes it, and `take-notices` returns them at the start of the
+  caller's next run. This is what D7's "start work, end your run, collect
+  later" pattern was missing. Whether a child's completion may *start* the
+  parent's next run is a host trigger, left to the goal interface.
+
+*Prior art.* Erlang monitors deliver a one-way `'DOWN'` notice when a
+watched process ends ([Erlang processes](https://www.erlang.org/doc/system/ref_man_processes.html));
+A2A offers push notifications and a subscription that starts with a
+snapshot; Claude Code delivers a background subagent's result as a
+completion notification in a later turn
+([subagents](https://code.claude.com/docs/en/sub-agents)); Anthropic's
+research system found synchronous collection a bottleneck
+([multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)).
+
+*Alternatives.* Polling `children` (cost and latency); writing notices into
+the parent's conversation journal (the agent owns its journal's commits, so
+a host write could conflict with them); a webhook (a component has no
+ingress).
+
+### D33. Spend is visible, and every root has a finite ceiling
+
+*Basis: Eric, 2026-11-19 (prior-art survey); decided here.* `child.usage`
+carries the host-metered tokens, runs and model calls of the child and
+everything below it; `lineage.remaining` carries what the caller has left,
+the tightest of its own budget and every ancestor's. Both are the
+implementer's numbers, never the child's, so they carry no child text.
+Every root session has a finite token and wall-clock budget that an operator
+can raise but never remove, in the same spirit as the tree limits that are
+always set (D10).
+
+*Prior art.* The most common complaint in public agent issue trackers is
+spend without a ceiling or visibility: Claude Code
+[#94013](https://github.com/anthropics/claude-code/issues/94013),
+[#68110](https://github.com/anthropics/claude-code/issues/68110),
+[#15909](https://github.com/anthropics/claude-code/issues/15909). AutoGen
+ships token and timeout termination conditions because a run can otherwise
+go on forever ([termination](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/termination.html)).
+Linux cgroup v2 charges a child group's use to every ancestor and enforces
+the tightest limit on the path ([cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html)),
+which is D10's rule.
+
+*Alternatives.* An unbounded root default that policy may cap (reproduces
+the complaint); child-reported counts (steerable by the child).
+
+### D34. A lock delay and fenced brokered calls narrow overlap after a lost host
+
+*Basis: Eric, 2026-11-19 (prior-art survey); decided here; extends D12.*
+After a lease expires, the child's next run is accepted but does not start
+until a re-placement delay has passed (at least the self-fencing margin,
+recommended 30 seconds); its progress shows `blocked(placement-delay)`.
+And every call the host brokers for a run (model calls, credential-brokered
+egress, tool dispatch, writes through a host-managed store) carries the run's
+fencing generation, which the host rejects once closed. Direct egress
+through a component's own grants still cannot be fenced, as D12 says.
+
+*Prior art.* Chubby's lock-delay keeps a lost holder's lock from being taken
+again for a while, to shield resources that cannot check sequencers
+([Burrows, OSDI 2006](https://research.google/pubs/the-chubby-lock-service-for-loosely-coupled-distributed-systems/));
+Kleppmann's point that only the resource can reject a stale holder, by a
+fencing token on every write ([How to do distributed locking](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html)).
+
+### D35. What a child's conversation holds after a run that did not finish
+
+*Basis: Eric, 2026-11-19 (prior-art survey); decided here.* Every step the
+store recorded under the run's generation before the run ended or the
+generation closed, then a host-written marker saying how it ended
+(cancelled, failed, host lost, revoked); nothing after the generation
+closed. A later `send` resumes from the last recorded step, and nothing is
+replayed. Without this, two hosts would differ (keep partial turns, roll
+back, or keep whatever arrived late), and a parent's retry would behave
+differently on each.
+
+*Prior art.* LangGraph resumes a thread from its last checkpoint
+([subgraphs](https://docs.langchain.com/oss/python/langgraph/use-subgraphs));
+Anthropic's research system resumes from the point of failure rather than
+restarting. *Alternative:* roll back to the start of the run, which throws
+away work whose effects already happened and invites repeating them.
+
+### D36. Trace context flows from parent run to child run
+
+*Basis: Eric, 2026-11-19 (prior-art survey); decided here.* The implementer
+propagates the parent run's trace context (`run-options.trace-parent`) to
+every child run it starts, on any host, records spawn, send, cancel, end,
+lease expiry and revocation as span events, and uses the session id as the
+conversation id. No new WIT: `run-options` already carries the trace parent.
+*Prior art:* the OpenTelemetry GenAI semantic conventions' agent spans and
+`gen_ai.conversation.id`
+([semantic-conventions-genai](https://github.com/open-telemetry/semantic-conventions-genai)),
+still in development status.
+
 ### Still not decided
 
 - **Taint propagation** (#76's (g)): narrowing a child's egress as it reads,
@@ -780,6 +931,18 @@ declare finished early. A goal makes it a first-class, host-checked loop:
   started, so a host-driven goal needs a session-level wait and a goal-level
   progress read, and rules for who owns the goal's runs. Both are new
   functions on a host-served interface, which is additive.
+- **A failure-loop guard (to decide):** budgets bound spend, but a model can
+  re-`send` a child that fails at once many times within its budget. An
+  operator limit of consecutive failed runs per child (say three), after
+  which `send` answers `exhausted` until a person clears it, as Erlang's
+  restart intensity and Temporal's maximum attempts do. Automatic restarts
+  belong to the goal loop, not spawn.
+- **Input schemas for catalog definitions (to decide):** a `definition`
+  could declare an input schema the host validates on `spawn` with input and
+  on `send` (`invalid-input` otherwise), as OpenAI Agents SDK handoffs take
+  `input_type`. It helps quarantine patterns (a reader that takes only a URL),
+  but does not narrow downward flow on its own, since schema strings are
+  still free text.
 - **Slots:** a long-lived goal waiting on a person sits on a
   `concurrent-agents` slot; the limit may need to tell waiting from working.
 
@@ -902,7 +1065,15 @@ pass them.
 8. **Structured only.** A child that returns valid structured output and puts
    text in its reply, its finish reason and its model name: the caller sees
    only the structured value and the implementer's own fields.
-9. **Denial and cap.** After a denial, identical requests answer `denied`
+9. **Prior-art additions.** Send with a key, drop the reply, resend with the
+   key after the run ended: the same run id, one run. Cancel a child whose
+   agent ignores cancellation: after the grace period its instances stop,
+   metering stops, and `cancel` resolves. Start runs in three children and
+   end the caller's run: the next run's `take-notices` lists the three, once.
+   `watch(true)` starts with `existing` records and `synced`. Lose a child's
+   host: the next run shows `blocked(placement-delay)` until the delay
+   passes, and a brokered call from the old host is rejected.
+10. **Denial and cap.** After a denial, identical requests answer `denied`
    with no prompt until the cooldown ends. With the pending cap at K, a
    (K + 1)th distinct request answers `over-limit(pending-approvals)`.
 
@@ -952,6 +1123,21 @@ keyed by session and run id, in the session store for `wait`.
   with a narrow return type.
 - **A guest-side router or policy world:** a component in front of the
   implementer becomes the caller.
+- **Detaching a child on its parent's close** (Temporal's Abandon, Ray's
+  detached actors, Kubernetes orphaning): a child's authority rests on its
+  ancestors (D8), so a detached child would hold reach nothing vouches for.
+- **Streaming a child's text to the parent** (as nested runs in several
+  SDKs allow): streamed text skips `output.schema`, `max-bytes` and
+  `structured-only`, and a child's text is a declassification channel. A
+  person sees it in the host's own view of the child.
+- **Conversation handoffs** (one agent passing the person's conversation to
+  another): the receiver would get the person's conversation and the floor,
+  a change of reach the person never approved. If wanted, it is a spawn plus
+  a host route for the person's next message, with the child's own
+  admission; it fits the swarm sketch better.
+- **Automatic restarts of failed children** (Erlang permanent children, Ray
+  `max_restarts`): a restarted agent repeats effects and spends again.
+  Restarts are a policy for the goal loop, with a budget.
 
 ## Research grounding
 
