@@ -85,6 +85,12 @@ The WIT states these on `spawn-types`; here is why.
 - **Downward flow.** Messages and instructions a caller sends a child can
   reach the child's egress. An approval for egress beyond the ceiling says
   so.
+- **Upward flow within the ceiling is not a leak.** Results that come back
+  from inside the caller's ceiling hold only data the caller could have read
+  itself.
+- **Discovery is its own power.** Knowing what exists is itself
+  information, so `tool-discovery` is a separate import from loading and
+  spawning.
 - **Plainly:** redaction is not a security boundary, because a model can
   paraphrase anything it read. A child's final reply is a declassification
   channel by nature. Everything else in an outcome is the implementer's own

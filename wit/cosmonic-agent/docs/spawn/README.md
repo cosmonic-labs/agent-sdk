@@ -6,14 +6,13 @@ behind the `agent-spawn` feature. They use types from `run-types` (feature
 enables all three: wit-bindgen takes `features: ["agent-spawn", "agent-run",
 "session-status"]`, and a Wasmtime host sets the same options on the
 `LinkOptions` its generated `add_to_linker` takes. The shape may change before
-the items are marked `@since`. Why each rule is the way it is, and the
-decisions behind it, are in [DESIGN-NOTES.md](DESIGN-NOTES.md).
+the items are marked `@since`. The reasoning behind each rule is in
+[DESIGN-NOTES.md](DESIGN-NOTES.md).
 
-An agent with a job often needs help it did not start with: a tool it finds
-it needs halfway through a task, or a second agent to review one file or to
-read content it should not trust. These interfaces give an agent three
-powers, each its own import, so a workload gets exactly the ones its world
-names:
+An agent sometimes needs help it did not start with: a tool it finds it
+needs halfway through a task, or a second agent to review a file or read
+content it should not trust. These interfaces give it three powers, each its
+own import, so a workload gets exactly the ones its world names:
 
 - **tool-discovery**: ask which toolsets are available to it;
 - **tool-loading**: load a toolset into itself while it runs, and set one
@@ -102,21 +101,19 @@ match tool_loading::load(offer.spec, None).await {
 }
 ```
 
-Within the ceiling, for a toolset in the operator's catalog (or one already
-in the session ceiling), `load` admits it at once, rolls the agent's
-workload out to a revision that adds its component, and resolves when its
-tools are callable. The run in progress keeps going on the same instance; the
-old revision retires when the run ends. Beyond the ceiling, `load` returns
-`needs-approval` at once, so a pending approval never holds the run. Once the
-person allows it, the toolset joins the session ceiling: if it is later set
-aside or unbound, the same toolset loads again without asking, as long as its
-digest and resolved reach are unchanged.
+Within the ceiling, for a toolset in the operator's catalog or the session
+ceiling, `load` admits it at once, rolls the workload out to a revision that
+adds its component, and resolves when its tools are callable. The run in
+progress keeps going on the same instance; the old revision retires when the
+run ends. Beyond the ceiling, `load` returns `needs-approval` at once, so the
+run is never held. Once the person allows it, the toolset joins the session
+ceiling and loads again without asking, as long as its digest and resolved
+reach are unchanged.
 
 A harness that loads tools, or lets its model call the host's `load_tools`
 tool, calls `tools.list` again before its next model call. The host serves it
-without running any guest code, and its model adapters send the change in the
-cheapest form each provider allows, so the prompt cache survives where the
-provider supports it.
+without running guest code, and sends the model only the change where the
+provider allows, so the prompt cache survives.
 
 ## Scenario 2: stay within the model's function budget
 
@@ -209,10 +206,9 @@ Dropping a progress stream or outcome future only stops listening; only
 a person's stop in the host's UI). If the host running a child goes away
 mid-run, its lease in the session store expires: `wait` answers
 `host-lost`, the child's state is `failed` with `failure` saying why, and a
-later `send` starts a new run, placed again. Nothing hangs silently. The
-lease protects the session and what the store mediates; a cut-off host may
-still finish effects it had started with the child's own grants before it
-fenced itself, so a new run can overlap those.
+later `send` starts a new run, placed again. A cut-off host may still finish
+effects it had started with the child's own grants before it fenced itself,
+so a new run can overlap those.
 
 A parent acts only on its direct children (send, wait, cancel, end) and sees
 its whole subtree's state; hosts draw the same tree in their session lists.
@@ -239,10 +235,9 @@ let triage: Triage = spawn::wait(&child.session, &run).await?.structured()?;
 
 With `structured-only`, the host empties the reply text and fills every other
 field of the outcome from its own records, so only the schema's fields come
-back from the child. The host does not check that
-the schema has no free strings. This narrows what a manipulated child can
-say; it does not stop the child being manipulated, and nothing here blocks
-prompt injection.
+back from the child. The host does not check that the schema has no free
+strings. This narrows what a manipulated child can say; it does not stop the
+child being manipulated, and nothing here blocks prompt injection.
 
 ## Files
 

@@ -96,29 +96,29 @@ world compact-client {
 }
 
 
-/// The power to start child agents and read their final replies. Holds only
-/// this import: an agent adds `include agent;` (or `runnable-agent`) itself.
+/// Start child agents and read their final replies. Holds only `spawn`; an
+/// agent includes `agent` or `runnable-agent` itself.
 @unstable(feature = agent-spawn)
 world spawn-client {
     import spawn;
 }
 
-/// The power to ask which toolsets are available. Holds only this import.
+/// Ask which toolsets are available. Holds only `tool-discovery`.
 @unstable(feature = agent-spawn)
 world tool-discovery-client {
     import tool-discovery;
 }
 
-/// The power to change one's own toolsets while running. Holds only this
-/// import: loading implies neither discovery nor spawning.
+/// Change one's own toolsets while running. Holds only `tool-loading`,
+/// which implies neither discovery nor spawning.
 @unstable(feature = agent-spawn)
 world tool-loading-client {
     import tool-loading;
 }
 
-/// A runnable agent with every power in this group: it can find tools,
-/// load them into itself, and start child agents. A convenience; an agent
-/// that needs fewer powers includes only the client worlds it uses.
+/// A runnable agent that can find tools, load them into itself, and start
+/// child agents. An agent that needs fewer powers includes only the client
+/// worlds it uses.
 @unstable(feature = agent-spawn)
 world spawning-agent {
     include runnable-agent;
