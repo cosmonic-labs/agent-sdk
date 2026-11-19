@@ -7,7 +7,7 @@ enables all three: wit-bindgen takes `features: ["agent-spawn", "agent-run",
 "session-status"]`, and a Wasmtime host sets the same options on the
 `LinkOptions` its generated `add_to_linker` takes. The shape may change before
 the items are marked `@since`. The reasoning behind each rule is in
-[DESIGN-NOTES.md](DESIGN-NOTES.md).
+[RATIONALE.md](RATIONALE.md).
 
 An agent sometimes needs help it did not start with: a tool it finds it
 needs halfway through a task, or a second agent to review a file or read
