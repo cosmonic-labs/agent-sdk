@@ -1,5 +1,5 @@
 /// Inference, authorized model access, tools, and durable agent sessions.
-package cosmonic:agent@0.4.2;
+package cosmonic:agent@0.4.3;
 
 /// A provider owns the model resources used by its inference interfaces.
 @since(version = 0.3.0)
@@ -93,4 +93,13 @@ world compact-client {
     include run-client;
 
     import compact;
+}
+
+/// Read and watch the state of the session the host binds. Holds only
+/// `session-status`, for a component that reports where an agent's session
+/// stands, such as an adapter serving a status endpoint. Separate from
+/// `run-client`, so watching a session never grants driving it.
+@unstable(feature = session-status)
+world status-client {
+    import session-status;
 }
