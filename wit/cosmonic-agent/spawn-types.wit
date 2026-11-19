@@ -297,7 +297,9 @@ interface spawn-types {
     }
 
     /// What a child may spend. Covered by the approval digest. None takes
-    /// the implementer's default, which policy may cap. The implementer
+    /// the implementer's default, which policy may cap; every root session
+    /// has a finite token and wall-clock budget, and a child's spend counts
+    /// against every ancestor's. The implementer
     /// enforces it, not the child: it refuses a run past `max-runs`, ends a
     /// run at `max-duration`, and meters the child's model calls itself.
     @unstable(feature = agent-spawn)
@@ -670,6 +672,9 @@ interface spawn-types {
         tool-approval,
         /// Policy holds the outcome until a person or the auditor releases it.
         outcome-release,
+        /// The child's last run lost its host, and the next run waits out
+        /// the re-placement delay before it starts.
+        placement-delay,
         /// A reason not captured above. Diagnostic detail; never parse it.
         other(string),
     }
