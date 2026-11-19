@@ -1,174 +1,152 @@
 package cosmonic:agent@0.4.4;
 
-/// Types shared by `spawn` (child agent sessions), `tool-discovery` and
-/// `tool-loading` (toolsets in the caller's own workload), and the contract
-/// every implementer of those interfaces keeps. It has no free functions:
-/// importing it grants nothing, and each power is its own import, so a world
-/// grants exactly the ones it names. Its one resource, `approval`, is served
-/// by the one implementer that serves `spawn` and `tool-loading`. Unstable:
-/// a consumer enables the `agent-spawn` feature (and `agent-run` and
-/// `session-status`, whose types these use). Rationale and the decisions
-/// behind each rule are in `docs/spawn/DESIGN-NOTES.md`.
+/// Types shared by `spawn`, `tool-discovery` and `tool-loading`, and the
+/// rules every implementer of them keeps. It has no free functions, so
+/// importing it grants nothing; each power is its own import. `approval` is
+/// served by the implementer of `spawn` and `tool-loading`. Unstable: enable
+/// `agent-spawn`, plus `agent-run` and `session-status`, whose types these
+/// use. Rationale is in `docs/spawn/DESIGN-NOTES.md`.
 ///
-/// "The implementer" is whatever serves those imports: a native host
-/// plugin, a policy layer the host installs in front of it, or a test
-/// double. "The caller" is the component the import is bound to.
+/// The implementer is whatever serves these imports: a host plugin, a policy
+/// layer the host installs in front of it, or a test double. The caller is
+/// the component the import is bound to.
 ///
 /// One session per workload. These imports are served only to a workload
-/// the host bound to exactly one session for its whole life; a host that
-/// binds several sessions to one
-/// workload answers `disabled`. Toolsets are components of the workload, so
-/// a workload shared by sessions could not keep their ceilings, toolsets and
-/// removals apart, and none of these imports takes a session handle.
+/// bound to exactly one session for its whole life; a host that binds
+/// several sessions to one workload answers `disabled`.
 ///
-/// Caller identity. Wherever these interfaces bind a caller (approval
+/// Caller identity. Everything these interfaces tie to a caller (approval
 /// digests, coalescing, spawn tickets, the pending-approval cap, the denial
 /// cooldown, repeat tracking, the session ceiling, loaded toolsets, a
-/// child's owner), they bind the workload incarnation (minted when the
-/// workload is created and kept across rollouts and restarts), the
-/// component's name within that workload (so siblings are different
-/// callers), and the session id the workload is bound to. Never an instance
-/// id. Namespace and workload name are display and audit metadata. A policy
-/// layer must be installed by the host and pass the original caller through:
-/// a guest component in front of the implementer would become the caller.
+/// child's owner) uses the workload incarnation (minted when the workload is
+/// created, kept across rollouts and restarts), the component's name in that
+/// workload (so siblings are distinct callers), and the session id. Never an
+/// instance id. Namespace and workload name are display and audit metadata.
+/// A policy layer must be installed by the host and pass the original
+/// caller through.
 ///
-/// Reach. A request's read reach is the union, over the agent and every
+/// Reach. A request's read reach is the union, across the agent and every
 /// toolset, of its read grants: volumes, secrets, interfaces the
 /// implementer classifies as reading, and the model alias. Its egress reach
 /// is the union of allowed hosts and interfaces classified as writing. A
-/// read-write volume counts both ways. Tool annotations (`read-only` and the
+/// read-write volume counts as both. Tool annotations (`read-only` and the
 /// rest in `tool-types`) are publisher claims and never feed reach,
 /// admission or the ceiling.
 ///
-/// Ceiling. A caller's ceiling has two parts, and they never mix:
+/// Ceiling. A caller's ceiling has two parts that never mix:
 ///
-/// - its own grants: the grants of the caller's own component (for a child,
-///   its `spawn-request.grants`). A new grant fits when one of these
-///   contains it. A volume fits a mount of the same storage, at the same
-///   path within that storage or below it, and a read-write grant fits only
-///   a read-write mount. An allowed host fits by the containment rules in
-///   `docs/spawn/DESIGN-NOTES.md` (`*.github.com` contains `api.github.com`,
-///   not `github.com`; a bare host contains that host on any scheme's
-///   default port, never another port). A model alias fits one the caller
-///   was granted. A grant whose reach the implementer cannot see or compare
-///   does not fit.
-/// - its toolset entries: the toolsets it holds, each at an exact digest and
-///   admission snapshot (declared toolsets, a child's spawned toolsets, and
-///   the session ceiling below). A toolset fits when it is an exact match
-///   for an entry. An entry's reach is never treated as the caller's own,
-///   so approving one toolset never lends its reach to another component.
+/// - Own grants: those of the caller's own component (for a child, its
+///   `spawn-request.grants`). A new grant fits when one of these contains
+///   it. A volume fits a mount of the same storage at the same path or
+///   below, and read-write fits only a read-write mount. An allowed host
+///   fits by the containment rules in `docs/spawn/DESIGN-NOTES.md`
+///   (`*.github.com` contains `api.github.com`, not `github.com`; a bare
+///   host covers that host on any scheme's default port, never another
+///   port). A model alias fits one the caller was granted. A grant the
+///   implementer cannot see or compare does not fit.
+/// - Toolset entries: the toolsets the caller holds, each at an exact digest
+///   and admission snapshot (declared toolsets, a child's spawned toolsets,
+///   and the session ceiling). A toolset fits only as an exact match for an
+///   entry. An entry's reach never counts as the caller's own, so approving
+///   one toolset never lends its reach to another component.
 ///
-/// Within the ceiling, results flowing up are not a leak: the caller could
-/// have read the same data itself.
+/// Session ceiling. A person's approval of a toolset load adds an entry to
+/// the session's ceiling, keyed to the caller, the `toolset-spec` digest and
+/// the admission snapshot reviewed. A later identical load (after a
+/// set-aside, an unbind, a rollback or a failed rollout) is within the
+/// ceiling and needs no prompt.
 ///
-/// Session ceiling. When a person approves a toolset load for a session,
-/// the approval adds that toolset to the session's ceiling as an entry keyed
-/// to the caller, the `toolset-spec` digest and the admission snapshot it
-/// was reviewed at. A later load of the identical toolset (after the host
-/// set it aside or unbound it, a rollback, or a failed rollout) is a load
-/// within the ceiling and needs no prompt.
-///
-/// - Re-checked at each use: the implementer resolves the request again,
-///   compares it with the entry's snapshot and checks current policy, in the
-///   step that admits it. Any difference leaves the toolset outside the
+/// - Re-checked at each use: in the step that admits it, the implementer
+///   resolves the request again, compares it with the entry's snapshot and
+///   checks current policy. Any difference puts the toolset outside the
 ///   ceiling.
 /// - Never widens: an entry admits its exact snapshot only, and only a
-///   person's load approval adds one. A spawn approval adds none to the
-///   caller's ceiling (see Children).
-/// - Only the person removes. Removing a toolset from a session (the
-///   person's action in the host's UI, never an import) drops its entry. The
-///   implementer then withdraws everything that rests on that entry: a
-///   pending approval for it resolves `expired`, a granted spawn ticket not
-///   yet consumed that names it is void, a rollout adding it is not
-///   published, it is unbound, a call to it in flight is cancelled, and any
-///   descendant's admission that rested on it is withdrawn (its toolset
-///   unbound, or the child `revoked`). Admissions resting on other entries
-///   are untouched. The session's revocation generation, a counter advanced
-///   by every removal, is how a step that started before a removal
-///   notices one: on a mismatch it re-checks that its own entry still
-///   exists, and proceeds if it does. A refused step answers `denied`. A
+///   person's load approval adds one. A spawn approval adds none (see
+///   Children).
+/// - Only the person removes an entry, in the host's UI, never through an
+///   import. Removal withdraws everything resting on that entry: a pending
+///   approval for it resolves `expired`, an unconsumed spawn ticket naming
+///   it is void, a rollout adding it is not published, it is unbound, a call
+///   to it in flight is cancelled, and any descendant admission resting on
+///   it is withdrawn (its toolset unbound, or the child `revoked`).
+///   Admissions resting on other entries are untouched. Each removal
+///   advances the session's revocation generation; a step that started
+///   before a removal sees the mismatch, re-checks that its own entry still
+///   exists, and proceeds only if it does, otherwise answering `denied`. A
 ///   removal also starts the denial cooldown for that toolset in that
-///   session, so the agent cannot prompt for it again at once.
+///   session.
 /// - Session-scoped and audited: it lives in the session's state, moves with
 ///   the session between hosts, and ends with it. The host's UI lists every
-///   entry, bound or not, so the person can remove any.
+///   entry, bound or not.
 ///
-/// Attenuation. A caller may request more than its ceiling but cannot grant
-/// it. The implementer is the sole grantor (by policy, an auditor the host
+/// Attenuation. A caller may request beyond its ceiling but never grant it.
+/// The implementer is the sole grantor (by policy, an auditor the host
 /// installs, or a person) and returns `needs-approval`. Within the ceiling
-/// the implementer admits at once only toolsets and agents whose digest is
-/// in the operator's catalog or matches a toolset entry; any other digest
-/// goes to a grantor, since new code is new risk even when its reach is not.
+/// it admits at once only digests in the operator's catalog or matching a
+/// toolset entry; any other digest goes to a grantor.
 ///
 /// Children. A child session's reach never exceeds what its ancestors hold
 /// plus what a person approved for that exact child.
 ///
 /// - The child agent component's own `grants` must fit the parent's own
-///   grants, and its model alias one the parent was granted; otherwise the
-///   spawn is `denied`. Reach the parent lacks goes in a toolset. An agent
-///   `definition` from the catalog is expanded into its component, alias,
-///   grants and toolsets, and admitted by the same rules.
+///   grants, and its model alias one the parent was granted, or the spawn is
+///   `denied`. Reach the parent lacks goes in a toolset. A catalog
+///   `definition` is expanded into its component, alias, grants and
+///   toolsets, and admitted by the same rules.
 /// - A child's toolset that fits the parent's ceiling is admitted, resting
-///   on the parent's grant or entry it matched. One beyond it goes to a
-///   grantor, and only if it fits the ceiling of every ancestor above the
-///   parent (none, for a root parent); otherwise it is `denied`.
+///   on the grant or entry it matched. One beyond it goes to a grantor only
+///   if it fits the ceiling of every ancestor above the parent (none, for a
+///   root parent); otherwise it is `denied`.
 /// - A spawn approval is a one-time ticket for one child (one idempotency
-///   key). It adds nothing to the parent's ceiling: the parent cannot load
-///   the toolset, and no other child can use it. The child holds it as a
-///   toolset entry bound to the spawn's digest, so it carries the exact
-///   output, budget and powers the person approved.
-/// - Re-checked as the tree changes. The implementer records, for each of a
-///   child's grants and entries, the authority it rested on: an ancestor's
-///   grant or entry, or the person's approval of this exact child. At each
-///   run acceptance and each child load, it re-checks each against that
-///   authority as it stands now and against current policy. An entry resting
-///   on an approval of this child is checked against that approval (its
-///   snapshot, and that the person has not removed the toolset) and against
-///   the ancestors above the parent it was checked against when approved,
-///   not against the parent's ceiling, which never held it. A toolset that
-///   no longer fits is withdrawn, and a child whose own grants no longer fit
-///   takes no more runs (`revoked`). A change takes effect at the next
-///   acceptance or dispatch, never mid-call.
+///   key) and adds nothing to the parent's ceiling. The child holds the
+///   approved toolset as an entry bound to the spawn's digest, so it carries
+///   the exact output, budget and powers approved.
+/// - Re-checked as the tree changes. For each of a child's grants and
+///   entries, the implementer records the authority it rested on (an
+///   ancestor's grant or entry, or a person's approval of this child), and at
+///   each run acceptance and child load re-checks it against that authority
+///   as it stands and against current policy. An entry resting on an
+///   approval of this child is checked against that approval (its snapshot,
+///   and that the toolset was not removed) and against the ancestors above
+///   the parent it was checked against when approved. A toolset that no
+///   longer fits is withdrawn; a child whose own grants no longer fit takes
+///   no more runs (`revoked`). Changes take effect at the next acceptance or
+///   dispatch, never mid-call.
 /// - A child's loads follow the same rule: beyond its ceiling but within
 ///   every ancestor's goes to a grantor, labelled with the child's place in
 ///   the tree; beyond any ancestor's is `denied`.
 ///
-/// Toolsets are dispatched, never linked. A toolset is one component, with
-/// its own grants, in the agent's own workload, that offers one or more
-/// tools: a tool provider (it exports `cosmonic:agent/tools`) or a typed
-/// tool (it exports its own interfaces). Its exports are reachable only
-/// through the host's dispatch, never linked to the agent or a sibling, and
-/// its imports are satisfied only by its own grants. A host whose runtime
+/// Dispatch, never linking. A toolset is one component in the agent's own
+/// workload, with its own grants, that offers one or more tools: a tool
+/// provider (exports `cosmonic:agent/tools`) or a typed tool (exports its
+/// own interfaces). Its exports are reached only through the host's
+/// dispatch, never linked to the agent or a sibling; its imports are served
+/// only by its own grants, and it egresses as itself. A host whose runtime
 /// would link a toolset's exports to a sibling refuses that toolset with
-/// `invalid-request`. A toolset egresses as itself, with its own grants and
-/// identity.
+/// `invalid-request`.
 ///
-/// Authorship. A model can paraphrase anything it read, so redaction is not
-/// a security boundary and a child's final reply is a declassification
-/// channel by nature. Nothing else the caller sees carries child-authored
-/// text: progress, errors, reasons, the outcome's `finish` and `model`, and
-/// its counts are the implementer's own (it serves the child's `chat` and
-/// meters it). A child's conversation is never observable through these
-/// interfaces; a person sees it in the host's own view. A person who talks
-/// to a child may say things that reach the parent in a later reply.
-///
-/// Steerable channels. A child still chooses how much work it does, which
-/// way its run ends, whether an outcome exceeds `output.max-bytes`, and its
-/// timing. Each is a narrow channel to the caller. Nothing here closes
-/// covert or timing channels, and nothing here blocks prompt injection.
+/// Authorship. A child's final reply is the only child-authored text the
+/// caller sees, and it can carry anything the child read. Progress, errors,
+/// reasons, and the outcome's `finish`, `model` and counts are the
+/// implementer's own. A child's conversation is visible only to a person,
+/// in the host's own view; what a person tells a child may reach the parent
+/// in a later reply. A child still steers how much work it does, how its run
+/// ends, whether its outcome exceeds `output.max-bytes`, and its timing.
+/// Nothing here closes covert or timing channels or blocks prompt
+/// injection.
 ///
 /// Credentials never pass through these interfaces. Models, secrets and
 /// credential references are named; the implementer resolves them and keeps
 /// values out of every agent's memory. A spawned agent's own component never
 /// receives secrets.
 ///
-/// Audit. The implementer records every admission (through the catalog,
-/// a toolset entry or a grantor), every refusal, removal, withdrawal,
-/// set-aside and unbind, each naming what it rested on.
+/// Audit. The implementer records every admission (through the catalog, a
+/// toolset entry or a grantor), refusal, removal, withdrawal, set-aside and
+/// unbind, naming what each rested on.
 ///
-/// Authority to decide. A spawned agent never holds approval authority: the
-/// grantor is a person, or policy a person wrote. An auditor is installed by
-/// host policy, never spawned.
+/// Authority to decide. The grantor is a person, or policy a person wrote.
+/// A spawned agent never holds approval authority, and an auditor is
+/// installed by host policy, never spawned.
 @unstable(feature = agent-spawn)
 interface spawn-types {
     @unstable(feature = agent-spawn)
@@ -182,12 +160,12 @@ interface spawn-types {
     /// change what was approved.
     @unstable(feature = agent-spawn)
     record component-ref {
-        /// An OCI reference such as `ghcr.io/acme/agents/coder:1.2.0`. For
-        /// display; `digest` is authoritative. The caller chooses it, so the
-        /// implementer shows a person its own catalog name for a catalogued
-        /// digest, and otherwise shows this reference only after confirming
-        /// the repository serves this digest (the tag only if it resolves
-        /// to it now); a reference it cannot confirm is `invalid-request`.
+        /// An OCI reference such as `ghcr.io/acme/agents/coder:1.2.0`, for
+        /// display; `digest` is authoritative. A person is shown the catalog
+        /// name for a catalogued digest, and otherwise this reference only
+        /// once the implementer confirms the repository serves this digest
+        /// (the tag only if it resolves to it now). A reference it cannot
+        /// confirm is `invalid-request`.
         image: string,
         /// An OCI digest, `sha256:<hex>`.
         digest: string,
@@ -196,10 +174,9 @@ interface spawn-types {
     /// A named volume mounted into one component.
     @unstable(feature = agent-spawn)
     record volume-mount {
-        /// The name of a volume the implementer knows, resolved in the
-        /// caller's scope. Never a host path. Two workloads may use one name
-        /// for different storage, so the implementer compares the storage,
-        /// never the name, and an approval binds the storage it resolved to.
+        /// A volume name the implementer resolves in the caller's scope;
+        /// never a host path. The implementer compares the storage it
+        /// resolves to, never the name, and an approval binds that storage.
         volume: string,
         /// Where the component sees the volume.
         mount-path: string,
@@ -212,10 +189,9 @@ interface spawn-types {
     /// request, classifies it as reading, writing, or both.
     @unstable(feature = agent-spawn)
     record interface-grant {
-        /// Fully qualified interface name with its version. Never a
-        /// `cosmonic:agent` interface: those powers reach a component only
-        /// through `agent-powers` or the workload's own manifest, so naming
-        /// one is `invalid-request`.
+        /// Fully qualified interface name with its version. A
+        /// `cosmonic:agent` interface is `invalid-request`: those powers come
+        /// only through `agent-powers` or the workload's own manifest.
         name: string,
         /// Interface-specific configuration, such as a bucket or topic.
         config: list<tuple<string, string>>,
@@ -231,51 +207,48 @@ interface spawn-types {
         volumes: list<volume-mount>,
         /// Interfaces this component may import.
         interfaces: list<interface-grant>,
-        /// Secret names the implementer delivers into this component's
-        /// memory. Names only, never values. Refused on a spawned agent's own
+        /// Secret names, never values, that the implementer delivers into
+        /// this component's memory. Refused on a spawned agent's own
         /// component; use `credentials` for authenticated egress.
         secrets: list<string>,
-        /// Credential references: stable logical names, not secret data.
-        /// The implementer resolves each through a credential binding the
-        /// operator scoped to this workload, applies it to the component's
-        /// outbound requests, and owns those authentication headers. The
-        /// value never enters the component. An implementer without a
-        /// credential broker treats every reference as beyond the ceiling.
+        /// Credential references by logical name. The implementer resolves
+        /// each through a binding the operator scoped to this workload and
+        /// applies it to the component's outbound requests, owning those
+        /// authentication headers; the value never enters the component.
+        /// Without a credential broker, every reference is beyond the
+        /// ceiling.
         credentials: list<string>,
     }
 
     /// A toolset: one component, with its own grants, that offers one or
-    /// more tools. Used by `spawn` for a child's toolsets and by
-    /// `tool-loading` for a toolset the caller loads.
+    /// more tools. Used for a child's toolsets in `spawn` and for a load in
+    /// `tool-loading`.
     @unstable(feature = agent-spawn)
     record toolset-spec {
-        /// A DNS label: lowercase letters, digits and `-`, starting and
-        /// ending with a letter or digit, at most 32 characters. Unique among
-        /// one agent's toolsets. Display metadata and the prefix of a
-        /// namespaced alias; never used for routing or authorization, which
-        /// follow the toolset's component identity and digest.
+        /// A DNS label of at most 32 characters (lowercase letters, digits
+        /// and `-`, starting and ending with a letter or digit), unique
+        /// among one agent's toolsets. Display metadata and the default
+        /// alias prefix; routing and authorization use the toolset's
+        /// component identity and digest.
         name: string,
         /// A tool provider (exports `cosmonic:agent/tools`) or a typed tool
         /// (exports its own interfaces).
         component: component-ref,
         /// What this toolset component may touch.
         grants: grants,
-        /// The functions offered, by their own names; none offers every
-        /// function the component has. Trims a large component to what a
-        /// job needs, so it spends less of the model's function budget. A
+        /// The functions to offer, by name; none offers all. Trims a large
+        /// component so it spends less of the model's function budget. A
         /// name the component does not have is `invalid-request`.
         functions: option<list<string>>,
-        /// The operator's override of how this toolset's tools are offered.
-        /// None takes the default: each tool keeps its own name if no alias
-        /// in the session has it yet, and is otherwise offered as
-        /// `<name>__<tool>`. Some(prefix) offers every tool as the prefix
-        /// followed by its own name, so the empty string means the own names
-        /// and `"gh__"` means `gh__search`. An alias already taken, or one
-        /// that breaks model tool-name rules (only `[A-Za-z0-9_-]`, at most
-        /// 64 characters), refuses the request with `invalid-request`; the
-        /// implementer never renames it. In a caller's request the
-        /// implementer refuses it unless its operator lets callers choose
-        /// prefixes.
+        /// How this toolset's tools are named to the model. None: each tool
+        /// keeps its own name unless an alias in the session already has it,
+        /// and is then `<name>__<tool>`. Some(prefix): every tool is the
+        /// prefix plus its own name, so `""` keeps own names and `"gh__"`
+        /// gives `gh__search`. An alias already taken, or one outside model
+        /// tool-name rules (only `[A-Za-z0-9_-]`, at most 64 characters), is
+        /// `invalid-request`; the implementer never renames. An operator
+        /// setting: refused in a caller's request unless the operator lets
+        /// callers choose prefixes.
         alias-prefix: option<string>,
     }
 
@@ -285,44 +258,40 @@ interface spawn-types {
         /// JSON Schema that `structured` must satisfy. None means reply
         /// parts only.
         schema: option<json>,
-        /// Ceiling on the encoded outcome of one run, in bytes.
+        /// Maximum encoded size of one run's outcome, in bytes.
         max-bytes: u32,
-        /// True returns the validated `structured` value and nothing else
-        /// the child wrote: the implementer empties `reply`, and builds every
-        /// other field of the outcome from its own records. Requires
-        /// `schema`; without one the request is `invalid-request`. For
-        /// reading untrusted content in quarantine. The implementer does not
-        /// check that the schema has no free strings.
+        /// True returns only the validated `structured` value: the
+        /// implementer empties `reply` and builds every other outcome field
+        /// from its own records. Requires `schema`, or the request is
+        /// `invalid-request`. For reading untrusted content in quarantine.
+        /// The implementer does not check the schema for free strings.
         structured-only: bool,
     }
 
-    /// What a child may spend. Covered by the approval digest. None takes
-    /// the implementer's default, which policy may cap; every root session
-    /// has a finite token and wall-clock budget, and a child's spend counts
-    /// against every ancestor's. The implementer
-    /// enforces it, not the child: it refuses a run past `max-runs`, ends a
-    /// run at `max-duration`, and meters the child's model calls itself.
+    /// What a child may spend. Covered by the approval digest. A none field
+    /// takes the implementer's default, which policy may cap. The
+    /// implementer enforces it, not the child: it refuses a run past
+    /// `max-runs`, ends a run at `max-duration`, and meters model calls
+    /// itself. A child's spend also counts against every ancestor's, and
+    /// every root session has a finite token and wall-clock budget.
     @unstable(feature = agent-spawn)
     record budget {
-        /// Runs the child may take: the number of runs accepted, the first
-        /// one included.
+        /// Runs the child may take, the first included.
         max-runs: option<u32>,
-        /// Model calls the child may make in one run (`max_turns` in the
-        /// OpenAI Agents SDK, the Claude Agent SDK and Goose). Passed to the
-        /// child as `run-options.max-steps` and enforced by metering.
+        /// Model calls per run (`max_turns` in the OpenAI Agents SDK, the
+        /// Claude Agent SDK and Goose). Passed to the child as
+        /// `run-options.max-steps` and enforced by metering.
         max-steps: option<u32>,
-        /// Tokens the child may spend across all runs and model calls: the
-        /// sum of `usage.prompt-tokens` and `usage.completion-tokens`.
+        /// Tokens across all runs: the sum of `usage.prompt-tokens` and
+        /// `usage.completion-tokens`.
         max-total-tokens: option<u64>,
-        /// Wall-clock budget, measured from spawn. Passing it mid-run ends
-        /// the run with an outcome whose finish is `max-duration`, and ends
-        /// the child's session.
+        /// Wall-clock time from spawn. Passing it ends any run in progress
+        /// with finish `max-duration`, and ends the child's session.
         max-duration: option<duration>,
     }
 
-    /// Powers a spawned child may receive. Empty grants none: a child never
-    /// inherits its caller's powers, and receives a power only when the
-    /// caller holds it too.
+    /// Powers a child may receive. Empty grants none. A child never
+    /// inherits powers, and receives one only if the caller holds it.
     @unstable(feature = agent-spawn)
     flags agent-powers {
         /// The child may start child sessions of its own, within the tree
@@ -341,30 +310,26 @@ interface spawn-types {
         /// A component targeting `cosmonic:agent/runnable-agent`, with the
         /// request's own model alias, grants and toolsets.
         component(component-ref),
-        /// The name of an agent definition in the operator's catalog: its
-        /// component, model alias, grants and toolsets are the
-        /// definition's. The request's `model-alias` must be empty and its
-        /// `grants` and `toolsets` must be empty, or the request is
-        /// `invalid-request`. The definition is expanded into its component,
-        /// alias, grants and toolsets and admitted by the same rules as a
-        /// component request: a catalog entry is not a privilege. The
-        /// admission snapshot resolves the name to the definition's
-        /// content, so a changed definition is a new request.
+        /// The name of an agent definition in the operator's catalog, which
+        /// supplies the component, model alias, grants and toolsets. The
+        /// request's `model-alias`, `grants` and `toolsets` must be empty,
+        /// or it is `invalid-request`. Admitted by the same rules as a
+        /// component: a catalog entry is not a privilege. The admission
+        /// snapshot resolves the name to the definition's content, so a
+        /// changed definition is a new request.
         definition(string),
     }
 
-    /// Where the host should run a child. A hint: the host may honour it or
-    /// choose otherwise, and says where the child ran in `spawn.child`.
+    /// Where the host should run a child. A hint: the host may choose
+    /// otherwise, and reports where the child ran in `spawn.child`.
     /// Placement never changes reach: a child runs only where its admission
     /// snapshot resolves identically (the same storage behind its volumes,
     /// the same credential bindings), and a hint that cannot be honoured
-    /// without changing reach is ignored.
-    ///
-    /// The host places a child on the parent's own host whatever the hint
-    /// when its grants (or its toolsets') name a host that means different
-    /// things in different places: loopback, link-local and private-range
-    /// addresses, single-label names, and cluster-local names. The audit
-    /// entry records where it placed the child.
+    /// without changing reach is ignored. A child whose grants, or its
+    /// toolsets', name a host whose meaning depends on location (loopback,
+    /// link-local, private-range, single-label or cluster-local) runs on the
+    /// parent's host whatever the hint. The audit entry records the
+    /// placement.
     @unstable(feature = agent-spawn)
     variant placement {
         /// The host chooses.
@@ -375,30 +340,28 @@ interface spawn-types {
         host-group(string),
         /// A zone or region the operator named.
         zone(string),
-        /// Reserved for placements a later version names. As a caller's
-        /// input it is `invalid-request`.
+        /// Reserved for later versions. `invalid-request` as caller input.
         other(string),
     }
 
-    /// Everything needed to start a child agent session. Declarative: its
-    /// toolsets are fixed at spawn, and it changes them only through
-    /// `tool-loading`, when it holds that power. Construction is lenient;
-    /// `spawn` validates and returns `invalid-request`.
+    /// Everything needed to start a child agent session. Its toolsets are
+    /// fixed at spawn and change only through `tool-loading`, if the child
+    /// holds that power. Construction is lenient; `spawn` validates and
+    /// returns `invalid-request`.
     @unstable(feature = agent-spawn)
     record spawn-request {
         /// The agent the child runs.
         agent: agent-source,
-        /// A model alias, as `models.open` takes it: one the caller was
-        /// granted (a child was granted only its own). Counts toward read
-        /// reach.
+        /// A model alias, as `models.open` takes it, that the caller was
+        /// granted (a child holds only its own). Counts toward read reach.
         model-alias: string,
         /// The child's instructions. Caller free text: not covered by the
         /// approval digest and never shown in its summary.
         instructions: string,
-        /// What the agent component itself may touch. Must fit inside the
-        /// caller's own grants.
+        /// What the agent component itself may touch. Must fit the caller's
+        /// own grants.
         grants: grants,
-        /// The child's toolsets, in order (the order assigns aliases). Names
+        /// The child's toolsets, in order; the order assigns aliases. Names
         /// must be unique.
         toolsets: list<toolset-spec>,
         /// What may come back, and how much.
@@ -407,8 +370,8 @@ interface spawn-types {
         budget: budget,
         /// Powers the child receives.
         powers: agent-powers,
-        /// Where to run it. None is `any`. Not covered by the approval
-        /// digest, since it never changes reach.
+        /// Where to run it; none is `any`. Not covered by the approval
+        /// digest.
         placement: option<placement>,
         /// For logs, audit and display, and returned by `spawn.children`.
         /// Never policy input, and not covered by the approval digest.
@@ -418,17 +381,15 @@ interface spawn-types {
     /// Where a toolset stands in the caller's session.
     @unstable(feature = agent-spawn)
     variant toolset-state {
-        /// Admitted, and its rollout has not finished: not callable yet. The
-        /// rollout has a deadline (the operator's, recommended two minutes);
-        /// if it fails or passes it, the toolset leaves `loaded()` and an
-        /// identical `load` tries again. It cannot be set aside until it is
-        /// `offered`.
+        /// Admitted, with its rollout not finished: not callable yet. If the
+        /// rollout fails or passes its deadline (the operator's, recommended
+        /// two minutes), the toolset leaves `loaded()` and an identical
+        /// `load` tries again. Cannot be set aside until `offered`.
         loading,
-        /// In the model's tool list: its definitions are offered and its
-        /// tools are callable.
+        /// In the model's tool list and callable.
         offered,
-        /// Bound and approved but set aside: out of the model's tool list to
-        /// keep it within the function budget. A `load` of the same spec
+        /// Bound and approved, but set aside out of the model's tool list to
+        /// stay within the function budget. A `load` of the same spec
         /// returns it to `offered` at once, with no rollout. Its aliases
         /// answer `unknown-tool` with how to bring it back.
         ready,
@@ -439,18 +400,18 @@ interface spawn-types {
     /// A grantor's decision on a request that needed approval.
     @unstable(feature = agent-spawn)
     variant decision {
-        /// Granted. For a load, the toolset joins the session ceiling now,
-        /// and any identical load admits it. For a spawn, resend the
-        /// identical request with the same key: the grant admits one child.
+        /// Granted. For a load, the toolset joins the session ceiling and any
+        /// identical load admits it. For a spawn, resend the identical
+        /// request with the same key; the grant admits one child.
         granted,
         /// Denied, with an implementer-authored reason. Identical requests
-        /// from the same caller answer `denied` for the host's denial
-        /// cooldown and raise no new prompt.
+        /// from the same caller answer `denied`, with no new prompt, for the
+        /// host's denial cooldown.
         denied(string),
         /// No decision before the approval expired, or the implementer
-        /// withdrew it (its admission snapshot no longer matches, or the
-        /// person removed the toolset). Not a denial: an identical request
-        /// raises a new approval.
+        /// withdrew it (its snapshot no longer matches, or the person removed
+        /// the toolset). Not a denial: an identical request raises a new
+        /// approval.
         expired,
         /// A decision not captured above. Treat as denied.
         other(string),
@@ -469,56 +430,50 @@ interface spawn-types {
     }
 
     /// A request sent to a grantor. The approval is host state: it stays
-    /// pending until the grantor decides or it expires, whether or not
-    /// anyone holds this handle. Dropping the handle only stops waiting.
+    /// pending until decided or expired, whether or not anyone holds this
+    /// handle. Dropping the handle only stops waiting.
     ///
-    /// Coalescing. Identical requests from the same caller (the same
-    /// workload incarnation, component and session) while an approval is
-    /// pending return the same approval (the same id, one prompt), and every
-    /// waiter sees the same decision.
+    /// Coalescing. While an approval is pending, identical requests from the
+    /// same caller return it (one id, one prompt), and every waiter sees the
+    /// same decision.
     ///
-    /// Loads. A granted load approval adds the toolset to the session
-    /// ceiling at once; there is no separate one-time ticket, and an
-    /// identical load is admitted within the ceiling. The "already held"
-    /// rule in `tool-loading` keeps concurrent identical loads to one
-    /// rollout.
+    /// Loads. A granted load adds the toolset to the session ceiling at once;
+    /// there is no separate ticket. The "already held" rule in
+    /// `tool-loading` keeps concurrent identical loads to one rollout.
     ///
-    /// Spawns. A granted spawn approval is a one-time ticket for one child,
-    /// consumed atomically by the first resend's idempotency key; a resend
-    /// with that key later returns the same child. Consuming it checks, in
-    /// the same step, the grant's expiry (the operator's lifetime), a fresh
-    /// snapshot, current policy, every ancestor's current ceiling, and that
-    /// no removal since the grant touched a toolset it names. Coalesced
-    /// waiters with other keys get a new approval, marked as a repeat
-    /// (`get-repeat-of`). A spawn approval adds nothing to the caller's
-    /// session ceiling: the approved toolsets become the child's own entries,
-    /// bound to the spawn's digest, so the parent cannot load them and no
-    /// other child, with any other output, can use them.
+    /// Spawns. A granted spawn is a one-time ticket for one child, consumed
+    /// atomically by the first resend's idempotency key; later resends with
+    /// that key return the same child. Consuming it checks, in one step, the
+    /// grant's expiry (the operator's lifetime), a fresh snapshot, current
+    /// policy, every ancestor's current ceiling, and that no removal since
+    /// the grant touched a toolset it names. Coalesced waiters with other
+    /// keys get a new approval, marked as a repeat (`get-repeat-of`). The
+    /// approved toolsets become the child's own entries (see Children on
+    /// `spawn-types`).
     ///
     /// Admission snapshot. Before raising an approval, the implementer
     /// resolves the request into an immutable snapshot: the storage behind
-    /// each volume, the credential binding behind each reference (the binding
-    /// and what it authenticates as and to, not the secret value, so rotation
-    /// within a binding changes nothing), the secret each name resolves to,
-    /// the model alias's provider, model and endpoint, an agent definition's
-    /// content, the resource and classification of each interface grant,
-    /// every executable digest, and every default the request left open
-    /// (budget fields that are none, and the configured operator limits,
-    /// never live counters). The person-facing approval UI shows it and the
-    /// audit log records it; it never reaches the caller, whose summary
-    /// carries at most an opaque, keyed fingerprint. Admitting re-resolves
-    /// and compares; any difference spends a spawn ticket or voids a session
-    /// ceiling entry, and the request asks again. While pending, a request
-    /// whose names now resolve differently withdraws the stale approval (its
-    /// decision becomes `expired`) and raises one new approval.
+    /// each volume; the binding behind each credential reference (what it
+    /// authenticates as and to, not the secret, so rotation within a binding
+    /// changes nothing); the secret each name resolves to; the model alias's
+    /// provider, model and endpoint; an agent definition's content; each
+    /// interface grant's resource and classification; every executable
+    /// digest; and every default the request left open (budget fields left
+    /// none and configured operator limits, never live counters). The
+    /// person's approval UI shows it and the audit log records it; the
+    /// caller's summary carries at most an opaque, keyed fingerprint.
+    /// Admission re-resolves and compares: any difference spends a spawn
+    /// ticket or voids a session ceiling entry, and the request asks again.
+    /// A pending approval whose names now resolve differently is withdrawn
+    /// (`expired`) and one new approval is raised.
     ///
-    /// After a denial (or `other`, or the person's removal of the toolset),
-    /// matching requests answer `denied` with no prompt for the host's
-    /// cooldown (recommended one hour). "Matching" is by reach, not by
+    /// Cooldown and caps. After a denial, `other`, or the person removing the
+    /// toolset, matching requests answer `denied` with no prompt for the
+    /// host's cooldown (recommended one hour). Matching is by reach, not by
     /// name: the same executable digests and resolved reach anywhere in the
-    /// spawn tree, so a fresh child, or a renamed toolset or a changed
-    /// `max-bytes`, cannot ask again at once. Pending approvals are capped
-    /// per caller (recommended three) and per tree (recommended five), each
+    /// spawn tree, so a fresh child, a renamed toolset or a changed
+    /// `max-bytes` cannot ask again at once. Pending approvals are capped per
+    /// caller (recommended three) and per tree (recommended five), each
     /// operator-set and at least one; past either cap a request answers
     /// `over-limit` with scope `pending-approvals` and raises no prompt.
     @unstable(feature = agent-spawn)
@@ -530,10 +485,10 @@ interface spawn-types {
 
         /// `sha256:<hex>` over a domain tag naming the operation and its
         /// version (`cosmonic:agent/spawn-request@3` or
-        /// `cosmonic:agent/toolset-spec@3`), a zero byte, the caller's
-        /// workload incarnation, a zero byte, the caller's component name, a
-        /// zero byte, the caller's session id, a zero byte, and the request
-        /// in canonical JSON. Compare for equality only.
+        /// `cosmonic:agent/toolset-spec@3`), the caller's workload
+        /// incarnation, the caller's component name, the caller's session
+        /// id, and the request in canonical JSON, each separated from the
+        /// next by a zero byte. Compare for equality only.
         ///
         /// It covers exactly the fields the summary shows: the whole
         /// `toolset-spec` for a load; every `spawn-request` field except
@@ -565,21 +520,21 @@ interface spawn-types {
 
         /// Implementer-authored text for the person who decides: what is
         /// declassified ("results of this agent, schema S, at most N bytes,
-        /// return to <caller>"), that a toolset joins the session ceiling
-        /// (for a load) or is for this one child only (for a spawn), what a
-        /// load would set aside, and where the requesting session sits in the
-        /// tree. Built only from values the implementer validated: catalog
-        /// names, confirmed image references, and caller-chosen names shown
-        /// as quoted identifiers limited to `[a-z0-9-_./:]`. Free text the
-        /// caller wrote never appears in it. A repeat opens by saying
-        /// so. It never carries resolved infrastructure detail.
+        /// return to <caller>"), whether a toolset joins the session ceiling
+        /// (a load) or serves this one child only (a spawn), what a load
+        /// would set aside, and where the requesting session sits in the
+        /// tree. A repeat says so first. Built only from values the
+        /// implementer validated: catalog names, confirmed image references,
+        /// and caller-chosen names shown as quoted identifiers limited to
+        /// `[a-z0-9-_./:]`. Never carries caller free text or resolved
+        /// infrastructure detail.
         @unstable(feature = agent-spawn)
         get-summary: func() -> string;
 
-        /// Some when the same caller had a spawn with this digest admitted
-        /// within the repeat window (the operator's; recommended one hour,
-        /// extended while that child has not ended): the most recent such
-        /// admission. Only spawns set it.
+        /// For spawns only: the most recent admission of a spawn with this
+        /// digest from the same caller within the repeat window (the
+        /// operator's, recommended one hour, extended while that child has
+        /// not ended).
         @unstable(feature = agent-spawn)
         get-repeat-of: func() -> option<prior-admission>;
 
@@ -600,8 +555,7 @@ interface spawn-types {
         /// started is at depth 1. Does not clear. Default 3.
         depth,
         /// Child sessions spawned in total by one spawn tree, ended ones
-        /// included. Does not clear. Default 500, so the idempotency keys
-        /// a tree has used stay bounded.
+        /// included. Does not clear. Default 500.
         total-agents,
         /// Memory the implementer reserves for a child.
         memory,
@@ -631,31 +585,27 @@ interface spawn-types {
     }
 
     /// Why a spawn admitted no child, or a load added no toolset. No child
-    /// session was created and no toolset became callable. A component a
-    /// failed rollout started may have run its own start-up code; its
-    /// effects are not rolled back. Detail strings are implementer-authored
-    /// and diagnostic only.
+    /// session was created and no toolset became callable, though start-up
+    /// code run by a failed rollout is not rolled back. Detail strings are
+    /// implementer-authored and diagnostic only.
     @unstable(feature = agent-spawn)
     variant admission-error {
-        /// The operator has not enabled this power on this host, or did not
-        /// grant it to this caller. Permanent for this caller: adapt rather
-        /// than retry.
+        /// This power is not enabled on this host, or not granted to this
+        /// caller. Permanent for this caller: adapt rather than retry.
         disabled,
         /// A policy or a person refused, or the request reaches beyond what
         /// the caller's place in the tree allows. A different request may
-        /// succeed. Also the answer, with no prompt, during the cooldown
-        /// after a person denied the same request.
+        /// succeed. Also returned, with no prompt, during a denial cooldown.
         denied(string),
-        /// Sent to a grantor. Wait for the decision, then resend the
-        /// identical request. Returned at once: a pending approval never
-        /// holds the caller's run.
+        /// Sent to a grantor, and returned at once so the caller's run is
+        /// never held. Wait for the decision, then resend the identical
+        /// request.
         needs-approval(approval),
         /// An implementer limit would be exceeded.
         over-limit(over-limit),
-        /// Malformed: a malformed digest, a duplicate toolset name, a name
-        /// already held by a different toolset, an unknown model alias,
-        /// definition or function, a component that does not target the
-        /// right world.
+        /// Malformed: a bad digest, a duplicate toolset name, a name held by
+        /// a different toolset, an unknown model alias, definition or
+        /// function, or a component that does not target the right world.
         invalid-request(string),
         /// The implementer could not serve the call, or the rollout failed
         /// and left the caller's toolsets as they were. Retry may succeed.
@@ -710,10 +660,10 @@ interface spawn-types {
         other(string),
     }
 
-    /// Why a child's run did not start. Nothing reached the child. Not the
-    /// `run` export's `start-error`: this one adds what only an implementer
-    /// that holds a budget and a session tree knows, and never says
-    /// `duplicate`, since the implementer mints the child's run ids.
+    /// Why a child's run did not start; nothing reached the child. Unlike
+    /// the `run` export's `start-error`, it reports budget and tree limits
+    /// and never says `duplicate`, since the implementer mints the child's
+    /// run ids.
     @unstable(feature = agent-spawn)
     variant start-error {
         /// A run is in progress, or a cancelled one has not stopped yet.
@@ -742,7 +692,7 @@ interface spawn-types {
     }
 
     /// Why a child's run failed after it started. Detail strings are the
-    /// implementer's, never the child's. The child's own typed errors reach
+    /// implementer's, never the child's; the child's own typed errors reach
     /// the caller only as `failed`.
     @unstable(feature = agent-spawn)
     variant run-error {
@@ -770,14 +720,13 @@ interface spawn-types {
         other(string),
     }
 
-    /// A child's run that has started: contentless progress, then the
-    /// outcome. Unlike the `run` export's stream, the child's text and steps
-    /// never reach the caller. The stream closes before the outcome
-    /// resolves. Dropping the stream or the future only stops listening: a
-    /// child may run on another host and outlive the caller's store, so only
-    /// `spawn.cancel` or `spawn.end` cancels, and `spawn.wait` collects the
-    /// outcome later by run id. With `output.structured-only`, the outcome's `reply` is
-    /// empty and every other field is the implementer's own.
+    /// A child's started run: contentless progress, then the outcome. Unlike
+    /// the `run` export's stream, the child's text and steps never reach the
+    /// caller. The stream closes before the outcome resolves. Dropping either
+    /// only stops listening: only `spawn.cancel` or `spawn.end` cancels, and
+    /// `spawn.wait` collects the outcome later by run id. With
+    /// `output.structured-only`, `reply` is empty and every other field is
+    /// the implementer's own.
     @unstable(feature = agent-spawn)
     type started-run = tuple<stream<progress>, future<result<run-outcome, run-error>>>;
 }

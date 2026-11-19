@@ -1,155 +1,130 @@
 package cosmonic:agent@0.4.4;
 
-/// The caller may start child agent sessions and work with them: send them
-/// input, wait for their results, cancel them, end them, and see the tree
-/// they form. Unstable behind `agent-spawn`.
+/// Start child agent sessions and work with them: send them input, wait for
+/// their results, cancel them, end them, and see the tree they form.
+/// Unstable behind `agent-spawn`.
 ///
-/// Session spawning, not tool loading. A child is an agent session of its
-/// own: an agent component (targeting `runnable-agent`) in its own workload,
-/// with its own conversation, its own grants and toolsets (nothing
-/// inherited), and its own session state. Loading a toolset into the
-/// caller's own workload is `tool-loading`, a different power. The two share
+/// A child is an agent session of its own: an agent component (targeting
+/// `runnable-agent`) in its own workload, with its own conversation, grants,
+/// toolsets and session state, inheriting nothing. Loading a toolset into
+/// the caller's own workload is `tool-loading`, a separate power. Both share
 /// `toolset-spec`, `admission-error` and the ceiling rules in `spawn-types`.
 ///
-/// Hierarchical. Every session the host starts for a child records its
-/// parent session, so sessions form a tree rooted at the session a person or
-/// trigger started. The caller works with its own children by session id;
-/// it may list its descendants (state only) but acts only on its direct
-/// children. A host reads the same tree from its session store to show it
-/// (a single-machine host's session list, a command line, a clustered
-/// host's session API), and
-/// routes a child's approvals to the root session's person, labelled with the
-/// child's place in the tree.
+/// Tree. Every child session records its parent, so sessions form a tree
+/// rooted at the session a person or trigger started. The caller lists its
+/// descendants (state only) and acts only on its direct children, by
+/// session id. A host reads the same tree from its session store to display
+/// it, and routes a child's approvals to the root session's person,
+/// labelled with the child's place in the tree.
 ///
-/// Location-transparent. Nothing here assumes a child runs on the caller's
-/// host. Every operation names the child by session id and works through the
-/// host's session store, so a child may run on another host, host group or
-/// zone, and may move between hosts between runs. `spawn-request.placement`
-/// is a hint (see `placement` for when the host ignores it). A session id
-/// authorizes nothing on its own. The host records, with each child, the
-/// identity of the caller that spawned it (workload incarnation and component
-/// name; the session follows from the workload, see `spawn-types`), and acts
-/// only for that caller: a sibling component neither sees nor drives another
-/// component's children. When that identity ceases to exist (the workload
-/// is deleted or recreated), its children end.
+/// Location. Every operation names a child by session id and works through
+/// the host's session store, so a child may run on another host, host group
+/// or zone, and may move between hosts between runs.
+/// `spawn-request.placement` is a hint. A session id authorizes nothing on
+/// its own: the host records the identity of the caller that spawned each
+/// child (workload incarnation and component name; see caller identity in
+/// `spawn-types`) and acts only for that caller, so a sibling component
+/// neither sees nor drives another component's children. When that identity
+/// ceases to exist (the workload is deleted or recreated), its children end.
 ///
 /// Leases and fencing. A child's run holds an exclusive lease in the session
-/// store, with a fencing generation: a counter the store advances when a
-/// lease is granted and closes when it expires. The store must be
-/// linearizable for leases, generations, spawn tickets and limit
-/// reservations (compare-and-swap); a store or zone that cannot give that
-/// answers `unavailable` rather than guess.
+/// store, with a fencing generation: a counter the store advances when it
+/// grants a lease and closes when the lease expires. The store must be
+/// linearizable (compare-and-swap) for leases, generations, spawn tickets
+/// and limit reservations; a store or zone that cannot be answers
+/// `unavailable`.
 ///
-/// - The store, not any one host, decides expiry: the operator's timeout,
-///   recommended 60 seconds after the last renewal. Expiry closes the
-///   generation at once, so the store rejects any later write, outcome or
-///   tool dispatch it mediates for that run, even before a new run starts.
-///   Whichever host next reads the child (the parent's, or one serving
-///   `children` or `wait`) reports the run as failed: waiters get
-///   `run-error.host-lost`, the child's state becomes `failed`, and
-///   `child.failure` says why. No host has to be alive for that to happen.
-/// - The running host fences itself: on its monotonic clock, once the time
-///   since it sent its last successful renewal passes the store's timeout
-///   minus a margin (recommended 15 seconds), it stops the child's
-///   instances (the agent and its toolsets), so no new model call, tool
-///   call or direct effect through any of their imports can start, and
-///   cancels what is in flight.
-/// - What fencing does not stop. It does not undo or stop effects already
-///   under way when the fence fires (a request already sent, a write
-///   already issued), and it cannot help when the host's clock misbehaves
-///   (a paused virtual machine resumes after the store has expired its
-///   lease). Those may overlap a new run, within the child's own reach and
-///   never more.
-///
+/// - The store decides expiry: the operator's timeout, recommended 60
+///   seconds after the last renewal. Expiry closes the generation at once,
+///   so the store rejects any later write, outcome or tool dispatch it
+///   mediates for that run. Whichever host next reads the child reports the
+///   run as failed: waiters get `run-error.host-lost`, the child's state
+///   becomes `failed`, and `child.failure` says why. No host has to be
+///   alive for that.
+/// - The running host fences itself: by its monotonic clock, once the time
+///   since its last successful renewal passes the store's timeout minus a
+///   margin (recommended 15 seconds), it stops the child's instances (the
+///   agent and its toolsets), so nothing new starts through any of their
+///   imports, and cancels what is in flight.
+/// - Fencing does not undo or stop effects already under way (a request
+///   sent, a write issued), and cannot help when the host's clock misbehaves
+///   (a paused virtual machine resumes after its lease expired). Those may
+///   overlap a new run, within the child's own reach and never more.
 /// - Brokered calls carry the generation. Every call the host brokers for a
 ///   run (model calls, credential-brokered egress, tool dispatch, writes
-///   through a host-managed store) carries the run's fencing generation.
-///   A broker on the run's own host admits it only while that host's own
-///   lease view is valid (the same monotonic clock and margin as the
-///   self-fence). A broker elsewhere (a shared model or credential gateway)
-///   checks the generation with the store and fails closed when it cannot
-///   establish that the generation is open. Direct egress through a
-///   component's own grants cannot be fenced this way.
-/// - A lock delay before re-placement. After a lease expires, the child's
-///   next run is accepted but not started until a re-placement delay has
-///   passed (the operator's, at least the self-fencing margin, recommended
-///   30 seconds); its progress shows `blocked(placement-delay)`. That gives
-///   a cut-off host time to fence itself before a new run starts elsewhere.
+///   through a host-managed store) carries the run's fencing generation. A
+///   broker on the run's own host admits it only while that host's lease
+///   view is valid (the same clock and margin as the self-fence). A broker
+///   elsewhere, such as a shared model or credential gateway, checks the
+///   generation with the store and fails closed when it cannot confirm the
+///   generation is open. Direct egress through a component's own grants
+///   cannot be fenced this way.
+/// - Re-placement delay. After a lease expires, the child's next run is
+///   accepted but does not start until the operator's re-placement delay
+///   has passed (at least the self-fencing margin, recommended 30 seconds);
+///   its progress shows `blocked(placement-delay)`.
 ///
-/// The child's session is durable, so a later `send` starts a new run,
-/// placed again, under a new generation.
-///
-/// What a child's conversation holds after a run that did not finish. Every
-/// step the store recorded under the run's generation before the run ended
-/// or the generation closed, then a host-written marker saying how the run
-/// ended (cancelled, failed, host lost, revoked). Nothing after the
-/// generation closed is kept. So a later `send` resumes from the last
-/// recorded step; nothing is replayed.
+/// The child's session is durable: a later `send` starts a new run, placed
+/// again, under a new generation. After a run that did not finish, the
+/// child's conversation holds every step the store recorded under that
+/// run's generation, then a host-written marker saying how the run ended
+/// (cancelled, failed, host lost, revoked). The next run resumes from there;
+/// nothing is replayed.
 ///
 /// Stopping. `cancel` cancels a child's run in progress and every run in
 /// progress below it. `end` ends the child and every session below it. A
-/// person's stop on a session in the host's UI cancels its subtree's runs the
-/// same way. A run that ends any other way (done, failed, host lost) leaves
-/// the runs it started in its children going: they are durable work a later
-/// run can collect, bounded by the tree limits and budgets.
+/// person's stop on a session in the host's UI cancels its subtree's runs
+/// the same way. A run that ends any other way leaves its children's runs
+/// going, bounded by the tree limits and budgets.
 ///
-/// Forced stop. Cancellation asks cooperatively first. After the host's
-/// grace period (the operator's, recommended 15 seconds), each host still
-/// running a run in the subtree stops that run's instances, the same way a
-/// host fences itself: nothing new starts through any import, calls in
-/// flight are cancelled, and metering stops whatever the agent does. A host
-/// the request cannot reach is stopped by its lease instead: the store
-/// expires the lease (so the run ends `host-lost`), and that host fences
-/// itself by its own deadline. `cancel` and `end` resolve when every run in
-/// the subtree has stopped or had its lease expire, so at most the grace
-/// period or the lease timeout, whichever is longer; dropping the future
-/// only stops waiting. A person's stop gets the same deadline. As with any
-/// lost host, effects already under way when a run is stopped are not
-/// undone.
+/// Cancellation is cooperative first. After the operator's grace period
+/// (recommended 15 seconds), each host still running a run in the subtree
+/// stops that run's instances as it would to fence itself, and metering
+/// stops. A host the request cannot reach is stopped by its lease: the run
+/// ends `host-lost`, and the host fences itself by its own deadline.
+/// `cancel` and `end` resolve when every run in the subtree has stopped or
+/// lost its lease, so within the longer of the grace period and the lease
+/// timeout; dropping the future only stops waiting. A person's stop has the
+/// same deadline. Effects already under way are not undone.
 ///
-/// Cancellation is a barrier. `cancel`, `end` and a person's stop mark the
-/// subtree as cancelling in the session store, atomically, before they
-/// cancel its runs. Every `spawn` and `send` (including one already in
-/// flight) from a run in that subtree is checked against the mark at
-/// acceptance and refused (`denied` or `start-error.denied`), so a
-/// descendant cannot start new work that outlives the stop. The mark lifts
-/// for a session when its cancelled run has ended.
+/// Cancellation is a barrier. `cancel`, `end` and a person's stop atomically
+/// mark the subtree as cancelling in the session store before cancelling its
+/// runs. Every `spawn` and `send` from a run in that subtree, including one
+/// already in flight, is checked against the mark at acceptance and refused
+/// (`denied` or `start-error.denied`). The mark lifts for a session when its
+/// cancelled run has ended.
 ///
 /// Lifetime and limits. A child lives until `end`, until its `max-duration`
 /// passes, or until its parent session ends; ending a session ends its
 /// descendants. A child with no run in progress holds no instance. Tree
-/// limits, always set, operator-adjustable: `depth` (default 3),
-/// `concurrent-agents` (runs from acceptance until ended, default 20), and
+/// limits are always set and operator-adjustable: `depth` (default 3),
+/// `concurrent-agents` (runs from acceptance until they end, default 20),
 /// `live-sessions` (child sessions not yet ended, default 50) and
-/// `total-agents` (children spawned in all, default 500) per tree. Every
-/// root session has a finite token and wall-clock budget (the operator's,
-/// which an operator may raise but never remove), so no tree spends without
-/// bound. Every run acceptance
-/// (`send`, or `spawn` with input) and every spawn reserves its place
-/// atomically across the tree. Tokens a child's subtree spends count against
-/// the child's `max-total-tokens` and every ancestor's, so a budget bounds
-/// everything below it.
+/// `total-agents` (children spawned in all, default 500). Every root session
+/// has a finite token and wall-clock budget, which an operator may raise but
+/// never remove. Every spawn and every run acceptance (`send`, or `spawn`
+/// with input) reserves its place atomically across the tree. Tokens a
+/// child's subtree spends count against the child's `max-total-tokens` and
+/// every ancestor's.
 ///
-/// Attachments. A message's stored attachments belong to their session. On
-/// `send` (and `spawn` with input) the host copies each stored attachment
-/// the parent can read into the child's session and re-issues it there; an
-/// outcome's stored attachments are copied into the parent's session the
-/// same way and count toward `output.max-bytes`. With
-/// `output.structured-only`, an outcome carries no attachments.
+/// Attachments belong to their session. On `send` (and `spawn` with input)
+/// the host copies each stored attachment the parent can read into the
+/// child's session and re-issues it there. An outcome's stored attachments
+/// are copied into the parent's session the same way and count toward
+/// `output.max-bytes`; with `output.structured-only`, an outcome carries
+/// none.
 ///
-/// Knowing without polling. `watch` streams changes to the caller's
-/// children within a run. Across runs, the host keeps a notice for each run
-/// the caller started in a child when it ends (session id, run id, how it
-/// ended; never child text) until the caller acknowledges it, and
-/// `read-notices` returns them in the caller's next run, so a parent that ended its run while children worked
-/// learns what finished without polling. Whether a child's completion may
-/// start the parent's next run is a host trigger, not part of this
-/// interface.
+/// Notices. `watch` streams changes to the caller's children within a run.
+/// Across runs, the host keeps a notice for each run the caller started in a
+/// child when that run ends (session id, run id, how it ended; never child
+/// text) until the caller acknowledges it, and `read-notices` returns them
+/// in the caller's next run. Whether a child's completion starts the
+/// parent's next run is a host trigger, outside this interface.
 ///
-/// Traces. The implementer propagates the trace context of the parent's
-/// run (`run-options.trace-parent`) to every child run it starts, on any
-/// host, and records spawn, send, cancel, end, lease expiry and revocation
-/// as span events, with the session id as the conversation id.
+/// Traces. The implementer propagates the parent run's trace context
+/// (`run-options.trace-parent`) to every child run it starts, on any host,
+/// and records spawn, send, cancel, end, lease expiry and revocation as span
+/// events, with the session id as the conversation id.
 @unstable(feature = agent-spawn)
 interface spawn {
     @unstable(feature = agent-spawn)
@@ -199,12 +174,10 @@ interface spawn {
         /// Its depth, where a child of a session a person or trigger started
         /// is at depth 1.
         depth: u32,
-        /// The request's labels, the caller's own text: set for the
-        /// caller's direct children and empty for deeper descendants, whose
-        /// labels a child wrote (a person sees them in the host's view).
+        /// The request's labels: set for the caller's direct children, and
+        /// empty for deeper descendants, whose labels a child wrote.
         labels: list<tuple<string, string>>,
-        /// Its session state, derived by the host (`session-status`): needs
-        /// input, working, failed, done or idle. None when the host could
+        /// Its session state (`session-status`). None when the host could
         /// not read it.
         status: option<status>,
         /// Why its last run failed or why it takes no more runs, when one
@@ -216,9 +189,9 @@ interface spawn {
         /// What it and every session below it have spent, metered by the
         /// host, never reported by the child.
         usage: usage-total,
-        /// True once the session has ended. The host keeps ended children
-        /// listed for a bounded time and number (recommended the 100 most
-        /// recent per tree).
+        /// True once the session has ended. Ended children stay listed for
+        /// a bounded time and number (recommended the 100 most recent per
+        /// tree).
         ended: bool,
     }
 
@@ -234,17 +207,16 @@ interface spawn {
     }
 
     /// What remains of a budget. Tokens and time are the tightest of the
-    /// session's own and every ancestor's, since a subtree's spend counts
-    /// against each. None in a field means no limit applies to it below the
-    /// root's.
+    /// session's own and every ancestor's. None in a field means no limit
+    /// applies to it below the root's.
     @unstable(feature = agent-spawn)
     record remaining-budget {
         /// Tokens left.
         tokens: option<u64>,
         /// Wall-clock time left.
         duration: option<duration>,
-        /// Runs left for this session, from its own `max-runs` only: runs
-        /// are counted per session, not charged to ancestors.
+        /// Runs left, from this session's own `max-runs` only; runs are not
+        /// charged to ancestors.
         runs: option<u32>,
     }
 
@@ -257,8 +229,7 @@ interface spawn {
         parent: option<string>,
         /// Its depth; 0 for a root session.
         depth: u32,
-        /// What the caller has left to spend. Every root has finite tokens
-        /// and duration.
+        /// What the caller has left to spend.
         remaining: remaining-budget,
     }
 
@@ -362,19 +333,19 @@ interface spawn {
     }
 
     /// Check the request against the ceiling, policy and the tree limits,
-    /// and start a child session. With `input`, also start its first run.
+    /// and start a child session, plus its first run when `input` is given.
     /// Resolves once accepted, not once the child is running; a child that
     /// fails to start reports it on its run, its state and `failure`.
     ///
-    /// `key` is the caller's idempotency key for this spawn: any string up
-    /// to 128 bytes, unique per intended child within the caller's session.
-    /// A resend with a key that already admitted a child returns that same
-    /// child (and starts no second first run) whatever else it says, for the
-    /// life of the caller's session; a different key is a different child.
-    /// Key records are bounded by `total-agents`. When identical requests with
-    /// different keys share one pending approval, its grant admits the first
-    /// key to resend, and the others get a new approval, marked as a repeat.
-    /// So one decision admits one child.
+    /// `key` is the caller's idempotency key: any string up to 128 bytes,
+    /// unique per intended child within the caller's session. For the life
+    /// of the caller's session, a resend with a key that already admitted a
+    /// child returns that child, whatever else it says, and starts no second
+    /// first run; a different key is a different child. Key records are
+    /// bounded by `total-agents`. When requests with different keys share
+    /// one pending approval, its grant admits the first key to resend and
+    /// the others get a new approval marked as a repeat, so one decision
+    /// admits one child.
     @unstable(feature = agent-spawn)
     spawn: async func(
         request: spawn-request,
@@ -384,20 +355,19 @@ interface spawn {
 
     /// Start a run in a direct child: hand it a message and let it work
     /// until it replies or a budget item stops it. Resolves when the run is
-    /// accepted. The host first re-checks the child's whole admission
-    /// against every ancestor's current ceiling and policy (`denied` and
-    /// `child.failure` `revoked` when it no longer fits). `busy` while a run
-    /// is in progress there (the caller's, or one a person started by talking
-    /// to the child), and after a cancellation until that run has stopped.
+    /// accepted. The host first re-checks the child's admission against
+    /// every ancestor's current ceiling and policy (`denied`, with
+    /// `child.failure` `revoked`, when it no longer fits). `busy` while a run
+    /// is in progress there (the caller's, or one a person started by
+    /// talking to the child), or a cancelled run has not stopped.
     ///
-    /// `key` is the caller's idempotency key for this run, as for `spawn`:
-    /// a resend with a key that already started a run in that child returns
-    /// the same `sent` (the same run id, a fresh view of its progress and
-    /// outcome) and starts nothing, whether that run is in progress or has
-    /// ended. The host keeps the keys of the 256 most recent runs per child;
-    /// an older key starts a new run. A known key whose outcome is no longer
-    /// kept still returns the same run, and its outcome resolves to
-    /// `run-error.expired`; it never starts the run again. With none, every
+    /// `key` is an idempotency key, as for `spawn`: a resend with a key that
+    /// already started a run in that child returns the same `sent` (the same
+    /// run id, a fresh view of its progress and outcome) and starts nothing,
+    /// whether that run is in progress or ended. The host keeps the keys of
+    /// the 256 most recent runs per child; an older key starts a new run. A
+    /// known key whose outcome is no longer kept still returns the same run,
+    /// with its outcome resolving to `run-error.expired`. With none, every
     /// call starts a run.
     @unstable(feature = agent-spawn)
     send: async func(
@@ -407,11 +377,10 @@ interface spawn {
     ) -> result<sent, start-error>;
 
     /// The outcome of one run the caller started in a direct child, by its
-    /// run id: once it ends, or at once if it has ended. Works from any store
-    /// and any host that shares the session store, so a caller that started a
-    /// run in one run of its own can collect the result in a later one. The
-    /// host keeps the outcomes of the runs the caller started in a child,
-    /// the 16 most recent at least, until the child's session ends.
+    /// run id: once it ends, or at once if it has ended. Works from any
+    /// later run and any host that shares the session store. The host keeps
+    /// at least the 16 most recent such outcomes per child until the child's
+    /// session ends.
     @unstable(feature = agent-spawn)
     wait: async func(session: string, run: string) -> result<run-outcome, wait-error>;
 
@@ -430,16 +399,16 @@ interface spawn {
 
     /// The caller's children, oldest first, with their state. With
     /// `descendants`, every session below the caller, each listed after its
-    /// parent, so a caller can draw its subtree. Bounded by the tree limits
-    /// and the retention of ended children.
+    /// parent. Bounded by the tree limits and the retention of ended
+    /// children.
     @unstable(feature = agent-spawn)
     children: async func(descendants: bool) -> result<list<child>, child-error>;
 
     /// The caller's children (or, with `descendants`, its whole subtree) as
-    /// they stand, then each change as it happens, so a caller need not
-    /// poll `children`. The stream ends when the caller's session ends;
-    /// dropping it stops watching. A reader that falls behind may miss an
-    /// intermediate change but always sees each child's latest record.
+    /// they stand, then each change as it happens. A reader that falls
+    /// behind may miss an intermediate change but always sees each child's
+    /// latest record. Dropping the stream stops watching; it ends when the
+    /// caller's session ends.
     @unstable(feature = agent-spawn)
     watch: async func(descendants: bool) -> result<stream<child-event>, child-error>;
 
