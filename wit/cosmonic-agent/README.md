@@ -155,7 +155,7 @@ A component reads the state with `get` and follows it with `watch`, through
 the `status-client` world. Like `session` and `run`, it never names a
 session: the host binds the one it reports. It is a new interface the host
 serves, so adding it changed nothing an existing agent or tool was built
-against. It stays unstable until hosts beyond Desktop adopt it, so its shape
+against. It stays unstable until more than one host adopts it, so its shape
 can still change, for example to let `needs-input` say what is held.
 
 ## Versioning
