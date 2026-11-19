@@ -127,9 +127,12 @@ world spawning-agent {
     include tool-loading-client;
 }
 
-/// An implementer of `spawn`, such as a host plugin or a test double.
+/// An implementer of `spawn`, such as a host plugin or a test double. It
+/// exports `spawn-types` because it creates the `approval` resources it
+/// returns.
 @unstable(feature = agent-spawn)
 world spawn-provider {
+    export spawn-types;
     export spawn;
 }
 
@@ -140,9 +143,11 @@ world tool-discovery-provider {
 }
 
 /// An implementer of tool loading. It also serves the caller's `tools`
-/// import, since a loaded toolset's tools are offered there.
+/// import, since a loaded toolset's tools are offered there, and exports
+/// `spawn-types` because it creates the `approval` resources it returns.
 @unstable(feature = agent-spawn)
 world tool-loading-provider {
+    export spawn-types;
     export tool-loading;
     export tools;
 }

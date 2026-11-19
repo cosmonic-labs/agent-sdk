@@ -18,7 +18,8 @@ names:
 - **tool-discovery**: ask which toolsets are available to it;
 - **tool-loading**: load a toolset into itself while it runs, and set one
   aside;
-- **spawn**: start a child agent and read its final replies.
+- **spawn**: start child agent sessions, send them input, wait for their
+  results, cancel and end them, and see the tree they form.
 
 A **toolset** is one component, with its own grants (allowed hosts, volumes,
 interfaces, credential references), that offers one or more tools. It is
@@ -44,7 +45,8 @@ credentials are named, and the host resolves them.
 | rollout | Moving a workload to a new revision, here one that adds a toolset's component, attached to the same session. |
 | run | One unit of work: a message in, the agent's loop of model and tool calls, a reply out. |
 | step | One model call inside a run. |
-| caller | The component an import is bound to: its workload incarnation and its component name. |
+| caller | The component an import is bound to, in one session: its workload incarnation, component name and session id. |
+| child session | An agent session started by `spawn`, with its own workload, conversation and state, recorded under its parent session. |
 
 ## Worlds
 
@@ -52,11 +54,11 @@ credentials are named, and the host resolves them.
 | --- | --- | --- | --- |
 | `tool-discovery-client` | `tool-discovery` | none | Included by an agent that may browse the catalog |
 | `tool-loading-client` | `tool-loading` | none | Included by an agent that may change its own toolsets |
-| `spawn-client` | `spawn` | none | Included by an agent that may start child agents |
+| `spawn-client` | `spawn` | none | Included by an agent that may start child sessions |
 | `spawning-agent` | `runnable-agent` and all three | `run` | A runnable agent with every power |
 | `tool-discovery-provider` | none | `tool-discovery` | An implementer, or a test double |
-| `tool-loading-provider` | none | `tool-loading`, `tools` | An implementer, which must also serve the caller's `tools` |
-| `spawn-provider` | none | `spawn` | An implementer, or a test double |
+| `tool-loading-provider` | none | `spawn-types`, `tool-loading`, `tools` | An implementer, which must also serve the caller's `tools` |
+| `spawn-provider` | none | `spawn-types`, `spawn` | An implementer, or a test double |
 
 A child agent targets `runnable-agent`, the same world a host drives any agent
 through. Each client world holds only its own import, so an agent composes
@@ -99,7 +101,8 @@ match tool_loading::load(offer.spec, None).await {
 }
 ```
 
-Within the ceiling, `load` admits the toolset at once, rolls the agent's
+Within the ceiling, for a toolset in the operator's catalog (or one already
+in the session ceiling), `load` admits it at once, rolls the agent's
 workload out to a revision that adds its component, and resolves when its
 tools are callable. The run in progress keeps going on the same instance; the
 old revision retires when the run ends. Beyond the ceiling, `load` returns
@@ -135,7 +138,7 @@ nothing can make room, `load` answers `over-limit` with scope
 `offered-functions`. `unload` sets aside; only the person removes a toolset
 from the session, which also ends its approval.
 
-## Scenario 3: delegate a review and read the verdict
+## Scenario 3: delegate a review to a child session
 
 A coding agent asks a reviewer for a structured verdict. The reviewer gets one
 toolset, a file reader with read-only access to the workspace volume the coder
@@ -145,51 +148,62 @@ already reads, so the request fits the coder's ceiling.
 #[derive(Deserialize, JsonSchema)]
 struct Review { risks: Vec<String>, verdict: Verdict }
 
-let reviewer = Agent::new(pinned("ghcr.io/acme/agents/reviewer:1.2.0", "sha256:9f…"))
+let request = SpawnRequest::component(pinned("ghcr.io/acme/agents/reviewer:1.2.0", "sha256:9f…"))
     .model_alias("frontier")                        // a model alias, never a key
     .instructions("Review the PR and list risks.")
     .toolset("repo-fs", pinned("ghcr.io/cosmonic/tools/fs:0.2.0", "sha256:1c…"),
           Grants::none().volume("workspace", "/src", ReadOnly))
     .output::<Review>().max_bytes(16_384)
     .budget(Budget { max_runs: Some(3), max_steps: Some(12), ..Default::default() })
-    .label("role", "reviewer")
-    .spawn().await?;
+    .label("role", "reviewer");
 
-let review: Review = reviewer.run(user("Start with the auth changes.")).await?.structured()?;
-drop(reviewer); // ends the child
+let child = spawn::spawn(request, Some(user("Start with the auth changes."))).await?;
+let review: Review = spawn::wait(&child.session).await?.structured()?;
+spawn::send(&child.session, user("Now the billing changes.")).await?;
+let more: Review = spawn::wait(&child.session).await?.structured()?;
+spawn::end(&child.session).await?;
 ```
 
-The coder sees contentless progress (`working`, `blocked`, step counts), then
-the final reply and the structured verdict. It never sees the reviewer's tool
-calls, tool output or conversation; a person sees those in the host's view of
-the child's session, listed under the coder's.
+The child is a session of its own, recorded under the coder's. The coder sees
+contentless progress (`working`, `blocked`, step counts), then the final reply
+and the structured verdict. It never sees the reviewer's tool calls, tool
+output or conversation; a person sees those by opening the child under the
+coder's session in the host's own view.
 
 A child's reach never exceeds its parent's ceiling. Its own agent component
-gets only grants the parent already has; a toolset beyond the parent's
-ceiling asks the person, and their approval adds it to the parent's session
-ceiling. The spawn tree has a depth limit (default 3) and a limit on children
-running at once (default 20).
+gets only grants the parent already has; a toolset beyond the parent's ceiling
+asks the person, and their approval adds it to the parent's session ceiling. A
+child's toolsets stay exact toolsets: it can hand one down, never lend its
+reach to another component. The tree has a depth limit (default 3) and a limit
+on children running at once (default 20).
 
-## Scenario 4: keep a child across runs
+## Scenario 4: work with children across runs and hosts
 
-A harness gets a fresh store for each run, so a handle cannot outlive the run.
-`detach` keeps the child in the session, and a later run attaches to it.
+Children are addressed by session id through the host's session store, so
+nothing depends on the store, instance or host that spawned them.
 
 ```rust
-let researcher = spawn::spawn(request).await?;
-let id = researcher.get_id();
-spawn::Agent::detach(researcher);           // keeps running, keeps its budget
-// ...the run ends; the id is kept in the session...
+let researcher = spawn::spawn(
+    request.placement(Placement::Zone("eu-west".into())),  // a hint, never reach
+    Some(user("Collect the release notes for 2.12.")),
+).await?;
+// ...this run ends; the caller keeps the session id in its own session...
 
-let researcher = spawn::attach(&id).await?; // a later run picks it up
-for child in spawn::children().await {      // each with its host-derived status
-    println!("{} {:?} attached={}", child.id, child.status, child.attached);
+// A later run, maybe on another instance or host:
+let notes = spawn::wait(&researcher.session).await?;      // outcome of that run
+for c in spawn::children(true).await? {                  // the whole subtree, parent first
+    println!("{} under {} at depth {}: {:?} {:?}", c.session, c.parent, c.depth, c.status, c.failure);
 }
 ```
 
-Only the same caller in the same session can attach; the id authorizes
-nothing on its own. A detached child ends after an idle period, when its
-budget runs out, or with the session.
+Dropping a progress stream or outcome future only stops listening; only
+`cancel` or `end` stops a child. If the host running a child goes away
+mid-run, its lease in the session store lapses: `wait` answers `host-lost`,
+the child's state is `failed` with `failure` saying why, and a later `send`
+starts a new run, placed again. Nothing hangs silently.
+
+A parent acts only on its direct children (send, wait, cancel, end) and sees
+its whole subtree; hosts draw the same tree in their session lists.
 
 ## Scenario 5: read untrusted content in quarantine
 
@@ -200,16 +214,17 @@ page) to a child with no grants and accepts only a constrained answer.
 #[derive(Deserialize, JsonSchema)]
 struct Triage { category: Category, urgent: bool, confidence: u8 } // no strings
 
-let reader = Agent::new(pinned(QUARANTINE_READER, "sha256:…"))
+let reader = SpawnRequest::component(pinned(QUARANTINE_READER, "sha256:…"))
     .model_alias("local-small")
     .output::<Triage>().max_bytes(256).structured_only()
-    .budget(Budget { max_runs: Some(1), max_steps: Some(1), ..Default::default() })
-    .spawn().await?;
-let triage: Triage = reader.run(user(&untrusted_email)).await?.structured()?;
+    .budget(Budget { max_runs: Some(1), max_steps: Some(1), ..Default::default() });
+let child = spawn::spawn(reader, Some(user(&untrusted_email))).await?;
+let triage: Triage = spawn::wait(&child.session).await?.structured()?;
 ```
 
-With `structured-only`, the host empties the reply text before the parent
-sees it, so only the schema's fields come back. The host does not check that
+With `structured-only`, the host empties the reply text and fills every other
+field of the outcome from its own records, so only the schema's fields come
+back from the child. The host does not check that
 the schema has no free strings. This narrows what a manipulated child can
 say; it does not stop the child being manipulated, and nothing here blocks
 prompt injection.
@@ -221,5 +236,5 @@ prompt injection.
 | [`spawn-types.wit`](../../spawn-types.wit) | The contract (caller, reach, ceiling, session ceiling, children, authorship) and the shared records |
 | [`tool-discovery.wit`](../../tool-discovery.wit) | `tool-discovery` |
 | [`tool-loading.wit`](../../tool-loading.wit) | `tool-loading` |
-| [`spawn.wit`](../../spawn.wit) | `spawn` and the `agent` resource |
+| [`spawn.wit`](../../spawn.wit) | `spawn`: child sessions by id |
 | [`world.wit`](../../world.wit) | The worlds above, beside the package's others |
