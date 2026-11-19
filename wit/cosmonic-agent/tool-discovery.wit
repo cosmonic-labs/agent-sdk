@@ -1,87 +1,74 @@
 package cosmonic:agent@0.4.4;
 
-/// List the toolsets available to the caller. Unstable behind
-/// `agent-spawn`.
+/// The caller may ask which toolsets are available to it. Unstable behind
+/// `agent-tool-loading`.
 ///
-/// The implementer keeps the catalog: toolsets a person installed or policy
-/// allows, each a pinned component with the grants it would get. `list`
-/// answers for this caller only, marks each offer's fit against the
-/// caller's ceiling and its state in the caller's session, and leaves out
-/// offers policy would never grant. Listing loads nothing: pass an offer's
-/// `spec` to `tool-loading.load`, or to `spawn` as a child's toolset. It
-/// uses the same catalog and rules as the host's model-facing `find_tools`
-/// tool, so the two agree.
-@unstable(feature = agent-spawn)
+/// The implementer keeps the catalog and answers for this caller only,
+/// leaving out offers policy would never grant. Asking starts and loads
+/// nothing. This is the harness-facing form of the model-facing `find_tools`
+/// tool, over the same catalog. Tool names and descriptions are written by
+/// toolset authors: treat them as untrusted input to a model.
+@unstable(feature = agent-tool-loading)
 interface tool-discovery {
-    @unstable(feature = agent-spawn)
+    @unstable(feature = agent-tool-loading)
     use tool-types.{tool-def};
-    @unstable(feature = agent-spawn)
-    use spawn-types.{toolset-spec, toolset-state};
+    @unstable(feature = agent-tool-loading)
+    use toolset-types.{toolset-state};
 
-    /// How an offer relates to the caller's ceiling. Fit describes reach
-    /// only: policy may still ask for approval within the ceiling.
-    @unstable(feature = agent-spawn)
+    /// How an offer relates to the caller's ceiling (what it may add without
+    /// asking). Describes reach; policy may still ask within the ceiling.
+    @unstable(feature = agent-tool-loading)
     variant ceiling-fit {
-        /// Inside the caller's own reach, or an exact match for an entry in
-        /// its session ceiling.
+        /// Loading it needs no grantor.
         within-ceiling,
-        /// Beyond the ceiling: using it returns `needs-approval`, which
-        /// policy could grant. For a child: beyond its own ceiling but
-        /// within its parent's.
+        /// Loading it waits on a grantor, who could allow it.
         beyond-ceiling,
         /// A relation not captured above. Treat as `beyond-ceiling`.
-        other(string),
+        other(option<string>),
     }
 
-    /// One toolset the caller may use or hand down.
-    @unstable(feature = agent-spawn)
+    /// One catalog entry the caller may load or hand to a child.
+    @unstable(feature = agent-tool-loading)
     record toolset-offer {
-        /// A ready-made spec: the pinned component and the grants it would
-        /// get. Pass it on unchanged so its approval digest matches.
-        spec: toolset-spec,
-        /// Implementer-authored text for a person, from the catalog entry.
+        /// The catalog name, as `toolset-source.catalog` takes it.
+        name: string,
+        /// What it does, from the catalog.
         summary: string,
-        /// The toolset's tool definitions under their own names, as
-        /// catalogued for the pinned digest. Written by the toolset's
-        /// author: treat names, descriptions and schemas as untrusted input
-        /// to a model.
+        /// Its tools under their own names.
         tools: list<tool-def>,
-        /// Fit against this caller's ceiling.
+        /// The interfaces its pinned component imports, read from the
+        /// binary: it can call nothing else.
+        imports: list<string>,
+        /// Fit against the caller's ceiling.
         fit: ceiling-fit,
-        /// Its state in the caller's session if the caller holds it already
-        /// (`ready` loads back at once); none otherwise.
+        /// Its state in the caller's session, if the caller holds it.
         state: option<toolset-state>,
     }
 
-    /// What `list` found.
-    @unstable(feature = agent-spawn)
-    record discovery-result {
-        /// The offers, best match first.
+    /// What `list-offers` found.
+    @unstable(feature = agent-tool-loading)
+    record offers {
+        /// Best match first.
         offers: list<toolset-offer>,
-        /// True when matches were left out to keep the answer small. Narrow
-        /// the query to see them.
+        /// True when matches were left out; narrow the query to see them.
         truncated: bool,
     }
 
-    /// Why discovery failed. Detail strings are diagnostic only.
-    @unstable(feature = agent-spawn)
+    /// Why discovery failed.
+    @unstable(feature = agent-tool-loading)
     variant discovery-error {
-        /// Discovery is not enabled on this host, or not granted to this
-        /// caller. Permanent for this caller.
+        /// Discovery is not enabled for this caller. Permanent.
         disabled,
-        /// Policy refused discovery for this caller.
-        denied(string),
-        /// The implementer could not serve the call. Retry may succeed.
+        /// Policy refused it.
+        denied(option<string>),
+        /// Could not be served now. Retry may succeed.
         unavailable(string),
-        /// A failure not captured above. Treat as permanent. Diagnostic
-        /// detail; never parse it.
-        other(string),
+        /// A failure not captured above.
+        other(option<string>),
     }
 
-    /// The toolsets this caller may use or hand down, within policy. With a
-    /// query, only offers whose name, summary, or tool names or descriptions
-    /// match it, ignoring case. The implementer caps the count and sets
-    /// `truncated`.
-    @unstable(feature = agent-spawn)
-    %list: async func(query: option<string>) -> result<discovery-result, discovery-error>;
+    /// The catalog entries this caller may use. With `query`, only those
+    /// whose name, summary or tools match it, ignoring case.
+    @unstable(feature = agent-tool-loading)
+    list-offers: async func(query: option<string>) -> result<offers, discovery-error>;
 }

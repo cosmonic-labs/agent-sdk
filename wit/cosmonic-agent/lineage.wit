@@ -1,0 +1,28 @@
+package cosmonic:agent@0.4.4;
+
+/// The caller may read its own place in its spawn tree and what it has left
+/// to spend. Unstable behind `agent-spawn`.
+@unstable(feature = agent-spawn)
+interface lineage {
+    @unstable(feature = agent-spawn)
+    use toolset-types.{store-error};
+    @unstable(feature = agent-spawn)
+    use spawn-types.{remaining-budget};
+
+    /// The caller's place in the tree.
+    @unstable(feature = agent-spawn)
+    record lineage {
+        /// Its session id.
+        session: string,
+        /// Its parent's session id; none for a root.
+        parent: option<string>,
+        /// 0 for a root.
+        depth: u32,
+        /// What it has left.
+        remaining: remaining-budget,
+    }
+
+    /// The caller's place and budget now.
+    @unstable(feature = agent-spawn)
+    get-lineage: async func() -> result<lineage, store-error>;
+}

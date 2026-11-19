@@ -1,164 +1,146 @@
 package cosmonic:agent@0.4.4;
 
-/// Change the caller's own toolsets while it runs: load one, set one aside,
-/// and see where each stands. Unstable behind `agent-spawn`.
-///
-/// It shares admission, the session ceiling and the function budget with the
-/// host's model-facing `load_tools` tool, so a harness that imports it can
-/// still let its model call `load_tools`.
+/// The caller may change its own toolsets while it runs: load one and set
+/// one aside. Unstable behind `agent-tool-loading`.
 ///
 /// A loaded toolset is one more component in the caller's own workload, with
-/// its own grants; the caller inherits none of them. The implementer offers
-/// its tools through the caller's own `tools` import and dispatches calls to
-/// it (so `tool-loading-provider` exports both interfaces), and offers them
-/// only to the component that loaded it.
+/// its own grants, offered through the caller's `tools` import to the
+/// component that loaded it only. This is the harness-facing form of the
+/// model-facing `load_tools` tool, with the same admission, so a harness may
+/// use either.
 ///
-/// Admission and the session ceiling are as `spawn-types` states; a load
-/// that needs a grantor returns `needs-approval` at once, never holding the
-/// run.
+/// Admission. A load within the caller's ceiling (its own reach, plus
+/// toolsets a person approved earlier in this session) is admitted at once;
+/// anything else waits on a grantor as `awaiting-approval`, and `load`
+/// returns without waiting. A person's approval lasts for the session:
+/// loading the identical toolset again later needs no prompt, until the
+/// person removes it.
 ///
-/// Already held. Before asking a grantor, `load` checks the caller's
-/// toolsets for an identical spec (same digest): an `offered` one is
-/// returned unchanged; a `ready` one returns to `offered` with no rollout
-/// once the session ceiling checks (snapshot, policy, revocation generation)
-/// pass again; a `loading` one is joined, and the load resolves with that
-/// rollout's result. A different spec under a name already held is
-/// `invalid-request`, before any prompt. A toolset the person removed is not
-/// held.
+/// Timing. A load serves the run in progress where the implementer can: the
+/// caller's `tools.list` includes the toolset's tools once it is `offered`.
+/// A harness that loads tools, or lets its model call `load_tools`, calls
+/// `tools.list` again before its next model call. An implementer that can
+/// change tools only between runs answers `next-run`.
 ///
-/// Same-run loading. A load serves the run in progress. Binding a toolset
-/// that is not bound yet is a rollout: the workload moves to a revision that
-/// adds the toolset's component, attached to the same session. The caller's
-/// instance keeps running the current run while the implementer routes calls
-/// to the new toolset by its component identity in the new revision; the old
-/// revision retires once that run ends. Every new component must start and
-/// pass its checks first, or `load` answers `unavailable` and the caller is
-/// left as it was (a component that started may have run its start-up
-/// code). Before publishing, the rollout checks that the toolset's session
-/// ceiling entry or admission still stands, so a toolset the person removed
-/// meanwhile never becomes callable and the load answers `denied`.
-///
-/// Next-run fallback. A host that cannot keep the old revision serving the
-/// run in progress while the new one serves calls may make the toolset
-/// callable from the caller's next run instead. It says so with
-/// `load-result.next-run`, and the toolset stays `loading` until the next
-/// run starts on the new revision. A harness that sees it finishes its run
-/// rather than polling.
-///
-/// Rollout deadline. Preparing a rollout (pulling, starting and checking the
-/// new components) has the operator's deadline, recommended two minutes.
-/// Past it the rollout is abandoned: the toolset leaves `loaded()` and frees
-/// its name and place, a joined `load` answers `unavailable`, and an
-/// identical `load` starts over. A prepared revision waiting for the next
-/// run is kept until that run starts on it or the toolset is removed.
-///
-/// Waiting. `load` resolves when the toolset is `offered` or when `wait`
-/// runs out, whichever is first. `wait` is capped by the implementer's limit
-/// (recommended 30 seconds) and by what the caller's run has left; none
-/// takes that limit. If the wait runs out first, `load` returns the toolset
-/// as `loading`: the rollout continues, `loaded` shows when it is `offered`
-/// (or drops it if the rollout fails), and an identical `load` joins it.
-///
-/// New definitions mid-run. The caller's next `tools.list` includes an
-/// `offered` toolset's tools and leaves out a `ready` one's. A harness that
-/// loads tools, or lets its model call `load_tools`, calls `tools.list`
-/// again before its next model call; the host serves it without running a
-/// guest. Where a provider can change tools mid-conversation without
-/// rewriting the prompt's prefix, the host's model adapter sends only the
-/// difference. Aliases never change within a session.
-///
-/// Function budget. A model's budget of functions offered at once comes from
-/// its model binding (`max-offered-functions`), which the workload manifest
-/// may only lower. A caller's budget is the smallest among the model aliases
-/// it is granted, for the whole session. When a load would exceed it, the
+/// Budget. The model's function budget (how many functions it is offered at
+/// once) comes from the model binding. When a load would exceed it, the
 /// implementer sets aside the least recently called toolset this caller
-/// loaded (never called before called, then the oldest load) and reports it
-/// in `load-result.set-aside`. It never sets aside a pinned toolset (the
-/// operator's and the person's own are pinned) or one loaded or called
-/// within the residency window (recommended three runs). When nothing can
-/// make room, `load` answers `over-limit` with scope `offered-functions`.
-/// Setting aside keeps the component and the approval. Unbinding happens
-/// only at the component cap (`loaded-toolsets`), only to set-aside
-/// toolsets with no call in flight, and only inside a load's own rollout.
-@unstable(feature = agent-spawn)
+/// loaded, never a pinned one, and says which.
+@unstable(feature = agent-tool-loading)
 interface tool-loading {
-    @unstable(feature = agent-spawn)
-    use wasi:clocks/types@0.3.0.{duration};
-    @unstable(feature = agent-spawn)
-    use spawn-types.{toolset-spec, toolset-state, admission-error};
+    @unstable(feature = agent-tool-loading)
+    use toolset-types.{toolset-source, toolset-state, store-error};
 
-    /// One toolset in the caller's session. A record, not a handle: the
-    /// toolset lives in the workload's revision and the session, not in the
-    /// caller's memory.
-    @unstable(feature = agent-spawn)
+    /// Who put a toolset in the session.
+    @unstable(feature = agent-tool-loading)
+    variant origin {
+        /// The workload's declaration. Pinned.
+        declared,
+        /// A person. Pinned.
+        person,
+        /// The caller or its model. May be set aside.
+        loaded,
+        /// An origin not captured above. Treat as pinned.
+        other(option<string>),
+    }
+
+    /// One toolset in the caller's session.
+    @unstable(feature = agent-tool-loading)
     record loaded-toolset {
-        /// The toolset's `toolset-spec.name`, unique among the caller's
-        /// toolsets.
+        /// Its name, unique among the caller's toolsets.
         name: string,
-        /// The aliases its tools are offered under, in the toolset's own
-        /// order. Model-facing names that carry no authority, stable for the
-        /// session and never given to another toolset's tool, even after
-        /// this one leaves; the same toolset name at a new digest takes them
-        /// back. The host records which digest each alias denoted in the tool
-        /// list sent with each model call, and refuses a call whose alias now
-        /// denotes another digest (`unknown-tool`).
+        /// The model-facing names its tools are offered under. They carry no
+        /// authority and do not change during the session.
         aliases: list<string>,
         /// Where it stands.
         state: toolset-state,
-        /// True when it is never set aside: the operator's or the person's
-        /// own, or pinned by the person.
-        pinned: bool,
-        /// True for a toolset the workload declared (the operator's), false
-        /// for one the caller or its model loaded.
-        declared: bool,
+        /// Who added it.
+        origin: origin,
     }
 
     /// What a load did.
-    @unstable(feature = agent-spawn)
+    @unstable(feature = agent-tool-loading)
     record load-result {
-        /// The toolset: `offered`, or `loading` when `wait` ran out first or
-        /// when `next-run` is true.
+        /// The toolset as it now stands.
         toolset: loaded-toolset,
-        /// True when the toolset becomes callable only from the caller's
-        /// next run (the next-run fallback).
-        next-run: bool,
-        /// Names of the toolsets this load set aside to stay within the
-        /// function budget, now `ready`.
+        /// Toolsets set aside to stay within the function budget.
         set-aside: list<string>,
     }
 
     /// The caller's toolsets and its function budget.
-    @unstable(feature = agent-spawn)
+    @unstable(feature = agent-tool-loading)
     record working-set {
-        /// Every toolset bound or loading in the caller's session, declared
-        /// ones first in declaration order, then loaded ones in load order.
-        /// A toolset unbound at the component cap is not listed, but stays
-        /// in the session ceiling, so loading it again needs no prompt.
+        /// Declared first, then loaded, in order.
         toolsets: list<loaded-toolset>,
-        /// Functions offered to the model now, the host's own discovery
-        /// tools included.
+        /// Functions offered to the model now.
         offered-functions: u32,
         /// The model's function budget, where one applies.
         max-offered-functions: option<u32>,
     }
 
-    /// Return the toolset if it is held already, refuse a name held by a
-    /// different spec, and otherwise admit it and bind it. Resolves once it
-    /// is callable or `wait` runs out.
-    @unstable(feature = agent-spawn)
-    load: async func(spec: toolset-spec, wait: option<duration>) -> result<load-result, admission-error>;
+    /// Which limit a load would exceed.
+    @unstable(feature = agent-tool-loading)
+    variant load-limit {
+        /// Nothing can be set aside to stay within the function budget.
+        offered-functions,
+        /// Toolset components bound in the workload.
+        loaded-toolsets,
+        /// Approvals pending at once.
+        pending-approvals,
+        /// A limit not captured above.
+        other(option<string>),
+    }
 
-    /// Set aside a toolset this caller loaded, by name: its definitions
-    /// leave the model's tool list from the next `tools.list` on, and it
-    /// becomes `ready`. Its component and approval stay, so loading it again
-    /// needs no prompt and no rollout. Only a person removes a toolset from
-    /// the session. A call in progress finishes. A toolset still `loading`
-    /// answers `unavailable`; retry once it is `offered`. An unknown name is
-    /// `invalid-request`; a pinned or declared toolset is `denied`.
-    @unstable(feature = agent-spawn)
-    unload: async func(name: string) -> result<_, admission-error>;
+    /// Why a load added nothing.
+    @unstable(feature = agent-tool-loading)
+    variant load-error {
+        /// Loading is not enabled for this caller. Permanent.
+        disabled,
+        /// Policy or a person refused, or a refusal's cooldown is running.
+        denied(option<string>),
+        /// Another toolset already holds the name.
+        name-taken,
+        /// A limit would be exceeded; the value where reported.
+        over-limit(tuple<load-limit, option<u64>>),
+        /// Malformed: an unknown catalog name or function, or a component
+        /// whose imports its grants do not cover.
+        invalid(string),
+        /// Could not be served now, or the toolset failed to start. Retry
+        /// may succeed.
+        unavailable(string),
+        /// A failure not captured above.
+        other(option<string>),
+    }
 
-    /// The caller's toolsets and its function budget now.
-    @unstable(feature = agent-spawn)
-    loaded: async func() -> working-set;
+    /// Why a set-aside did nothing.
+    @unstable(feature = agent-tool-loading)
+    variant unload-error {
+        /// The caller holds no toolset of that name.
+        unknown-toolset,
+        /// It is pinned (declared, or added by a person).
+        pinned,
+        /// It is still loading or awaiting approval.
+        not-offered,
+        /// Could not be served now.
+        unavailable(string),
+        /// A failure not captured above.
+        other(option<string>),
+    }
+
+    /// Load a toolset, or return it as it stands if the caller already holds
+    /// the identical one. Resolves at admission; a toolset that must wait
+    /// for a grantor or a rollout comes back `awaiting-approval` or
+    /// `loading`, and a later identical `load` returns its progress.
+    @unstable(feature = agent-tool-loading)
+    load: async func(toolset: toolset-source) -> result<load-result, load-error>;
+
+    /// Set aside a toolset the caller loaded: its tools leave the model's
+    /// list from the next `tools.list`, and it becomes `ready`. Its component
+    /// and approval stay. A call in progress finishes.
+    @unstable(feature = agent-tool-loading)
+    set-aside: async func(name: string) -> result<_, unload-error>;
+
+    /// The caller's toolsets now.
+    @unstable(feature = agent-tool-loading)
+    list-toolsets: async func() -> result<working-set, store-error>;
 }

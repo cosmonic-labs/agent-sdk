@@ -1,0 +1,326 @@
+# Spawn and tool loading: conformance
+
+What an implementer of `tool-discovery`, `tool-loading`, `lineage`,
+`children` and `spawn` must do. The WIT comments say what a caller can
+observe and rely on; this page says how an implementer keeps those promises.
+[RATIONALE.md](RATIONALE.md) says why. Everything is unstable.
+
+"Must" is a requirement for any implementer that serves real agents. A test
+double or a policy layer in front of a conforming implementer may skip the
+mechanics but must not contradict what a caller observes.
+
+## Profiles
+
+| Requirement | Single-machine implementer | Implementer that places sessions across machines |
+| --- | --- | --- |
+| Session store | Local, durable across restarts | Shared and linearizable (compare-and-swap) for leases, generations, names, approvals and limit reservations; a zone that cannot answer consistently answers `unavailable` |
+| Leases and fencing | Met trivially: a run and its store share a process; a restart ends every run in progress as `host-lost` | Required as below |
+| Re-placement delay | Not needed | Required |
+| Brokered calls | Checked locally | A broker away from the run checks the generation with the store and fails closed |
+| Placement | One machine | Operator policy (labels, zones); never a caller input |
+
+Everything else applies to both.
+
+## Caller identity and sessions
+
+- **One session per workload.** Serve these imports only to a workload bound
+  to one session for its whole life; answer `disabled` otherwise. None of the
+  imports takes a session handle, so the implementer attributes each call by
+  the caller's workload incarnation (minted at creation, kept across rollouts
+  and restarts) and component name, and maps them to the session. On a
+  runtime that gives host plugins the caller's workload and per-workload bind
+  configuration, put the session id there when creating the workload.
+- **Run context.** The implementer that drives a session's runs passes the
+  plugin, for each call, the calling run's id, fencing generation, deadline
+  and trace context. The plugin uses them for the stopping barrier, fencing,
+  budget checks and trace propagation.
+- **Policy layers** sit in front of the implementer, installed by the host,
+  and pass the original caller through. A guest component placed between a
+  caller and the implementer would become the caller, so there is no
+  guest-side policy world (see the virtualization note in the rationale).
+
+## Reach and the ceiling
+
+- **Reach is grants intersected with imports.** Read a component's import
+  list from the pinned binary before running anything. Refuse (`invalid`) a
+  component that imports a capability its world and grants do not cover.
+  Drop a grant for an interface the component does not import before the
+  ceiling check and before asking anyone. Show the import list to the grantor
+  and in discovery offers.
+- **No agent powers by grant.** Refuse an `interface-grant` naming a
+  `cosmonic:agent` interface. Powers reach a child only through
+  `agent-powers`, and only if the caller holds them.
+- **The ceiling** is the caller's own grants (containment) plus its toolset
+  entries (exact match): declared toolsets, a child's spawned toolsets, and
+  the session ceiling. An entry's reach never counts as the caller's own.
+- **Containment.** A volume fits a mount of the same storage at the same path
+  or below; read-write fits only read-write; names are never compared.
+  Allowed hosts, after normalization (lowercase, A-labels, one trailing dot
+  stripped, default ports dropped): `*` contains everything; a bare `h`
+  contains `h` and `scheme://h` at the default port for `http`, `https`,
+  `ws`, `wss`; `h:p` contains `h:p` and `scheme://h:p`; `scheme://h[:p]`
+  contains only itself; `*.d` contains hosts ending in `.d` at any depth,
+  never `d`. A model alias fits one the caller was granted. A grant whose
+  reach cannot be compared does not fit.
+- **Within the ceiling,** admit at once only digests in the operator's
+  catalog or matching an entry; send any other digest to a grantor.
+- **Toolsets are dispatched, never linked.** A toolset's exports are reached
+  only through dispatch; its imports are served only by its own grants. Refuse
+  a toolset the runtime would link to a sibling (for example a tool provider
+  under a served-within-workload rule).
+
+## Approvals
+
+- **Snapshot.** Before asking, resolve the request into an immutable
+  snapshot: the storage behind each volume, the binding behind each
+  credential, the secret behind each name, the model behind the alias, an
+  agent definition's content, each interface grant's resource, every
+  executable digest and import list, and every default the request left open.
+  Show it to the grantor; never return it to the caller. Admitting re-resolves
+  and compares; any difference asks again.
+- **Spawn.** The child exists from the first accepted `spawn`, in `pending`.
+  The grant admits that child in place; a refusal stops it (`denied`). One
+  approval admits one child: it is a property of that session, so there is
+  nothing to resend or consume. Pending children hold no instance and no
+  reach; their first run waits as `blocked(admission)`. `max-duration` starts
+  at admission.
+- **Load.** The toolset waits as `awaiting-approval`; a later identical
+  `load` returns that state. A grant admits it and adds it to the **session
+  ceiling**: an entry keyed to the caller, the toolset and its snapshot. A
+  later identical load is within the ceiling, re-checked against the snapshot
+  and current policy each time.
+- **A spawn's approved toolsets** become the child's own entries, bound to
+  that child's request (output shape, size limit, budget, powers). They never
+  join the parent's ceiling, so the parent cannot load them and another child
+  cannot use them.
+- **Removal.** Only a person removes a session ceiling entry, in the host's
+  UI. Removal withdraws what rests on it: a pending approval for it, a
+  rollout adding it (not published; the load reports `denied`), its binding,
+  calls to it in flight, and descendants' admissions that rested on it. The
+  session's revocation generation, advanced by each removal, only detects
+  races: a step that started before a removal re-checks that its own entry
+  still exists. The host UI lists every entry, bound or not.
+- **Cooldown and caps.** After a refusal or removal, matching requests (same
+  executable digests and resolved reach, whatever the names) answer `denied`
+  without a prompt for the cooldown. A root's refusal covers the tree; a
+  descendant's covers its subtree. Pending approvals are capped per caller,
+  per child subtree, and per tree, with one place kept for the root.
+- **Grantor summaries** use catalog names, image references confirmed
+  against the registry, and caller-chosen names as quoted identifiers limited
+  to `[a-z0-9-_./:]`. Never caller free text.
+
+## Children
+
+- **Names.** A child's name is scoped to the spawning component in its
+  session. A run's name is scoped to the child. Keep at least the 256 most
+  recent run names per child and the 16 most recent outcomes; `wait` on an
+  older run answers `failed(expired)`. Keep ended children listed for a
+  retention window (recommended the 100 most recent per tree); while listed,
+  `get-child`, `wait`, `cancel` and `end` work on them.
+- **Authority by provenance.** For each of a child's grants and entries,
+  record what it rested on: an ancestor's grant or entry, or a grantor's
+  approval of this child. At each run acceptance and each child load,
+  re-check against that authority as it stands and against current policy. A
+  toolset that no longer fits is withdrawn; a child whose own grants no
+  longer fit is `stopped(revoked)`. A child's own load beyond its ceiling
+  goes to a grantor only if every ancestor's ceiling covers it; otherwise
+  `denied`.
+- **Lifetime.** A child ends on `end`, its `max-duration`, its parent
+  session's end, or when the spawning component's identity ends (workload
+  deleted or recreated).
+- **Outputs.** With `structured-only`, return only the validated structured
+  value; build `finish`, `model` and counts from the implementer's own
+  records. Copy stored attachments across the boundary and re-issue them in
+  the receiving session; they count toward `max-bytes`.
+- **Labels and names** of sessions below the caller's direct children are
+  never returned, since a child wrote them.
+
+## Runs, leases and fencing
+
+For implementers that place sessions across machines.
+
+- **Every run holds a lease** with a fencing generation: root runs, runs a
+  parent starts, and runs a person starts by talking to a child. Each counts
+  against budgets and limits and is stopped by its ancestors' `cancel`.
+- **The store decides expiry** (recommended 60 seconds after the last
+  renewal). The generation closes when the run ends or the lease expires;
+  the store then rejects any write, outcome or dispatch it mediates under
+  that generation. Whichever machine next reads the child reports the run
+  `host-lost`; no particular machine has to be alive.
+- **Self-fencing.** The running machine stops the run's instances (agent and
+  toolsets) and cancels calls in flight once its monotonic clock shows the
+  store's timeout minus a margin (recommended 15 seconds) since it *sent* its
+  last renewal that succeeded. A late reply does not revive a fenced run.
+- **Brokered calls** (model calls, credential-brokered egress, tool dispatch,
+  writes through a host-managed store) carry the generation. A broker on the
+  run's machine admits them while that machine's fence has not fired; a
+  broker elsewhere checks the store and fails closed.
+- **Re-placement delay.** After expiry, the child's next run is accepted but
+  starts only after a delay counted from expiry (at least the self-fence
+  margin, recommended 30 seconds), shown as `blocked(placement-delay)`.
+- **Journal completion.** After a run that did not finish, once its
+  generation is closed and before a new lease opens, append the closing
+  entries the run could not: `agent.op-result.v1` with outcome `unresolved`
+  for each tool op with no result, then `agent.run-result.v1` with outcome
+  `cancelled` or `failed` and why. Nothing is replayed.
+- **What fencing does not stop.** Effects already under way when the fence
+  fires, and a machine whose clock misbehaves (a paused virtual machine), can
+  overlap a new run, within the child's own reach. Direct egress through a
+  component's own grants cannot be fenced.
+
+## Stopping
+
+- **Barrier.** `cancel`, `end` and a person's stop first mark the whole
+  subtree as cancelling in the store, atomically. Until the stop completes,
+  refuse every run acceptance in the subtree: `spawn` and `send` from inside
+  (`denied`, `stopped`), `send` from outside (`busy`), and runs a person or
+  trigger would start.
+- **Force.** Cancel cooperatively; after the grace period (recommended 15
+  seconds) stop each remaining run's instances as for self-fencing, stop
+  metering, and refuse that run's lease renewals, telling the renewing
+  machine to stop. A machine the request cannot reach is stopped by its
+  lease.
+- **Completion.** `cancel` and `end` resolve when every run in the subtree
+  has ended or lost its lease: within the grace period plus the lease
+  timeout. Effects already under way are not undone.
+
+## Budgets and limits
+
+- **Every root is finite.** A token budget over the whole tree (the root's
+  own calls included) and an active-time budget (time during which any run
+  in the tree is in progress). An operator may raise them, never remove them.
+- **Subtree charging.** A session's spend counts against it and every
+  ancestor. When a budget is spent, runs below it finish `max-total-tokens`
+  or `max-duration`, and the sessions below it are `stopped(exhausted)` until
+  an operator or person raises it.
+- **Metering.** The broker serving model calls reserves the estimated prompt
+  plus the call's maximum output before each call, refuses when any budget on
+  the path cannot cover it, and settles real usage afterwards. A provider
+  that reports no usage is charged the estimate. Spend is recorded outside
+  the run's generation, so a fenced run's spend still counts.
+- **Remaining budgets** are exact for the caller's own limits and coarse for
+  ancestors' (rounded down to a power of two tokens or a whole minute,
+  refreshed at most once a minute).
+- **`max-spawns`** limits spawning only. Its default is the operator's,
+  computed once when the request is first checked and fixed in the snapshot.
+- **Reservations.** Every spawn and run acceptance reserves its place
+  atomically.
+
+### Defaults
+
+| Setting | Default |
+| --- | --- |
+| Depth | 3 |
+| Runs in progress per tree | 20 (fail fast, never queue) |
+| Live children per tree | 50 |
+| Children spawned per tree | 500 |
+| `max-spawns` when unset | a quarter of what is left of the tree's total |
+| Pending approvals | 3 per caller, 3 per child subtree, 5 per tree |
+| Refusal cooldown | 1 hour |
+| Offered functions | 32 hosted frontier models, 20 unknown, 10 local models up to about 14B parameters |
+| Rollout preparation | 2 minutes, then abandoned |
+| Residency before set-aside | 3 runs |
+| Lease timeout, self-fence margin, re-placement delay | 60 s, 15 s, 30 s |
+| Cancel grace period | 15 s |
+| `watch-children` streams | 4 per caller |
+
+## Tool loading
+
+- **Same run where possible.** Tools are dispatched, so a new toolset can be
+  callable while the caller's instance keeps running: roll the workload out
+  to a revision that adds the component, route calls to it there, and retire
+  the old revision when the run ends. An implementer that cannot do this
+  reports `next-run`. Before publishing, check the toolset's entry or
+  admission still stands.
+- **Rollout deadline.** Abandon a rollout not prepared within the deadline:
+  the toolset leaves the list and frees its name. A revision prepared for the
+  next run is kept until that run starts on it.
+- **Function budget.** From the model binding (`max-offered-functions`),
+  which the manifest may only lower; the smallest among the caller's model
+  aliases. Set aside the least recently called toolset the caller loaded
+  (never called first, then oldest), never a pinned one or one loaded or
+  called within the residency window. Unbind only at the component cap, only
+  set-aside toolsets with no call in flight.
+- **Aliases** are fixed for the session and never reused for another
+  toolset's tool. Record which digest each alias denoted in the tool list
+  sent with each model call, and refuse a call whose alias now denotes
+  another.
+- **Results** are bounded as `tool-types.tool-response` describes.
+
+## Resources served across stores
+
+The only resource here is `spawn.child`, and it carries nothing but the
+child's name: all state is in the session store, keyed by name. On a runtime
+where a resource served by a component host plugin is proxied into the
+caller's store, a caller that crashes holding a handle leaves the plugin's
+side registered until the plugin restarts (wash-runtime documents this for
+its cross-store resource bridge). An implementer should therefore keep the
+plugin-side object to the name alone and reclaim objects whose caller's
+workload has stopped. A native host plugin, whose resources live in the
+caller's own store, has no such leak. Durability never depends on a handle:
+`get-child` reaches the same child by name from any run or machine.
+
+## Audit and traces
+
+- Record every admission (catalog, entry or grantor), refusal, removal,
+  withdrawal, set-aside, unbind, cancel, end and lease expiry, each naming
+  what it rested on.
+- Start each child run in the calling run's trace (W3C `traceparent` only,
+  never `tracestate` or baggage): as a child span while the calling run is in
+  progress, a linked span after. Use the session id as the conversation id.
+
+## Conformance cases
+
+Each case names the property it checks.
+
+1. **One approval, one child.** Spawn a beyond-ceiling child: it is
+   `pending`, with no instance. Spawn the same name and request again: the
+   same child, still one approval. Grant it: `live`. Spawn another name with
+   the same request: a new approval. Deny one: `stopped(denied)`, and a
+   matching request in the cooldown answers `denied`.
+2. **The parent gains nothing.** After approving a child's toolset, the
+   parent's `load` of it waits on a grantor, and a second child using it with
+   a wider output shape waits too.
+3. **Session ceiling.** Approve a load. Set it aside and load again:
+   `offered` with no prompt. Have the person remove it: the next load waits on
+   a grantor. Remove it during its rollout: the rollout is not published.
+   Rebind its volume or publish a new digest: it waits again.
+4. **Reach from imports.** A toolset whose component imports no HTTP or
+   socket interface but is granted allowed hosts: the hosts are dropped before
+   the ceiling check. A component importing a capability nothing grants:
+   `invalid`. An interface grant naming `cosmonic:agent/spawn`: `invalid`.
+5. **Never beyond an ancestor.** A child whose agent grants exceed the
+   parent's: `denied`. Narrow the parent's grants: the child's next `send`
+   answers `stopped`, and its state is `stopped(revoked)`. Remove a parent's
+   entry a child's toolset rested on: the child loses it.
+6. **Names and retries.** Send run `r1`, drop the reply, send `r1` again with
+   the same message: one run. With another message: `name-taken`. Drop the
+   handle, call `get-child` from a fresh instance: the same child, `wait` on
+   `r1` returns its outcome.
+7. **State, not notices.** Start runs in three children and end the caller's
+   run. The next run's `list-children` shows each child's `last-run` with its
+   state.
+8. **Subtree stop.** Cancel a child whose agent ignores cancellation: after
+   the grace period its instances stop, metering stops, renewals are refused,
+   and `cancel` resolves. During the stop, a `send` into the subtree answers
+   `busy` and a spawn from inside answers `denied`.
+9. **Lost machine.** Cut off a child's machine mid-run: within the lease
+   timeout its `last-run` is `failed(host-lost)`; a later write from that
+   machine is rejected; the next run shows `blocked(placement-delay)`; the
+   journal ends the interrupted run with `unresolved` op results.
+10. **Budgets.** Spend in a grandchild counts against its parent and root.
+    Spend a root's tokens: runs below finish `max-total-tokens` and children
+    are `stopped(exhausted)`. A sibling's `get-lineage` shows only coarse
+    ancestor figures.
+11. **Structured only.** A child that writes text in its reply, finish
+    reason and model name: the caller sees only the structured value and the
+    implementer's own fields.
+12. **Sessions apart.** The same component in two sessions on a host that
+    shares workloads: `disabled`. Two sibling components: neither sees the
+    other's children.
+13. **Same-run loading.** Load a toolset mid-run and call it in the same run,
+    or get `next-run` and see its tools in the next run's `tools.list`. A
+    hung rollout leaves the list after the deadline.
+14. **Handles.** End a child through its handle: the handle is consumed and
+    the child ends. Crash a caller holding handles: the children are
+    unaffected and reachable by name.
