@@ -134,8 +134,9 @@ interface tool-loading {
     /// that fails or runs out of time answers `unavailable`). If the caller
     /// already holds the identical one, a `ready` one returns to `offered`
     /// (after the same checks, setting another aside if the budget needs
-    /// room), a `loading` one is joined, and any other is returned as it
-    /// stands. Dropping the call stops waiting; the load goes on.
+    /// room), a `loading` one is joined, a `failed` or `denied` one is loaded
+    /// afresh (a refusal's cooldown still applies), and any other is returned
+    /// as it stands. Dropping the call stops waiting; the load goes on.
     @unstable(feature = agent-tool-loading)
     load: async func(toolset: toolset-source) -> result<load-result, load-error>;
 

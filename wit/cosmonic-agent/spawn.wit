@@ -29,8 +29,10 @@ package cosmonic:agent@0.4.4;
 /// `pending` (no instance, no reach) until a grantor decides; runs sent to it
 /// wait (`blocked(admission)`). A refusal, an expired request, or `end`
 /// while pending ends the child, and its waiting runs fail `not-admitted`.
-/// One approval admits one child, and that child only: its own descendants
-/// need their own approval for what was approved for it.
+/// One approval admits one child, and that child only: what was approved
+/// for it counts as beyond its ceiling when its own children ask, so they
+/// are refused unless every higher ancestor holds it, and then need their
+/// own approval.
 ///
 /// Stopping reaches the subtree. `cancel` and `end` cancel every run in
 /// progress below the child, cooperatively and then by force after a grace
@@ -264,8 +266,9 @@ interface spawn {
         cancel: async func() -> result<_, store-error>;
 
         /// End the child and every session below it, after cancelling as
-        /// `cancel` does. Consumes the handle; after an error the child is
-        /// as it was, and `get-child` gives a new handle.
+        /// `cancel` does. Consumes the handle. Once begun, ending completes
+        /// even if this call fails; ending again (through `get-child`) is
+        /// harmless and reports when it is done.
         @unstable(feature = agent-spawn)
         end: static async func(this: child) -> result<_, store-error>;
     }
