@@ -32,7 +32,8 @@ package cosmonic:agent@0.4.4;
 /// `invalid-request`, before any prompt. A toolset the person removed is no
 /// longer held, so this never brings one back.
 ///
-/// Same-run loading. A load serves the run in progress. Binding a toolset
+/// Same-run loading. A load serves the run in progress: that is the goal
+/// and the preferred behaviour. Binding a toolset
 /// that is not bound yet is a rollout: the implementer rolls the caller's
 /// workload out to a revision that adds the toolset's component, attached to
 /// the same session. The run in progress is not moved: the caller's instance
@@ -41,9 +42,24 @@ package cosmonic:agent@0.4.4;
 /// only once the run in progress has ended. Every new component must start
 /// and pass its checks first; a toolset that cannot start leaves the caller
 /// as it was and `load` answers `unavailable` (a component that started may
-/// have run its own start-up code). A rollout publishes only if the
-/// session's revocation generation is unchanged, so a toolset the person
-/// removed meanwhile never becomes callable.
+/// have run its own start-up code). Before it publishes, a rollout checks
+/// the toolset's own session ceiling entry or admission still stands (see
+/// the session ceiling in `spawn-types`), so a toolset the person removed
+/// meanwhile never becomes callable; that load answers `denied`.
+///
+/// Next-run fallback. A host that cannot yet keep the old revision serving
+/// the run in progress while the new one serves calls may instead make the
+/// toolset callable from the caller's next run. That is conformant, and the
+/// host says so: `load-result.next-run` is true, and the toolset stays
+/// `loading` until the next run starts on the new revision. A harness that
+/// sees it finishes its run (the host may start the next run at once) rather
+/// than polling.
+///
+/// Rollout deadline. Every rollout has a deadline (the operator's,
+/// recommended two minutes). A rollout that has not finished by then is
+/// abandoned: the toolset leaves `loaded()`, frees its name and its place,
+/// a joined `load` answers `unavailable`, and an identical `load` starts
+/// again.
 ///
 /// `load` resolves when the toolset is callable (`offered`), or when `wait`
 /// runs out, whichever comes first. `wait` is capped by the implementer's
@@ -68,8 +84,8 @@ package cosmonic:agent@0.4.4;
 /// once, from its model binding (`max-offered-functions`), which the
 /// workload manifest may only lower. A caller's budget is the smallest
 /// among the model aliases it is granted, for the whole session, so
-/// switching models never exceeds a model's budget. When a load would go over it, the
-/// implementer sets aside the least recently called toolset this caller
+/// switching models never exceeds a model's budget. When a load would go
+/// over it, the implementer sets aside the least recently called toolset this caller
 /// loaded (never called before called, then the oldest load) and reports it
 /// in `load-result.set-aside`. It never sets aside a pinned toolset (the
 /// operator's and the person's own are pinned) or one loaded or called
@@ -96,8 +112,9 @@ interface tool-loading {
         name: string,
         /// The aliases its tools are offered under, in the toolset's own
         /// order. Model-facing selection keys that carry no authority,
-        /// stable for the session, and never given to another tool even
-        /// after this toolset leaves.
+        /// stable for the session, and never given to another toolset's
+        /// tool even after this toolset leaves; the same toolset name at a
+        /// new digest takes them back.
         aliases: list<string>,
         /// Where it stands.
         state: toolset-state,
@@ -112,8 +129,13 @@ interface tool-loading {
     /// What a load did.
     @unstable(feature = agent-spawn)
     record load-result {
-        /// The toolset, `offered`, or `loading` when `wait` ran out first.
+        /// The toolset: `offered`, or `loading` when `wait` ran out first or
+        /// when `next-run` is true.
         toolset: loaded-toolset,
+        /// True when the toolset becomes callable only from the caller's
+        /// next run (the next-run fallback). False when it serves the run in
+        /// progress, as preferred.
+        next-run: bool,
         /// Names of the toolsets this load set aside to stay within the
         /// function budget, now `ready`.
         set-aside: list<string>,
