@@ -13,10 +13,13 @@ package cosmonic:agent@0.4.4;
 /// and the child lives on, and `get-child` finds it again from any later
 /// run.
 ///
-/// Names are idempotency keys. Spawning a name that exists returns that
-/// child if the request is identical, and `name-taken` otherwise; sending a
-/// run name that exists returns that run if the message is identical. A
-/// resend after a lost reply never starts a second child or run.
+/// Names are idempotency keys and are never reused: a child's name within
+/// the caller's session, and a run's name within its child, stay taken after
+/// the child or run ends. Spawning a name that exists returns that child if
+/// the request and first run are identical, and `name-taken` otherwise;
+/// sending a run name that exists returns that run if the message is
+/// identical. A resend after a lost reply never starts a second child or
+/// run.
 ///
 /// Admission happens in place. A request within the caller's ceiling is
 /// admitted at once. Otherwise the child exists in state `pending` (no
@@ -99,9 +102,10 @@ interface spawn {
     }
 
     /// Powers a child may receive; it gets one only if the caller holds it.
+    /// Every child may read its own `lineage`.
     @unstable(feature = agent-spawn)
     flags agent-powers {
-        /// Spawn children of its own.
+        /// Spawn and drive children of its own, and see them (`children`).
         spawn,
         /// Ask which toolsets are available.
         tool-discovery,
@@ -253,10 +257,10 @@ interface spawn {
         end: static async func(this: child) -> result<_, store-error>;
     }
 
-    /// Create the caller's child named `name`, or return it if it exists with
-    /// this request. The name is 1 to 64 characters of `[a-z0-9-]`, unique
-    /// within the caller's own children. Resolves when the request is
-    /// accepted, pending or admitted.
+    /// Create the caller's child named `name` and its first run, together or
+    /// not at all, or return them if they exist with this request and first
+    /// run. The name is 1 to 64 characters of `[a-z0-9-]`. Resolves when the
+    /// request is accepted, pending or admitted.
     @unstable(feature = agent-spawn)
     spawn: async func(
         name: string,
