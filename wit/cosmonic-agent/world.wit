@@ -95,10 +95,9 @@ world compact-client {
     import compact;
 }
 
-/// The power to read and watch the state of the session the host binds:
-/// working, needs input, idle, done or failed. Holds only this import. For a
-/// component that drives or watches an agent and reports where its session
-/// stands, such as an adapter that serves a status endpoint. Kept apart from
+/// Read and watch the state of the session the host binds. Holds only
+/// `session-status`, for a component that reports where an agent's session
+/// stands, such as an adapter serving a status endpoint. Separate from
 /// `run-client`, so watching a session never grants driving it.
 @unstable(feature = session-status)
 world status-client {
