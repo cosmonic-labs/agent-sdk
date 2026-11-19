@@ -92,6 +92,7 @@ struct Ask<'a> {
     text: &'a str,
     schema: Option<&'a str>,
     effort: Option<Effort>,
+    max_steps: u32,
     /// Drop the event stream after this many events.
     limit: Option<usize>,
 }
@@ -103,6 +104,7 @@ impl<'a> Ask<'a> {
             text,
             schema: None,
             effort: None,
+            max_steps: 8,
             limit: None,
         }
     }
@@ -157,7 +159,7 @@ impl Fixture {
             run_id: ask.id.into(),
             instructions: Some("Be brief.".into()),
             schema: ask.schema.map(str::to_string),
-            max_steps: Some(8),
+            max_steps: Some(ask.max_steps),
             max_total_tokens: None,
             max_duration: Some(60_000_000_000),
             effort: ask.effort,
@@ -302,7 +304,10 @@ async fn tool_turn(f: &Fixture) -> Result<()> {
     ensure!(host.chats.len() == 2, "{} model calls", host.chats.len());
     let first = &host.chats[0];
     ensure!(
-        first.tools == ["echo", "explode", "shout", "count"],
+        first.tools
+            == [
+                "echo", "explode", "shout", "stall", "peek", "queue", "count"
+            ],
         "tools offered: {:?}",
         first.tools
     );
@@ -311,6 +316,9 @@ async fn tool_turn(f: &Fixture) -> Result<()> {
             ToolInput::JsonSchema(echo),
             ToolInput::JsonSchema(_),
             ToolInput::Text,
+            ToolInput::JsonSchema(_),
+            ToolInput::JsonSchema(_),
+            ToolInput::JsonSchema(_),
             ToolInput::Grammar(count),
         ] if echo.contains("\"required\"") && count.definition == "[0-9]+"),
         "tool inputs not passed through: {:?}",
@@ -591,13 +599,199 @@ async fn freeform(f: &Fixture) -> Result<()> {
     Ok(())
 }
 
+/// A tool call whose outcome is unknown stops the run: it is recorded as
+/// unresolved, the calls after it are not made, the model is not called
+/// again, and the stored conversation does not move past it.
+async fn unresolved(f: &Fixture) -> Result<()> {
+    let (from, chats, calls, turns) = {
+        let host = f.host();
+        (
+            host.entries.len(),
+            host.chats.len(),
+            host.tool_calls.len(),
+            host.turns(),
+        )
+    };
+    let events = match f.run(Ask::new("r-stall", "stall then echo")).await? {
+        Ran::Started {
+            events,
+            outcome: Err(RunError::Failed(why)),
+        } => {
+            ensure!(why.contains("call-stall"), "failure: {why}");
+            // The person reads what the model would: the call ran out of
+            // time, and what to ask for instead.
+            ensure!(
+                why.contains("reached its time limit") && why.contains("ask for less"),
+                "failure: {why}"
+            );
+            events
+        }
+        Ran::Started { outcome, .. } => bail!("expected failed, got {outcome:?}"),
+        Ran::Refused(e) => bail!("did not start: {e:?}"),
+    };
+    let host = f.host();
+    ensure!(
+        host.chats.len() == chats + 1,
+        "the model was called again after an unresolved call"
+    );
+    let made: Vec<&str> = host.tool_calls[calls..]
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    ensure!(made == ["stall"], "tool calls made: {made:?}");
+    let entries: Vec<serde_json::Value> = host.entries[from..].iter().map(|e| e.json()).collect();
+    let run = &host.entries[from..];
+    let recorded = run
+        .iter()
+        .position(|e| {
+            let j = e.json();
+            j["op"] == "call-stall" && j["outcome"] == "unresolved"
+        })
+        .context("the call is not recorded as unresolved")?;
+    // The tool result is journaled as the step after the op's result, and the
+    // event carries that step's seq.
+    let step = run[recorded..]
+        .iter()
+        .find(|e| e.kind == "agent.step.v1")
+        .context("no journaled step for the unresolved call")?;
+    ensure!(
+        events.iter().any(|e| matches!(e, RunEvent::Step(s)
+            if s.seq == Some(step.seq)
+                && matches!(&s.content, StepContent::Tool(r)
+                    if r.first().is_some_and(|r| r.call_id == "call-stall" && r.is_error
+                        && tool_text(r).contains("may have done some or all of its work"))))),
+        "no error tool step for the unresolved call at its journal seq"
+    );
+    ensure!(
+        !entries.iter().any(|e| e["op"] == "call-after-stall"),
+        "the call after it was recorded"
+    );
+    let result = entries.last().context("empty journal")?;
+    ensure!(
+        result["run"] == "r-stall" && result["outcome"] == "failed",
+        "{result}"
+    );
+    ensure!(host.turns() == turns, "the stored conversation moved on");
+    Ok(())
+}
+
+/// A tool call that timed out before it started had no effect, so the run
+/// goes on: the model gets the timeout's text, which tells it to ask for less
+/// rather than repeat the call.
+async fn timed_out_before_start(f: &Fixture) -> Result<()> {
+    let (events, outcome) = started(f.run(Ask::new("r-queue", "queue it")).await?)?;
+    ensure!(
+        matches!(outcome.finish, Finish::Done),
+        "finish: {:?}",
+        outcome.finish
+    );
+    let said = reply_text(&outcome);
+    ensure!(
+        said.contains("had no effect") && said.contains("Do not repeat the same call"),
+        "reply: {said}"
+    );
+    ensure!(
+        events.iter().any(|e| matches!(e, RunEvent::Step(s)
+            if matches!(&s.content, StepContent::Tool(r)
+                if r.first().is_some_and(|r| r.call_id == "call-queue" && r.is_error)))),
+        "no error tool step for the call"
+    );
+    Ok(())
+}
+
+/// A read-only tool that timed out has no effects to resolve, so the run goes
+/// on: the call is closed as failed, the model gets the timeout's text, and
+/// the stored conversation moves on.
+async fn read_only_timed_out(f: &Fixture) -> Result<()> {
+    let (from, turns) = {
+        let host = f.host();
+        (host.entries.len(), host.turns().len())
+    };
+    let (events, outcome) = started(f.run(Ask::new("r-peek", "peek at it")).await?)?;
+    ensure!(
+        matches!(outcome.finish, Finish::Done),
+        "finish: {:?}",
+        outcome.finish
+    );
+    let said = reply_text(&outcome);
+    ensure!(
+        said.contains("may have done some or all of its work")
+            && said.contains("Do not repeat the same call"),
+        "reply: {said}"
+    );
+    ensure!(
+        events.iter().any(|e| matches!(e, RunEvent::Step(s)
+            if matches!(&s.content, StepContent::Tool(r)
+                if r.first().is_some_and(|r| r.call_id == "call-peek" && r.is_error
+                    && tool_text(r).contains("Do not repeat the same call"))))),
+        "no error tool step with the timeout's text for the call"
+    );
+    let host = f.host();
+    ensure!(
+        host.entries[from..].iter().any(|e| {
+            let j = e.json();
+            j["op"] == "call-peek" && j["outcome"] == "failed"
+        }),
+        "the call is not closed as failed"
+    );
+    let stored = host.turns();
+    ensure!(
+        stored.len() > turns,
+        "the stored conversation did not move on"
+    );
+    ensure!(
+        stored[turns..]
+            .iter()
+            .any(|t| t["results"].as_array().is_some_and(|rs| rs
+                .iter()
+                .any(|r| r["call_id"] == "call-peek"
+                    && r["is_error"] == true
+                    && r["text"].as_str().is_some_and(|t| t.contains("time limit"))))),
+        "the stored conversation has no error result for the call"
+    );
+    Ok(())
+}
+
+/// A tool result's text parts, joined.
+fn tool_text(r: &host::types::ToolResult) -> String {
+    r.output
+        .iter()
+        .filter_map(|o| match o {
+            host::types::ToolOutput::Text(t) => Some(t.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A request too long for the model's context is retried once with a
+/// shorter conversation, but never past the run's step limit.
+async fn too_long_at_the_limit(f: &Fixture) -> Result<()> {
+    let chats = f.host().chats.len();
+    let ask = Ask {
+        max_steps: 1,
+        ..Ask::new("r-long", "too long for one step")
+    };
+    let outcome = match f.run(ask).await? {
+        Ran::Started { outcome, .. } => outcome,
+        Ran::Refused(e) => bail!("did not start: {e:?}"),
+    };
+    let calls = f.host().chats.len() - chats;
+    ensure!(calls == 1, "{calls} model calls with max-steps 1");
+    ensure!(
+        matches!(outcome, Err(RunError::ModelRefused(_))),
+        "expected model-refused, got {outcome:?}"
+    );
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "../target/wasm32-wasip2/release/minimal_agent.wasm".into());
     let f = Fixture::new(&path)?;
-    let checks: [(&str, _); 10] = [
+    let checks: [(&str, _); 14] = [
         ("a run with a tool call", tool_turn(&f).await),
         ("the next run continues", second_turn(&f).await),
         ("a repeated run id is a duplicate", duplicate(&f).await),
@@ -608,6 +802,22 @@ async fn main() -> Result<()> {
         ("a paused reply is continued", paused(&f).await),
         ("a freeform tool gets its text", freeform(&f).await),
         ("dropping the events cancels", cancelled(&f).await),
+        (
+            "an unknown tool outcome stops the run",
+            unresolved(&f).await,
+        ),
+        (
+            "a timeout before a call starts goes back to the model",
+            timed_out_before_start(&f).await,
+        ),
+        (
+            "a read-only tool's timeout goes back to the model",
+            read_only_timed_out(&f).await,
+        ),
+        (
+            "a retry stays within max-steps",
+            too_long_at_the_limit(&f).await,
+        ),
     ];
     let mut failed = 0;
     for (name, result) in &checks {
