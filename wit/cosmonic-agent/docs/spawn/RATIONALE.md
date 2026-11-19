@@ -49,10 +49,11 @@ with a one-time ticket consumed by the first resend; that needed a canonical
 request digest in a guest-facing comment and several rules about tickets,
 resends and coalesced waiters. As state, "one approval admits one child" is
 structural, there is nothing to resend, and `approval` and `decision` are
-gone. An approval also covers that child only, not its descendants: a
-grandchild that asks for what was approved for its parent needs its own
-approval. Reading it the other way would let one approval of a child that
-holds `spawn` spread to a whole subtree nobody was asked about.
+gone. An approval also covers that child only, not its descendants: what
+was approved for a child counts as beyond its ceiling when its own children
+ask, so they are refused unless every higher ancestor holds it. Reading it
+the other way would let one approval of a child that holds `spawn` spread to
+a whole subtree nobody was asked about.
 
 **Interfaces split by grantable power.** Observing a subtree (`children`),
 reading one's own budget (`lineage`) and creating and driving children

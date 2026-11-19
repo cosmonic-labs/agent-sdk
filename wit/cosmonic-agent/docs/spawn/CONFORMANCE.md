@@ -136,9 +136,10 @@ Everything else applies to both.
   join the parent's ceiling, so the parent cannot load them and another child
   cannot use them. They do not extend to the child's own descendants: when a
   descendant's toolset matches only an entry approved for its parent's
-  admission, the match does not count as within the parent's ceiling, and the
-  request goes to a grantor as the descendant's own, never admitted at once.
-  The grantor summary for a child given `spawn` says so.
+  admission, it counts as beyond the parent's ceiling, so the ancestor gate
+  above applies: `denied` unless every higher ancestor covers it, and then a
+  grantor is asked as for the descendant's own request. The grantor summary
+  for a child given `spawn` says so.
 - **Removal.** Only a person removes a session ceiling entry, in the host's
   UI. Removal withdraws what rests on it: pending loads and pending children
   that name or rest on it, a rollout adding it (not published; the load
@@ -212,7 +213,10 @@ Everything else applies to both.
 - **Handles.** Keep one backing object per caller and name, recording the
   owning caller identity; every method checks it, so a handle passed to
   another component addresses nothing. `end` consumes the handle even when it
-  fails; the child is then unchanged and reachable by `get-child`.
+  fails. If it fails before marking the subtree, nothing changed. Once the
+  mark is set, ending is durable: the implementer completes it whatever
+  happens to the call, and a repeated `end` (through `get-child`) is
+  idempotent and resolves when it is done.
 
 ## Runs, leases and fencing
 
@@ -374,8 +378,9 @@ Each case names the property it checks.
    first run fails `not-admitted`, its place is freed, and a matching request
    in the cooldown answers `denied`.
 2. **The parent and grandchildren gain nothing.** After approving a child's
-   toolset, the parent's `load` of it waits on a grantor, a second child
-   using it waits too, and the child's own child using it waits on a grantor.
+   toolset that the root lacks, the parent's `load` of it waits on a
+   grantor, a second child using it waits too, and the child's own child
+   using it is `denied`.
 3. **Admission re-checks.** While a child is pending, narrow the parent's
    grants, remove an entry it rests on, change policy, or start a stop: a
    later grant does not admit it, and its waiting run does not start.
