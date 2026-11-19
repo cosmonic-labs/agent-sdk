@@ -155,10 +155,11 @@ let request = SpawnRequest::component(pinned("ghcr.io/acme/agents/reviewer:1.2.0
     .budget(Budget { max_runs: Some(3), max_steps: Some(12), ..Default::default() })
     .label("role", "reviewer");
 
-let child = spawn::spawn(request, Some(user("Start with the auth changes.")), "review-pr-42").await?;
+let tp = run_options.trace_parent.clone();           // this run's trace, passed on
+let child = spawn::spawn(request, Some(user("Start with the auth changes.")), "review-pr-42", tp.clone()).await?;
 let first = child.run.unwrap();                       // run id, progress, outcome
 let review: Review = spawn::wait(&child.session, &first.run).await?.structured()?;
-let next = spawn::send(&child.session, user("Now the billing changes."), Some("billing")).await?;
+let next = spawn::send(&child.session, user("Now the billing changes."), Some("billing"), tp).await?;
 let more: Review = spawn::wait(&child.session, &next.run).await?.structured()?;
 spawn::end(&child.session).await?;
 ```
@@ -190,6 +191,7 @@ let researcher = spawn::spawn(
     request.placement(Placement::Zone("eu-west".into())),  // a hint, never reach
     Some(user("Collect the release notes for 2.12.")),
     "release-notes-2.12",
+    run_options.trace_parent.clone(),
 ).await?;
 let run = researcher.run.unwrap().run;
 // ...this run ends; the caller keeps both ids in its own session...
@@ -228,7 +230,7 @@ let reader = SpawnRequest::component(pinned(QUARANTINE_READER, "sha256:…"))
     .model_alias("local-small")
     .output::<Triage>().max_bytes(256).structured_only()
     .budget(Budget { max_runs: Some(1), max_steps: Some(1), ..Default::default() });
-let child = spawn::spawn(reader, Some(user(&untrusted_email)), "triage-msg-881").await?;
+let child = spawn::spawn(reader, Some(user(&untrusted_email)), "triage-msg-881", None).await?;
 let run = child.run.unwrap().run;
 let triage: Triage = spawn::wait(&child.session, &run).await?.structured()?;
 ```

@@ -13,12 +13,9 @@ package cosmonic:agent@0.4.4;
 /// it (so `tool-loading-provider` exports both interfaces), and offers them
 /// only to the component that loaded it.
 ///
-/// Admission follows `spawn-types`. A load within the ceiling whose digest is
-/// in the operator's catalog or the session ceiling is admitted at once.
-/// Anything else goes to a grantor and returns `needs-approval` at once,
-/// without holding the run. A granted load joins the session ceiling, so it
-/// and any later identical load (after a set-aside, an unbind or a rollback)
-/// need no prompt while its snapshot and policy still match.
+/// Admission and the session ceiling are as `spawn-types` states; a load
+/// that needs a grantor returns `needs-approval` at once, never holding the
+/// run.
 ///
 /// Already held. Before asking a grantor, `load` checks the caller's
 /// toolsets for an identical spec (same digest): an `offered` one is
@@ -82,7 +79,7 @@ package cosmonic:agent@0.4.4;
 /// make room, `load` answers `over-limit` with scope `offered-functions`.
 /// Setting aside keeps the component and the approval. Unbinding happens
 /// only at the component cap (`loaded-toolsets`), only to set-aside
-/// toolsets, and only inside a load's own rollout.
+/// toolsets with no call in flight, and only inside a load's own rollout.
 @unstable(feature = agent-spawn)
 interface tool-loading {
     @unstable(feature = agent-spawn)
