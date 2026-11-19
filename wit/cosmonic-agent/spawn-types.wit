@@ -15,8 +15,8 @@ package cosmonic:agent@0.4.4;
 /// double. "The caller" is the component the import is bound to.
 ///
 /// One session per workload. These imports are served only to a workload
-/// the host bound to exactly one session for its whole life, as Cosmonic
-/// hosts do for agent sessions; a host that binds several sessions to one
+/// the host bound to exactly one session for its whole life; a host that
+/// binds several sessions to one
 /// workload answers `disabled`. Toolsets are components of the workload, so
 /// a workload shared by sessions could not keep their ceilings, toolsets and
 /// removals apart, and none of these imports takes a session handle.
