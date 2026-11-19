@@ -366,8 +366,8 @@ interface spawn-types {
     variant toolset-state {
         /// Admitted, and its rollout has not finished: not callable yet. If
         /// the rollout fails, the toolset leaves `loaded()` and an identical
-        /// `load` tries again; if it is set aside while loading, it ends
-        /// `ready`.
+        /// `load` tries again. It cannot be set aside until it is
+        /// `offered`.
         loading,
         /// In the model's tool list: its definitions are offered and its
         /// tools are callable.
@@ -649,9 +649,11 @@ interface spawn-types {
     variant start-error {
         /// A run is in progress, or a cancelled one has not stopped yet.
         busy,
-        /// No session with that id is a direct child of the caller's
-        /// session.
+        /// No session with that id is a direct child of the caller.
         unknown,
+        /// Accepting the run would exceed a tree limit
+        /// (`concurrent-agents`). May clear when another run ends.
+        over-limit(over-limit),
         /// A budget item is spent; the child takes no more runs.
         exhausted(budget-item),
         /// The message cannot be taken. A different message may succeed.
@@ -699,7 +701,7 @@ interface spawn-types {
     /// resolves. Dropping the stream or the future only stops listening: a
     /// child may run on another host and outlive the caller's store, so only
     /// `spawn.cancel` or `spawn.end` cancels, and `spawn.wait` collects the
-    /// outcome later. With `output.structured-only`, the outcome's `reply` is
+    /// outcome later by run id. With `output.structured-only`, the outcome's `reply` is
     /// empty and every other field is the implementer's own.
     @unstable(feature = agent-spawn)
     type started-run = tuple<stream<progress>, future<result<run-outcome, run-error>>>;

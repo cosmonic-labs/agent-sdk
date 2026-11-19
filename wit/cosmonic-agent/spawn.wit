@@ -25,23 +25,34 @@ package cosmonic:agent@0.4.4;
 /// host's session store, so a child may run on another host, host group or
 /// zone, and may move between hosts between runs. `spawn-request.placement`
 /// is a hint the host may honour; it never changes reach. A session id
-/// authorizes nothing on its own: the host checks that the caller's session
-/// is the child's parent (or, for listing, an ancestor).
+/// authorizes nothing on its own. The host records, with each child, the
+/// full identity of the caller that spawned it (workload incarnation,
+/// component name and session), and acts only for that same caller: a
+/// sibling component bound to the same session neither sees nor drives
+/// another component's children.
 ///
-/// No silent hangs. A child's host renews a lease in the session store
-/// while a run is in progress. If the lease lapses (the host stopped,
-/// crashed or lost its connection; the operator sets the timeout,
+/// No silent hangs, and no two runs at once. A child's run holds an
+/// exclusive lease in the session store, with a fencing generation that
+/// every write, completion and tool dispatch for the run carries. The host
+/// running it renews the lease; once it cannot, it stops starting model and
+/// tool calls. If the lease lapses (the operator sets the timeout,
 /// recommended 60 seconds), the parent's host ends that run as failed:
 /// waiters get `run-error.host-lost`, the child's state becomes `failed`,
-/// and `child.failure` says why. The child's session is durable, so a later
-/// `send` starts a new run, placed again.
+/// and `child.failure` says why. The session store and the tool dispatcher
+/// reject anything carrying the old generation, so a host that comes back
+/// cannot write into the session or call tools for the lost run. The
+/// child's session is durable, so a later `send` starts a new run, placed
+/// again, under a new generation.
 ///
 /// Lifetime. A child lives until `end`, until its `max-duration` passes, or
 /// until its parent session ends; ending a session ends its descendants. A
 /// child with no run in progress holds no instance. Tree limits: `depth`
 /// (default 3) and `concurrent-agents` (children with a run in progress at
 /// once in one tree, default 20) are always set and the operator may change
-/// them; `total-agents` is unset unless the operator sets it.
+/// them; `total-agents` is unset unless the operator sets it. A run counts
+/// toward `concurrent-agents` from acceptance until it has ended, cancelling
+/// included, and every acceptance (`send`, or `spawn` with input) reserves
+/// its place atomically across the tree.
 @unstable(feature = agent-spawn)
 interface spawn {
     @unstable(feature = agent-spawn)
@@ -84,7 +95,9 @@ interface spawn {
         /// Its depth, where a child of a session a person or trigger started
         /// is at depth 1.
         depth: u32,
-        /// The request's labels, the spawning caller's own text.
+        /// The request's labels, the caller's own text: set for the
+        /// caller's direct children and empty for deeper descendants, whose
+        /// labels a child wrote (a person sees them in the host's view).
         labels: list<tuple<string, string>>,
         /// Its session state, derived by the host (`session-status`): needs
         /// input, working, failed, done or idle. None when the host could
@@ -115,8 +128,7 @@ interface spawn {
     /// Why an operation on a child did nothing.
     @unstable(feature = agent-spawn)
     variant child-error {
-        /// No session with that id is a direct child of the caller's
-        /// session.
+        /// No session with that id is a direct child of the caller.
         unknown,
         /// The child's session has ended.
         ended,
@@ -129,13 +141,22 @@ interface spawn {
     /// Why `wait` returned no outcome.
     @unstable(feature = agent-spawn)
     variant wait-error {
-        /// No session with that id is a direct child of the caller's
-        /// session, or the session store could not be reached.
+        /// No session with that id is a direct child of the caller, or the
+        /// session store could not be reached.
         child(child-error),
-        /// The child has never run.
-        no-run,
+        /// No run with that id was started by the caller in that child.
+        unknown-run,
         /// Its last run failed.
         run(run-error),
+    }
+
+    /// A run the caller started in a child.
+    @unstable(feature = agent-spawn)
+    record sent {
+        /// The run's id, minted by the host: what `wait` takes.
+        run: string,
+        /// Progress, then the outcome.
+        started: started-run,
     }
 
     /// What `spawn` started.
@@ -144,7 +165,7 @@ interface spawn {
         /// The child's session id.
         session: string,
         /// The first run, when `input` was given.
-        run: option<started-run>,
+        run: option<sent>,
     }
 
     /// Check the request against the ceiling, policy and the tree limits,
@@ -159,17 +180,20 @@ interface spawn {
 
     /// Start a run in a direct child: hand it a message and let it work
     /// until it replies or a budget item stops it. Resolves when the run is
-    /// accepted. `busy` while a run is in progress there, and after a
+    /// accepted. `busy` while a run is in progress there (the caller's,
+    /// or one a person started by talking to the child), and after a
     /// cancellation until that run has stopped.
     @unstable(feature = agent-spawn)
-    send: async func(session: string, message: user-message) -> result<started-run, start-error>;
+    send: async func(session: string, message: user-message) -> result<sent, start-error>;
 
-    /// The outcome of a direct child's run in progress, once it ends, or of
-    /// its last run when none is in progress. Works from any store and any
-    /// host that shares the session store, so a caller that started a run in
-    /// one run of its own can collect the result in a later one.
+    /// The outcome of one run the caller started in a direct child, by its
+    /// run id: once it ends, or at once if it has ended. Works from any store
+    /// and any host that shares the session store, so a caller that started a
+    /// run in one run of its own can collect the result in a later one. The
+    /// host keeps the outcome of every run the caller started until the
+    /// child's session ends.
     @unstable(feature = agent-spawn)
-    wait: async func(session: string) -> result<run-outcome, wait-error>;
+    wait: async func(session: string, run: string) -> result<run-outcome, wait-error>;
 
     /// Request cancellation of a direct child's run in progress. Resolves
     /// once the request is recorded; the run ends `cancelled` when the child
