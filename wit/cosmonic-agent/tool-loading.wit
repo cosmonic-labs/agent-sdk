@@ -55,11 +55,14 @@ package cosmonic:agent@0.4.4;
 /// sees it finishes its run (the host may start the next run at once) rather
 /// than polling.
 ///
-/// Rollout deadline. Every rollout has a deadline (the operator's,
-/// recommended two minutes). A rollout that has not finished by then is
-/// abandoned: the toolset leaves `loaded()`, frees its name and its place,
-/// a joined `load` answers `unavailable`, and an identical `load` starts
-/// again.
+/// Rollout deadline. Preparing a rollout (pulling, starting and checking the
+/// new revision's components) has a deadline (the operator's, recommended
+/// two minutes). A rollout not prepared by then is abandoned: the toolset
+/// leaves `loaded()`, frees its name and its place, a joined `load` answers
+/// `unavailable`, and an identical `load` starts again. Once prepared, a
+/// revision staged for the next run is kept until that run starts on it or
+/// the toolset is removed; the deadline does not apply to the wait for the
+/// next run.
 ///
 /// `load` resolves when the toolset is callable (`offered`), or when `wait`
 /// runs out, whichever comes first. `wait` is capped by the implementer's
@@ -114,7 +117,10 @@ interface tool-loading {
         /// order. Model-facing selection keys that carry no authority,
         /// stable for the session, and never given to another toolset's
         /// tool even after this toolset leaves; the same toolset name at a
-        /// new digest takes them back.
+        /// new digest takes them back. A call reaches the tool its model was
+        /// offered: the host records which digest each alias denoted in the
+        /// tool list it sent with a model call, and refuses a call whose
+        /// alias now denotes another digest (`unknown-tool`).
         aliases: list<string>,
         /// Where it stands.
         state: toolset-state,
