@@ -1,0 +1,101 @@
+package cosmonic:agent@0.4.4;
+
+/// The caller may start child agents and read their final replies, within
+/// the contract on `spawn-types`. Unstable behind `agent-spawn`.
+///
+/// A child is a component targeting `runnable-agent`, started in its own
+/// workload with exactly the grants and toolsets its request lists, nothing
+/// inherited. Its reach never exceeds the caller's ceiling. It works in its
+/// own session, a child of the caller's session: the host lists it under
+/// the parent for a person to open, and routes the child's approvals to that
+/// person labelled with the child's name. The caller sees only what this
+/// interface returns: contentless progress, the final outcome, and the
+/// child's host-derived session state.
+///
+/// Lifetime. A child belongs to the caller's session, not to the store that
+/// spawned it. It ends when its budget is spent, when the caller's session
+/// ends, or when an attached handle to it is dropped. `detach` keeps it
+/// alive without a handle, so a caller that gets a fresh store per run can
+/// `attach` to it on a later run. A detached child also ends after an idle
+/// period the operator sets (recommended 15 minutes without a run).
+///
+/// Tree limits. Every child counts toward its spawn tree's limits (the root
+/// session and every descendant): `depth` (default 3) and
+/// `concurrent-agents` (default 20) are always set, the operator may raise or
+/// lower them, and `total-agents` is unset unless the operator sets it.
+/// Detached children count while they live.
+@unstable(feature = agent-spawn)
+interface spawn {
+    @unstable(feature = agent-spawn)
+    use inference-types.{user-message};
+    @unstable(feature = agent-spawn)
+    use session-status.{status};
+    @unstable(feature = agent-spawn)
+    use spawn-types.{spawn-request, admission-error, start-error, started-run};
+
+    /// A child agent the caller spawned or attached to. At most one handle
+    /// to a child exists at a time.
+    @unstable(feature = agent-spawn)
+    resource agent {
+        /// The child's id: host-minted, unique in the caller's session, and
+        /// stable for the child's life. Authorizes nothing: `attach` checks
+        /// the caller's identity and session, never the id alone.
+        @unstable(feature = agent-spawn)
+        get-id: func() -> string;
+
+        /// Start one run: hand the child a message and let it work until it
+        /// replies or a budget item stops it. Resolves when the run is
+        /// accepted, not when it ends. `busy` while a run is in progress,
+        /// and after a cancellation until the child has actually stopped, so
+        /// two runs never overlap inside it.
+        @unstable(feature = agent-spawn)
+        run: async func(message: user-message) -> result<started-run, start-error>;
+
+        /// Release the handle and keep the child: it stays in the caller's
+        /// session for a later `attach`, keeps its budget and conversation,
+        /// and ends after the operator's idle period or with the session.
+        /// A run in progress continues.
+        @unstable(feature = agent-spawn)
+        detach: static func(child: agent);
+    }
+
+    /// One child of the caller, as the host sees it.
+    @unstable(feature = agent-spawn)
+    record child {
+        /// As `agent.get-id` returns it.
+        id: string,
+        /// The request's labels, the caller's own text.
+        labels: list<tuple<string, string>>,
+        /// The child's session state, derived by the host (`session-status`).
+        /// None when the host could not read it.
+        status: option<status>,
+        /// True while a handle to the child is held.
+        attached: bool,
+    }
+
+    /// Why `attach` returned no handle.
+    @unstable(feature = agent-spawn)
+    variant attach-error {
+        /// No living child of this caller has that id. Ended children, and
+        /// children of another caller or session, are unknown.
+        unknown,
+        /// A handle to the child is held already.
+        attached,
+        /// A failure not captured above. Diagnostic detail; never parse it.
+        other(string),
+    }
+
+    /// Check the request against the ceiling, policy and the tree limits,
+    /// and start the child. Resolves once accepted, not once the child is
+    /// running; a child that fails to start reports it on its first run.
+    @unstable(feature = agent-spawn)
+    spawn: async func(request: spawn-request) -> result<agent, admission-error>;
+
+    /// Take a handle to a detached child of this caller, in this session.
+    @unstable(feature = agent-spawn)
+    attach: async func(id: string) -> result<agent, attach-error>;
+
+    /// The caller's living children in this session, oldest first.
+    @unstable(feature = agent-spawn)
+    children: async func() -> list<child>;
+}
