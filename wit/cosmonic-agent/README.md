@@ -133,7 +133,9 @@ of the same mechanism, with one catalog, one admission and one session
 ceiling: a person's approval lasts for the session, a load serves the run in
 progress, and the host keeps the model's tool list within a per-model function
 budget by setting aside the least recently called tools. `spawn`, in the same
-group, starts child agents whose reach never exceeds their parent's. See
+group, starts child agent sessions in a tree under the caller's session,
+addressed by session id so a child may run on another host, and bounded so
+a child's reach never exceeds its parent's. See
 [docs/spawn](docs/spawn/README.md) and its
 [design notes](docs/spawn/DESIGN-NOTES.md).
 

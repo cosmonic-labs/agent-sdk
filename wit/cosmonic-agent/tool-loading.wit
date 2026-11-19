@@ -15,19 +15,22 @@ package cosmonic:agent@0.4.4;
 /// `tool-loading-provider` exports both interfaces. The toolset is offered to
 /// the component that loaded it and to no sibling.
 ///
-/// Admission follows `spawn-types`: within the ceiling (own reach, or an
-/// exact match in the session ceiling) and in the operator's catalog, a load
-/// is admitted at once; anything else goes to a grantor and returns
-/// `needs-approval` at once, without holding the run. A granted load adds the
-/// toolset to the session ceiling, so after a set-aside or an unbind the same
-/// toolset loads again with no prompt while its snapshot matches.
+/// Admission follows `spawn-types`: within the ceiling (inside the caller's
+/// own grants, or an exact match for a toolset entry) and in the operator's
+/// catalog or the session ceiling, a load is admitted at once; anything else
+/// goes to a grantor and returns `needs-approval` at once, without holding
+/// the run. A granted load adds the toolset to the session ceiling, so it
+/// and any later identical load (after a set-aside, an unbind or a rollback)
+/// are admitted with no prompt while its snapshot and policy still match.
 ///
-/// Already held. Before any ceiling check or grantor, `load` checks the
-/// caller's toolsets: an identical spec (same digest) that is `offered` is
-/// returned unchanged; one that is `ready` returns to `offered` with no
-/// approval and no rollout; one that is `loading` is joined, and the request
-/// resolves with that rollout's result; a different spec under a name
-/// already held is `invalid-request`, before any prompt.
+/// Already held. Before asking a grantor, `load` checks the caller's
+/// toolsets: an identical spec (same digest) that is `offered` is returned
+/// unchanged; one that is `ready` returns to `offered` with no rollout, once
+/// the session ceiling's checks (snapshot, policy, revocation generation)
+/// pass again; one that is `loading` is joined, and the request resolves
+/// with that rollout's result; a different spec under a name already held is
+/// `invalid-request`, before any prompt. A toolset the person removed is no
+/// longer held, so this never brings one back.
 ///
 /// Same-run loading. A load serves the run in progress. Binding a toolset
 /// that is not bound yet is a rollout: the implementer rolls the caller's
@@ -37,14 +40,18 @@ package cosmonic:agent@0.4.4;
 /// its component identity in the new revision, so the old revision retires
 /// only once the run in progress has ended. Every new component must start
 /// and pass its checks first; a toolset that cannot start leaves the caller
-/// as it was and `load` answers `unavailable`.
+/// as it was and `load` answers `unavailable` (a component that started may
+/// have run its own start-up code). A rollout publishes only if the
+/// session's revocation generation is unchanged, so a toolset the person
+/// removed meanwhile never becomes callable.
 ///
 /// `load` resolves when the toolset is callable (`offered`), or when `wait`
 /// runs out, whichever comes first. `wait` is capped by the implementer's
 /// own limit (recommended 30 seconds) and by what the caller's run has left;
 /// none takes that limit. When the wait runs out first, `load` returns the
 /// toolset as `loading`: the rollout continues, `loaded` shows when it is
-/// `offered`, and an identical `load` joins it.
+/// `offered` (or drops it if the rollout fails), and an identical `load`
+/// joins it.
 ///
 /// New definitions mid-run. Once a toolset is `offered`, the caller's next
 /// `tools.list` includes its tools, and once it is `ready` that list leaves
@@ -113,8 +120,11 @@ interface tool-loading {
     /// The caller's toolsets and its function budget.
     @unstable(feature = agent-spawn)
     record working-set {
-        /// Every toolset in the caller's session, declared ones first in
-        /// declaration order, then loaded ones in load order.
+        /// Every toolset bound or loading in the caller's session, declared
+        /// ones first in declaration order, then loaded ones in load order.
+        /// A toolset the host unbound at the component cap is not listed: it
+        /// stays in the session ceiling, and loading it again rebinds it
+        /// with no prompt.
         toolsets: list<loaded-toolset>,
         /// Functions offered to the model now, the host's own discovery
         /// tools included.
@@ -133,7 +143,8 @@ interface tool-loading {
     /// leave the model's tool list from the next `tools.list` on, and it
     /// becomes `ready`. Its component and its approval stay, so loading it
     /// again needs no prompt and no rollout. Never removes the toolset from
-    /// the session; only a person does that. A call in progress finishes. An
+    /// the session; only a person does that. A call in progress finishes. A
+    /// toolset still `loading` ends `ready` when its rollout finishes. An
     /// unknown name is `invalid-request`; a pinned or declared toolset is
     /// `denied`.
     @unstable(feature = agent-spawn)
