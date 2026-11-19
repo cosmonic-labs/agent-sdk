@@ -41,20 +41,25 @@ its own gate and can stabilize on its own schedule. `agent-spawn` builds on
 
 **Waiting on a grantor is a state, not an error.** A spawn beyond the
 caller's ceiling returns the child at once in state `pending`, holding no
-instance and no reach; the grant admits it in place, and a refusal stops it.
-A load waits as `awaiting-approval`. Earlier drafts returned an approval
+instance and no reach; the grant admits it in place, after re-checking
+everything it rests on, and a refusal or an expired request ends it. A load
+waits as `awaiting-approval`. Earlier drafts returned an approval
 handle inside an error and asked the caller to resend the identical request,
 with a one-time ticket consumed by the first resend; that needed a canonical
 request digest in a guest-facing comment and several rules about tickets,
 resends and coalesced waiters. As state, "one approval admits one child" is
 structural, there is nothing to resend, and `approval` and `decision` are
-gone.
+gone. An approval also covers that child only, not its descendants: a
+grandchild that asks for what was approved for its parent needs its own
+approval. Reading it the other way would let one approval of a child that
+holds `spawn` spread to a whole subtree nobody was asked about.
 
 **Interfaces split by grantable power.** Observing a subtree (`children`),
 reading one's own budget (`lineage`) and creating and driving children
 (`spawn`) are separate imports, so a leaf agent can read its remaining
-budget without being able to spawn, and a dashboard component can watch
-without driving. Tool loading has its own types and gate.
+budget without being able to spawn, and an agent can be given `spawn`
+without a separate grant to watch or a leaf the right to read its budget.
+Tool loading has its own types and gate.
 
 **Reach is grants intersected with imports.** A component can call only what
 it imports, and the import list is in the binary. The implementer refuses a
@@ -104,8 +109,9 @@ Comment volume fell by about 60 percent.
 
 **Cut.** Placement hints (now operator policy), the trace-parent argument
 (the implementer knows the calling run's trace), the caller-chosen alias
-prefix (operator configuration), `load`'s wait argument (race the call
-against `wasi:clocks/monotonic-clock`; the rollout continues), labels (the
+prefix (operator configuration), `load`'s wait argument (`load` now resolves
+when the toolset is callable, will be next run, or waits on a grantor; a
+caller that wants a shorter wait drops the call and the load goes on), labels (the
 name identifies a child), numeric defaults in type comments (a table in
 CONFORMANCE.md), and the request digest's canonical form (an implementer
 detail now that nothing is resent).
@@ -117,7 +123,7 @@ behind a barrier, forced after a grace period. Every root has a finite
 budget, budgets cover the subtree, and remaining budgets are coarse across
 subtrees. A lost machine fails the run instead of hanging, with leases and
 fencing whose limits are stated plainly. A load serves the run in progress or
-says `next-run`. `unload` sets aside, and the tool list has a budget per
+says `next-run`. `set-aside` keeps the approval, and the tool list has a budget per
 model. Toolsets are dispatched, never linked. `structured-only` output is
 built by the implementer.
 

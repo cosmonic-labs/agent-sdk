@@ -15,22 +15,28 @@ package cosmonic:agent@0.4.4;
 ///
 /// Names are idempotency keys and are never reused: a child's name within
 /// the caller's session, and a run's name within its child, stay taken after
-/// the child or run ends. Spawning a name that exists returns that child if
+/// the child or run ends. Both are 1 to 64 characters of `[a-z0-9-]`, and a
+/// name is matched before any other check, so a retry of a run in progress
+/// returns that run. A harness that lets its model choose names must keep
+/// them unique. Spawning a name that exists returns that child if
 /// the request and first run are identical, and `name-taken` otherwise;
 /// sending a run name that exists returns that run if the message is
 /// identical. A resend after a lost reply never starts a second child or
 /// run.
 ///
-/// Admission happens in place. A request within the caller's ceiling is
-/// admitted at once. Otherwise the child exists in state `pending` (no
-/// instance, no reach) until a grantor decides; runs sent to it wait
-/// (`blocked(admission)`), and a refusal stops it (`denied`). One approval
-/// admits one child.
+/// Admission happens in place. A request within the caller's ceiling, for
+/// catalogued code, needs no grantor. Otherwise the child exists in state
+/// `pending` (no instance, no reach) until a grantor decides; runs sent to it
+/// wait (`blocked(admission)`). A refusal, an expired request, or `end`
+/// while pending ends the child, and its waiting runs fail `not-admitted`.
+/// One approval admits one child, and that child only: its own descendants
+/// need their own approval for what was approved for it.
 ///
 /// Stopping reaches the subtree. `cancel` and `end` cancel every run in
 /// progress below the child, cooperatively and then by force after a grace
-/// period, and resolve when all have stopped. A run that ends on its own
-/// leaves its children's runs going.
+/// period, and resolve when all have stopped; a child that ends any other way
+/// (its `max-duration`, its parent ending) stops its subtree the same way. A
+/// run that ends on its own leaves its children's runs going.
 @unstable(feature = agent-spawn)
 interface spawn {
     @unstable(feature = agent-spawn)
@@ -106,6 +112,7 @@ interface spawn {
     @unstable(feature = agent-spawn)
     flags agent-powers {
         /// Spawn and drive children of its own, and see them (`children`).
+        /// A requested power the caller lacks is `invalid`.
         spawn,
         /// Ask which toolsets are available.
         tool-discovery,
@@ -155,14 +162,17 @@ interface spawn {
         /// Spawning is not enabled for this caller. Permanent.
         disabled,
         /// Policy refused, a refusal's cooldown is running, or the request
-        /// reaches beyond what every ancestor holds.
+        /// reaches beyond what any ancestor holds.
         denied(option<string>),
+        /// The caller's own subtree is being stopped. Retry after it stops.
+        stopping,
         /// The caller has a child of that name with a different request.
         name-taken,
         /// A limit would be exceeded; the value where reported.
         over-limit(tuple<spawn-limit, option<u64>>),
         /// Malformed: a bad name or schema, an unknown catalog entry or
-        /// model alias, or a component whose imports its grants do not
+        /// model alias, a power the caller lacks, an image that could not be
+        /// read, or a component whose imports its grants and powers do not
         /// cover.
         invalid(string),
         /// Could not be served now. Retry may succeed.
@@ -207,6 +217,8 @@ interface spawn {
     /// Why `get-child` found nothing.
     @unstable(feature = agent-spawn)
     variant lookup-error {
+        /// Spawning is not enabled for this caller. Permanent.
+        disabled,
         /// The caller has no child of that name.
         unknown,
         /// Could not be served now. Retry may succeed.
@@ -218,7 +230,7 @@ interface spawn {
     /// A first run to start with the child.
     @unstable(feature = agent-spawn)
     record first-run {
-        /// The run's name: 1 to 128 bytes, unique within the child.
+        /// The run's name.
         run: string,
         /// Its message.
         message: user-message,
@@ -252,7 +264,8 @@ interface spawn {
         cancel: async func() -> result<_, store-error>;
 
         /// End the child and every session below it, after cancelling as
-        /// `cancel` does. Consumes the handle.
+        /// `cancel` does. Consumes the handle; after an error the child is
+        /// as it was, and `get-child` gives a new handle.
         @unstable(feature = agent-spawn)
         end: static async func(this: child) -> result<_, store-error>;
     }
