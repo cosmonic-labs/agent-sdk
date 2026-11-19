@@ -58,13 +58,17 @@ package cosmonic:agent@0.4.4;
 ///   whose clock misbehaves (a paused virtual machine). Those may overlap a
 ///   new run, within the child's own reach.
 ///
-/// After a run that did not finish, the store closes its generation and then
-/// appends one host-reserved journal entry, `agent.run-interrupted.v1`, while
-/// no run holds the session: how the run ended (cancelled, failed, host
-/// lost, revoked) and every tool call that has no recorded result, marked
-/// failed, so the history stays well-formed for model providers. The
+/// After a run that did not finish, the store closes its generation and,
+/// while no run holds the session, completes the journal with the kinds
+/// `session` already reserves: an `agent.op-result.v1` with outcome
+/// `unresolved` for each tool op that has no result (its effects are unknown,
+/// not failed), then an `agent.run-result.v1` with outcome `cancelled` or
+/// `failed` and an error naming why (cancelled, host lost, revoked). The
 /// child's conversation is every step recorded under the closed generation,
-/// then that entry. The next run resumes from there; nothing is replayed.
+/// then those entries. A harness resuming from it answers each unresolved
+/// call to the model as a tool result saying the outcome is unknown and must
+/// not be repeated blindly, so the history stays well-formed for model
+/// providers. Nothing is replayed.
 ///
 /// Stopping. `cancel` cancels a child's run in progress and every run in
 /// progress below it, including runs a person started there; `end` also
@@ -73,10 +77,11 @@ package cosmonic:agent@0.4.4;
 /// other way leaves its children's runs going.
 ///
 /// - Barrier. Each first marks the whole subtree as cancelling in the
-///   session store, atomically. Until the stop completes, every `spawn` or
-///   `send` from a run in the subtree (one in flight included) is refused
-///   (`denied`, `start-error.denied`), and so is every `send` into it from
-///   outside (`busy`). The mark lifts when the stop completes.
+///   session store, atomically. Until the stop completes, every run
+///   acceptance in the subtree is refused, whatever its path: `spawn` or
+///   `send` from a run in it (`denied`, `start-error.denied`), `send` into it
+///   from outside (`busy`), and runs a person or a trigger would start
+///   through the host. The mark lifts when the stop completes.
 /// - Force. Cancellation is cooperative first. After the operator's grace
 ///   period (recommended 15 seconds), each host still running a run in the
 ///   subtree stops its instances as it would to fence itself, and metering
@@ -99,8 +104,8 @@ package cosmonic:agent@0.4.4;
 /// `concurrent-agents` (runs from acceptance until they end, default 20),
 /// `live-sessions` (children not yet ended, default 50) and `total-agents`
 /// (children spawned in all, default 500). A child's own subtree is further
-/// held to its `budget.max-spawns`. Every spawn and run acceptance reserves
-/// its place atomically.
+/// held to its `budget.max-spawns`, which limits spawning only, never runs.
+/// Every spawn and run acceptance reserves its place atomically.
 ///
 /// Budgets. Every root session has a finite token and active-time budget,
 /// which an operator may raise but never remove. Tokens count every model
@@ -201,24 +206,26 @@ interface spawn {
         model-calls: u32,
     }
 
-    /// What the caller has left. Its own figures are exact; an ancestor's
-    /// bound is coarse (rounded down to a power of two tokens or a whole
-    /// minute, and refreshed at most once a minute), so a session cannot read
-    /// another subtree's spend through it.
+    /// What the caller has left. Its own figures are exact; ancestor bounds
+    /// are coarse (rounded down to a power of two tokens or a whole minute,
+    /// and refreshed at most once a minute), so a session cannot read another
+    /// subtree's spend through them.
     @unstable(feature = agent-spawn)
     record remaining-budget {
         /// Tokens left in the caller's own budget; none when its own budget
         /// sets no token limit.
         tokens: option<u64>,
-        /// Active time left in the caller's own budget; none likewise.
+        /// Time left under the caller's own limit, on that limit's own clock:
+        /// wall-clock since spawn for a child's `max-duration`, active time
+        /// for a root. None when it sets no limit.
         duration: option<duration>,
         /// Runs left from its own `max-runs`; none likewise.
         runs: option<u32>,
         /// The coarse token bound from the tightest ancestor, the root
         /// included. Always set, since every root is finite.
         ancestor-tokens: u64,
-        /// The coarse active-time bound from the tightest ancestor. Always
-        /// set.
+        /// The coarse time bound: the least time left under any ancestor's
+        /// limit, each on its own clock. Always set.
         ancestor-duration: duration,
     }
 
@@ -363,10 +370,12 @@ interface spawn {
     /// `revoked`, when it no longer fits). `busy` while a run is in progress
     /// there or a cancelled one has not stopped.
     ///
-    /// `key` is an optional idempotency key, answered before any other
-    /// check: a resend with a key that already started a run in that child
-    /// returns the same run (a fresh view) and starts nothing, even if the
-    /// run has ended; with a different message it is `invalid-input`. The
+    /// `key` is an optional idempotency key, checked right after the caller
+    /// is confirmed as the child's spawner and before every other check
+    /// (busy, ended, budgets, admission): a resend with a key that already
+    /// started a run in that child returns the same run (a fresh view) and
+    /// starts nothing, even if the run has ended; with a different message it
+    /// is `invalid-input`. The
     /// host keeps the keys of the 256 most recent runs per child; an older
     /// key starts a new run. A known key whose outcome is gone returns the
     /// run with outcome `run-error.expired`.

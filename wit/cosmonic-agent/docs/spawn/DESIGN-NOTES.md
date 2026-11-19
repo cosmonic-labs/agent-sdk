@@ -353,7 +353,7 @@ interface works in session ids:
 | --- | --- |
 | `spawn(request, input, key, trace-parent)` | Admits and creates a child session; with `input`, starts its first run. `key` is the caller's idempotency key: a resend with a key that already admitted a child returns that child. |
 | `send(session, message, key, trace-parent)` | Re-checks the child's admission, then starts a run in a direct child. Returns a host-minted run id, a progress stream and an outcome future. A resend with the same key returns the same run (D30). |
-| `wait(session, run)` | The outcome of that exact run, from any store and host. The host keeps at least the 16 most recent outcomes of runs the caller started in a child, until the child ends. |
+| `wait(session, run)` | The outcome of that exact run, from any store and host. The host keeps at least the 16 most recent outcomes of runs the caller started in a child, and ending the child does not discard them: they stay while the ended child is listed. |
 | `cancel(session)` | Cancels the child's run in progress and every run in progress below it, by force after a grace period; resolves when the subtree has stopped (D31). |
 | `end(session)` | Ends the child session and every session below it; resolves when the subtree has stopped. |
 | `children(descendants)` | Direct children, or the whole subtree in parent-first order, each with parent, depth, labels (direct children only), `session-status` state, failure reason, location and whether it ended. |
@@ -478,7 +478,9 @@ someone else's hand.
   (children spawned in all, which also bounds the idempotency keys a tree
   keeps) per tree. A child's subtree is also held to its
   `budget.max-spawns` (none takes a quarter of what is left of the tree's
-  `total-agents`), so one child cannot exhaust a limit that never clears and
+  `total-agents`, computed once when the request is first checked and fixed
+  in the admission snapshot). It limits spawning only, answering
+  `over-limit(spawn-share)`, never runs, so one child cannot exhaust a limit that never clears and
   lock its parent and siblings out (sixth round, finding 5). Every spawn and
   every run acceptance reserves its place atomically across the tree; `send` answers
   `start-error.over-limit` when it cannot. Depth and concurrency follow the
@@ -860,8 +862,9 @@ sixth review round (findings 3, 6, 7).*
 
 - **Visible.** `child.usage` carries the host-metered tokens, runs and model
   calls of a child and its subtree. `lineage.remaining` carries the caller's
-  own remainder exactly (tokens, active time and runs from its own budget)
-  and the tightest ancestor bound only coarsely (rounded down to a power of
+  own remainder exactly (tokens, time and runs from its own budget, time on
+  its own limit's clock: wall-clock since spawn for a child, active time for a
+  root) and the tightest ancestor bound only coarsely (rounded down to a power of
   two tokens or a whole minute, refreshed at most once a minute). An exact
   ancestor figure would let a session read the spend of sessions outside its
   subtree, a channel between siblings that bypasses the parent; the coarse
@@ -925,17 +928,21 @@ fencing token on every write ([How to do distributed locking](https://martin.kle
 ### D35. What a child's conversation holds after a run that did not finish
 
 *Basis: Eric, 2026-11-19 (prior-art survey); decided here; revised in the
-sixth review round (finding 10).* Every step the store recorded under the
-run's generation, then one host-reserved journal entry,
-`agent.run-interrupted.v1`, that the store appends after closing the
-generation and before any new lease opens, so it never races an agent's
-commit. It says how the run ended (cancelled, failed, host lost, revoked)
-and records each tool call that has no result as failed, so the history
-stays well-formed: major model APIs reject a conversation that ends on
-unanswered tool calls. Nothing after the generation closed is kept; a later
-`send` resumes from there and nothing is replayed. This does not conflict
-with D32's rule that the agent owns its journal: no run holds the session
-when the entry is written, and the kind is reserved for the host.
+sixth review round (finding 10) and its re-review.* Every step the store
+recorded under the run's generation, then entries the store appends after
+closing the generation and before any new lease opens, so they never race an
+agent's commit. It uses the kinds `session` already reserves, so every
+reader understands them: an `agent.op-result.v1` with outcome `unresolved`
+for each tool op that has no result (its effects are unknown, so it is never
+recorded as failed), then an `agent.run-result.v1` with outcome `cancelled`
+or `failed` and an error saying why (cancelled, host lost, revoked). A
+harness resuming answers each unresolved call to the model with a tool
+result saying the outcome is unknown and must not be repeated blindly, which
+keeps the history well-formed for model APIs that reject unanswered tool
+calls. Nothing after the generation closed is kept; a later `send` resumes
+from there and nothing is replayed. This does not conflict with D32's rule
+that the agent owns its journal: no run holds the session when the store
+writes, and it writes only the closing entries a cut-off run could not.
 
 *Prior art.* LangGraph resumes a thread from its last checkpoint
 ([subgraphs](https://docs.langchain.com/oss/python/langgraph/use-subgraphs));
@@ -1401,3 +1408,15 @@ fixed; of the lows, all but one are fixed.
 | 25 | Host containment only in the notes | Fixed: inlined in `spawn-types` |
 | 26 | Host-built records cannot grow either | Recorded under "Still not decided" |
 | 27 | Long or repeated comments | Fixed: shared rules stated once at the top of each interface, per-function comments kept to what each adds |
+
+Codex re-review of the sixth-round fixes, all fixed:
+
+| # | Finding | Outcome |
+| --- | --- | --- |
+| 1 | `send`'s key was answered before the ownership check | Fixed: the caller is confirmed as the child's spawner first, then the key, then everything else |
+| 2 | Marking interrupted tool calls failed hid unknown effects; the new entry kind had no reader contract | Fixed: the store writes the existing `agent.op-result.v1` (`unresolved`) and `agent.run-result.v1` kinds; a resuming harness tells the model the outcome is unknown (D35) |
+| 3 | The barrier covered only `spawn` and `send` | Fixed: every run acceptance in the subtree, including a person's and a trigger's |
+| 4 | `max-spawns` exhaustion could stop runs | Fixed: it limits spawning only (`over-limit(spawn-share)`); `exhausted` covers run budgets |
+| 5 | The `max-spawns` default moved with live counters | Fixed: computed once and fixed in the admission snapshot |
+| 6 | Remaining time used the wrong clock for children | Fixed: each limit on its own clock (wall-clock since spawn for a child, active time for a root) |
+| 7 | The operation table still dropped outcomes at a child's end | Fixed: outcomes stay while the ended child is listed |
