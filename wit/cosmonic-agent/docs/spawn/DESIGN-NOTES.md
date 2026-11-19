@@ -118,9 +118,10 @@ would need a fourth gate that every consumer enables anyway.
 
 ### D2. Load approvals feed a session-only ceiling, and removal withdraws what rests on it
 
-*Basis: Eric, 2026-11-18 (session tool set design, Decisions; Cosmonic
-Desktop implements the same rule as its session approval envelope). The
-ticket and revocation details are decided here, after three review rounds.*
+*Basis: Eric, 2026-11-18 (the session tool set design; a single-machine
+host already implements the same rule as a per-session approval envelope).
+The ticket and revocation details are decided here, after three review
+rounds.*
 
 A person's approval of a toolset **load** adds it to the **session
 ceiling**: an entry keyed to the caller, the `toolset-spec` digest and the
@@ -135,9 +136,9 @@ back, is a load within the ceiling and needs no prompt.
   and anchor that child's reach only.
 - **Re-checked at each use,** in the step that admits it: the request is
   resolved again and compared with the entry's snapshot, and current policy
-  is checked again. On Control, admission policy is cluster policy, so a
-  session ceiling never becomes a way around a policy change made
-  mid-session.
+  is checked again. On a clustered host, admission policy is cluster
+  policy, so a session ceiling never becomes a way around a policy change
+  made mid-session.
 - **Never widens.** An entry admits its exact snapshot only.
 - **Only the person removes, and removal withdraws what rests on it.**
   Removal drops the entry, and the implementer withdraws everything resting
@@ -213,7 +214,7 @@ list and stays in the session ceiling; a late rollout failure drops a
   to about 14B parameters.
 - **Which model.** The smallest budget among the model aliases the caller
   is granted, for the whole session. *Decided here, after the Codex review:*
-  Desktop uses the model the session last called, but a harness that
+  a host could use the model the session last called, but a harness that
   switches models could then exceed the new model's budget without another
   load. Most agents are granted one alias, where the two rules agree.
 - **Set-aside on load.** When a load would go over the budget, the
@@ -245,9 +246,9 @@ still use it for approved tools only).
 
 *Basis: goal from Eric, 2026-11-19; mechanism decided here.*
 
-Cosmonic Desktop today rolls the session's workload out when a tool is
-loaded, and the new revision serves the agent's next run, which Desktop
-starts at once so the turn reads as continuous. The goal is that a load
+A host can already roll a session's workload out when a tool is loaded and
+let the new revision serve the agent's next run, starting that run at once
+so the turn reads as continuous. The goal is that a load
 serves the run that asked for it.
 
 **How.** Tools are linked to nothing: the agent calls them through its
@@ -282,8 +283,9 @@ approval shows as `needs-input` in the session's state.
 
 **Next-run fallback.** Same-run loading needs the old revision to keep
 serving the run while the new one serves calls, and a dispatcher that routes
-across both. Desktop today serves the next run, and Control's tools plugin
-keys its state by runtime workload and has no revisions yet. So a host that
+across both. Hosts that serve the next run today, or whose tools plugin
+keys its state by runtime workload with no notion of revisions, cannot do
+that yet. So a host that
 cannot yet drain may make the toolset callable from the caller's next run:
 that is conformant, and `load-result.next-run` says so, so a harness ends its
 run instead of polling. Same-run stays the goal and the preferred behaviour.
@@ -297,7 +299,7 @@ is kept until that run starts on it or the toolset is removed, so a pause
 before the next run never discards it. `loading` always ends.
 
 *Alternatives.* Keep "next run" semantics with an immediate next run
-(Desktop today): the agent loses its in-memory plan and the model sees a
+(what a host can do today): the agent loses its in-memory plan and the model sees a
 seam. Replace the agent's instance mid-run and resume from the journal: the
 `run` contract only promises memory does not survive *between* runs. Run
 each loaded toolset as its own workload until the next rollout: splits a
@@ -317,8 +319,9 @@ of the prompt invalidates a provider's cache, and on models with preserved
 reasoning it can invalidate earlier reasoning too. Anthropic's
 mid-conversation tool changes (a `role: "system"` message with
 `tool_addition` and `tool_removal` blocks) keep the cached prefix and earlier
-reasoning valid; Cosmonic Desktop's Anthropic adapter already sends a
-session's tool changes that way. On OpenAI, tools appended at the end keep
+reasoning valid; a host's Anthropic adapter can send a session's tool
+changes that way by diffing the list the agent sends against the one the
+conversation started with. On OpenAI, tools appended at the end keep
 the cache up to that point. Aliases never change within a session, which
 keeps definitions byte-stable.
 
@@ -390,8 +393,8 @@ tree without the agent's cooperation (review finding 8).
 ### D8. A child's reach rests on its ancestors, and is re-checked as they change
 
 *Basis: Eric, 2026-11-18 (a child spawned with reach beyond its parent's
-approval envelope never happens; the subagents milestone: a subagent's
-grants are no wider than its parent's, enforced by the host); mechanism
+approval envelope never happens, and a subagent's grants are no wider than
+its parent's, enforced by the host); mechanism
 decided here, revised after the third review (findings 1 to 3).*
 
 - **Agent grants fit the parent's own grants,** and the model alias is one
@@ -488,8 +491,9 @@ sessions is the biggest gap); the shape is decided here.*
 - **Nothing assumes the child is local.** Every operation names the child by
   session id and works through the host's session store, so a child may run
   on another host, host group or zone, and move between hosts between runs.
-  Control keeps sessions in a store it reconciles across zones; Desktop may
-  run everything locally behind the same interface.
+  A host that places sessions across zones keeps them in a store it
+  reconciles between zones; a single-machine host may run everything
+  locally behind the same interface.
 - **Placement is a hint** (`any`, `same-host`, a named `host-group`, a named
   `zone`; `other` is reserved and refused as input). It is not in the
   approval digest because it never changes reach: a child runs only where its
@@ -564,8 +568,8 @@ definition's content, so a changed definition is a new request. This answers
 
 *Basis: decided here.* An optional list of the functions to offer; none
 offers all. It is part of the digest. Large components spend the function
-budget on functions a job never uses; Cosmonic Control's tools plugin has
-the same idea as its `tool-functions` key.
+budget on functions a job never uses, and a workload manifest can already
+trim a tool component's functions the same way.
 
 ### D15. Discovery says when it truncated
 
@@ -623,13 +627,20 @@ the session.
 Toolsets are components of the workload: a workload shared by sessions
 would share their toolsets, instances, rollouts and removals, so a session
 context on `spawn` and `tool-loading` alone could not keep sessions apart,
-and `tools.call` would need the context too. Both hosts can implement the
-rule today. Desktop already gives each agent session its own workload.
-Control's tools plugin identifies callers by workload and component id, and
-wash-runtime 2.12 gives host plugins the caller's workload id and its
-per-workload bind configuration, so the host can put the session id in the
-bind configuration when it creates the session's workload and read it on
-every call. A session context would need a host-minted handle threaded
+and `tools.call` would need the context too. It is simpler, and it fails
+safe: a host that cannot give a session its own workload gets `disabled`,
+never a call attributed to the wrong session. Hosts can implement it today.
+A host that already gives each agent session its own workload needs
+nothing new. A host plugin that identifies callers by workload and
+component id can attribute every call too: wash-runtime 2.12 gives host
+plugins the caller's workload id and its per-workload bind configuration,
+so the host puts the session id in the bind configuration when it creates
+the session's workload and reads it on every call.
+
+*The cost.* Sessions of the same agent cannot share warm instances, which
+matters for density on a clustered host serving many sessions of one agent.
+Instances that are idle are cheap (compiled code is shared by digest), so
+the cost is mostly warm instances, and idle reclaim recovers much of it. A session context would need a host-minted handle threaded
 through every import, a change to `tools` that guests export, and it would
 still leave toolsets shared.
 
@@ -663,8 +674,8 @@ component, and loading is a rollout attached to the same session.
 ### D25. Where it is implemented
 
 *Basis: Eric, 2026-11-18.* The interfaces live here; the implementation is
-one shared host plugin, `plugin-agent-spawn`, in Cosmonic Control, which
-Cosmonic Desktop uses the way it uses Control's typed tool crate.
+one shared host plugin that every host embeds, so admission, the session
+ceiling and the budget behave the same everywhere.
 
 ### D26. Toolsets are dispatched, never linked, and never hold agent powers
 
@@ -681,7 +692,7 @@ Cosmonic Desktop uses the way it uses Control's typed tool crate.
   approved toolsets could pass data around the model.
 - A tool provider (a toolset exporting `cosmonic:agent/tools`) is linked
   straight to the agent's `tools` import by a runtime's served-within-workload
-  rule, as Control's runtime does today. A host whose runtime would link a
+  rule, as some runtimes do today. A host whose runtime would link a
   toolset's exports refuses that toolset with `invalid-request` until the
   runtime can keep it host-dispatched. Typed tools are unaffected.
 
@@ -780,7 +791,7 @@ Several agents working as peers rather than as parent and children:
   the host scopes (one per root session, say), each member a session id from
   spawn, so a swarm's members show in the same tree.
 - **Messages:** `send(to, message)` and a per-agent inbox read with a stream,
-  likely carried over the host's messaging (NATS on Control and Desktop), with
+  likely carried over the host's messaging (such as NATS), with
   the host stamping the sender's session id so a member cannot speak as
   another.
 - **Bounds:** a member reaches only what its own grants allow; messages are
@@ -967,12 +978,12 @@ keyed by session and run id, in the session store for `wait`.
 
 ## What implementing it needs
 
-- **A shared plugin.** `plugin-agent-spawn` serves `tool-discovery`,
+- **A shared plugin.** One host plugin serves `tool-discovery`,
   `tool-loading` and `spawn`, and works with the tools plugin that serves
   `tools`, so admission, the session ceiling and the budget are one
-  implementation on Desktop and Control.
-- **Rollouts a plugin can request.** On Control a workload's tools are its
-  spec (`tool-components`, workload-owned and governed by admission), and a
+  implementation on every host.
+- **Rollouts a plugin can request.** On a clustered host a workload's tools
+  are part of its spec (workload-owned and governed by admission), and a
   host plugin cannot write it. The plugin needs a control-plane path to
   request the revision, which admission policy checks like any other.
 - **Retire after drain,** with the tool dispatcher routing to a toolset in
@@ -986,14 +997,15 @@ keyed by session and run id, in the session store for `wait`.
 - **One session per workload,** with the session id in the per-workload
   bind configuration so plugins can attribute every call (D20).
 - **Dispatch that never links toolsets,** including tool providers exporting
-  `cosmonic:agent/tools` (D26). Control's session store (moving to SQLite, reconciled across
-  zones) is the natural home; Desktop keeps the same records locally.
+  `cosmonic:agent/tools` (D26). A host that places sessions across zones
+  keeps these records in its reconciled session store; a single-machine host
+  keeps them locally.
 - **Session state for the ceiling and working set,** including the
   revocation generation, which toolsets are set aside or pinned, and the
   alias table, so a session that moves hosts keeps them.
-- **An approval route.** Desktop has a person in the loop. Control has none
-  yet; until it does, beyond-ceiling requests on Control are decided by
-  policy alone.
+- **An approval route.** A host with a person at hand asks them. A host
+  without a person-facing approval route decides beyond-ceiling requests by
+  policy alone until it has one.
 - **Owned workloads.** Child workloads stop with their session and carry
   host-stamped owner fields a manifest cannot set.
 - **Visibility into reach.** Comparable volume identity, the caller's secret

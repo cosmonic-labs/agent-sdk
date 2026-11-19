@@ -16,7 +16,8 @@ package cosmonic:agent@0.4.4;
 /// trigger started. The caller works with its own children by session id;
 /// it may list its descendants (state only) but acts only on its direct
 /// children. A host reads the same tree from its session store to show it
-/// (a desktop app's session list, a CLI, a cluster's session API), and
+/// (a single-machine host's session list, a command line, a clustered
+/// host's session API), and
 /// routes a child's approvals to the root session's person, labelled with the
 /// child's place in the tree.
 ///
