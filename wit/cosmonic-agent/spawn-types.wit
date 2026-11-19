@@ -5,7 +5,7 @@ package cosmonic:agent@0.4.4;
 /// importing it grants nothing; each power is its own import. `approval` is
 /// served by the implementer of `spawn` and `tool-loading`. Unstable: enable
 /// `agent-spawn`, plus `agent-run` and `session-status`, whose types these
-/// use. Rationale is in `docs/spawn/DESIGN-NOTES.md`.
+/// use. Rationale is in `docs/spawn/RATIONALE.md`.
 ///
 /// The implementer is whatever serves these imports: a host plugin, a policy
 /// layer the host installs in front of it, or a test double. The caller is

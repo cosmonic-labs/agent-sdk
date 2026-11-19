@@ -137,7 +137,7 @@ group, starts child agent sessions in a tree under the caller's session,
 addressed by session id so a child may run on another host, and bounded so
 a child's reach never exceeds its parent's. See
 [docs/spawn](docs/spawn/README.md) and its
-[design notes](docs/spawn/DESIGN-NOTES.md).
+[rationale](docs/spawn/RATIONALE.md).
 
 ## Session status
 
