@@ -66,7 +66,9 @@ package cosmonic:agent@0.4.4;
 ///
 /// Function budget. Each model has a budget of functions it handles well at
 /// once, from its model binding (`max-offered-functions`), which the
-/// workload manifest may only lower. When a load would go over it, the
+/// workload manifest may only lower. A caller's budget is the smallest
+/// among the model aliases it is granted, for the whole session, so
+/// switching models never exceeds a model's budget. When a load would go over it, the
 /// implementer sets aside the least recently called toolset this caller
 /// loaded (never called before called, then the oldest load) and reports it
 /// in `load-result.set-aside`. It never sets aside a pinned toolset (the
@@ -144,7 +146,8 @@ interface tool-loading {
     /// becomes `ready`. Its component and its approval stay, so loading it
     /// again needs no prompt and no rollout. Never removes the toolset from
     /// the session; only a person does that. A call in progress finishes. A
-    /// toolset still `loading` ends `ready` when its rollout finishes. An
+    /// toolset still `loading` answers `unavailable`: retry once it is
+    /// `offered`. An
     /// unknown name is `invalid-request`; a pinned or declared toolset is
     /// `denied`.
     @unstable(feature = agent-spawn)

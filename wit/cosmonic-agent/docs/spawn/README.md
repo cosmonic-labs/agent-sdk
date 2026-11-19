@@ -158,9 +158,10 @@ let request = SpawnRequest::component(pinned("ghcr.io/acme/agents/reviewer:1.2.0
     .label("role", "reviewer");
 
 let child = spawn::spawn(request, Some(user("Start with the auth changes."))).await?;
-let review: Review = spawn::wait(&child.session).await?.structured()?;
-spawn::send(&child.session, user("Now the billing changes.")).await?;
-let more: Review = spawn::wait(&child.session).await?.structured()?;
+let first = child.run.unwrap();                       // run id, progress, outcome
+let review: Review = spawn::wait(&child.session, &first.run).await?.structured()?;
+let next = spawn::send(&child.session, user("Now the billing changes.")).await?;
+let more: Review = spawn::wait(&child.session, &next.run).await?.structured()?;
 spawn::end(&child.session).await?;
 ```
 
@@ -187,10 +188,11 @@ let researcher = spawn::spawn(
     request.placement(Placement::Zone("eu-west".into())),  // a hint, never reach
     Some(user("Collect the release notes for 2.12.")),
 ).await?;
-// ...this run ends; the caller keeps the session id in its own session...
+let run = researcher.run.unwrap().run;
+// ...this run ends; the caller keeps both ids in its own session...
 
 // A later run, maybe on another instance or host:
-let notes = spawn::wait(&researcher.session).await?;      // outcome of that run
+let notes = spawn::wait(&researcher.session, &run).await?; // that run's outcome
 for c in spawn::children(true).await? {                  // the whole subtree, parent first
     println!("{} under {} at depth {}: {:?} {:?}", c.session, c.parent, c.depth, c.status, c.failure);
 }
@@ -203,7 +205,9 @@ the child's state is `failed` with `failure` saying why, and a later `send`
 starts a new run, placed again. Nothing hangs silently.
 
 A parent acts only on its direct children (send, wait, cancel, end) and sees
-its whole subtree; hosts draw the same tree in their session lists.
+its whole subtree's state; hosts draw the same tree in their session lists.
+Children belong to the component that spawned them, so a sibling component
+in the same session cannot drive them.
 
 ## Scenario 5: read untrusted content in quarantine
 
@@ -219,7 +223,8 @@ let reader = SpawnRequest::component(pinned(QUARANTINE_READER, "sha256:…"))
     .output::<Triage>().max_bytes(256).structured_only()
     .budget(Budget { max_runs: Some(1), max_steps: Some(1), ..Default::default() });
 let child = spawn::spawn(reader, Some(user(&untrusted_email))).await?;
-let triage: Triage = spawn::wait(&child.session).await?.structured()?;
+let run = child.run.unwrap().run;
+let triage: Triage = spawn::wait(&child.session, &run).await?.structured()?;
 ```
 
 With `structured-only`, the host empties the reply text and fills every other

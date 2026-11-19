@@ -179,7 +179,9 @@ to `ready`: its definitions leave the model's tool list, its component and
 its approval stay, and no rollout runs. Loading it again returns it at once.
 Nothing in these interfaces removes a toolset from a session: that is the
 person's Remove. Pinned and declared toolsets cannot be set aside by the
-caller (`denied`). A toolset set aside while `loading` ends `ready`.
+caller (`denied`). A toolset still `loading` cannot be set aside
+(`unavailable`): retry once it is `offered`, so an outstanding `load` always
+completes as `offered` or `loading`.
 
 *Alternatives.* `unload` as a rollout that unbinds (the #76 shape): a
 rollout each way and a prompt on return, for no gain in safety. A
@@ -207,9 +209,11 @@ list and stays in the session ceiling; a late rollout failure drops a
   lower it. The host's own discovery tools count. Recommended defaults: 32
   for hosted frontier models, 20 for an unknown model, 10 for local models up
   to about 14B parameters.
-- **Which model.** The budget of the model the caller's session last called;
-  before any call, the smallest budget among the aliases the caller is
-  granted. *Decided here*, matching Desktop.
+- **Which model.** The smallest budget among the model aliases the caller
+  is granted, for the whole session. *Decided here, after the Codex review:*
+  Desktop uses the model the session last called, but a harness that
+  switches models could then exceed the new model's budget without another
+  load. Most agents are granted one alias, where the two rules agree.
 - **Set-aside on load.** When a load would go over the budget, the
   implementer sets aside the least recently called toolset the caller loaded
   (never called before called, then the oldest load), never a pinned one and
@@ -316,9 +320,9 @@ interface works in session ids:
 
 | Operation | What it does |
 | --- | --- |
-| `spawn(request, input)` | Admits and creates a child session; with `input`, starts its first run. Returns the session id. |
-| `send(session, message)` | Starts a run in a direct child. Progress stream and outcome future. |
-| `wait(session)` | The outcome of the child's run in progress, or of its last run. Works from any store and host. |
+| `spawn(request, input)` | Admits and creates a child session; with `input`, starts its first run. Returns the session id and the run's id. |
+| `send(session, message)` | Starts a run in a direct child. Returns a host-minted run id, a progress stream and an outcome future. |
+| `wait(session, run)` | The outcome of that exact run, from any store and host. The host keeps the outcome of every run the caller started until the child ends. |
 | `cancel(session)` | Requests cancellation of the run in progress. |
 | `end(session)` | Ends the child session and every session below it. |
 | `children(descendants)` | Direct children, or the whole subtree in parent-first order, each with parent, depth, labels, `session-status` state, failure reason, location and whether it ended. |
@@ -326,9 +330,18 @@ interface works in session ids:
 
 - **Acting is on direct children only; seeing is on the subtree.** A parent
   sends, waits, cancels and ends its own children; it lists its
-  descendants' state to draw its tree. Authorization is the host's check
-  that the caller's session is the parent (or an ancestor, for listing). A
-  session id authorizes nothing on its own.
+  descendants' state to draw its tree. The host records with each child the
+  full identity of the caller that spawned it (workload incarnation,
+  component and session) and acts only for that caller, so a sibling
+  component bound to the same session neither sees nor drives another
+  component's children. A session id authorizes nothing on its own.
+- **Only the caller's own text comes back.** `children` returns labels only
+  for direct children (the caller wrote them). A grandchild's labels were
+  written by a child, and would let it pass text around its
+  `structured-only` schema, so they stay in the host's view.
+- **Runs are named.** `send` returns a host-minted run id and `wait` takes
+  it, so a parent that reconnects after a person talked to the child still
+  collects its own run's outcome, not the latest one.
 - **States reuse `session-status`** (needs input, working, failed, done,
   idle), derived by the host. A child's reason for failing is the separate
   `child-failure` (host lost, start failed, budget exhausted), since
@@ -402,12 +415,15 @@ someone else's hand.
 ### D10. Tree limits are always set
 
 *Basis: decided here; answers #76's (y).* `depth` (default 3) and
-`concurrent-agents` (default 20 per tree, counting children with a run in
-progress) are always set; the operator may change them. `total-agents` is
+`concurrent-agents` (default 20 per tree, counting runs from acceptance
+until they have ended, cancelling included) are always set; the operator may change them. `total-agents` is
 unset unless the operator sets it. These are the Claude Agent SDK's defaults
 (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` 3,
 `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` 20). Budgets stay the caller's
 choice and are not carved from the parent's, as in every SDK surveyed.
+Every run acceptance (`send`, or `spawn` with input) reserves its place
+atomically across the tree, and `send` answers `start-error.over-limit` when
+it cannot, so idle children cannot all start at once past the limit.
 
 ### D11. Remote children: location-transparent, with a placement hint
 
@@ -438,12 +454,18 @@ see; policy is where hard residency rules belong.
 ### D12. A lost host fails the run, never hangs
 
 *Basis: Eric, Bailey and Victor, 2026-11-19 (define what happens if a remote
-child's host goes away); mechanism decided here.* A child's host renews a
-lease in the session store while a run is in progress. If the lease lapses
-(the operator sets the timeout; recommended 60 seconds), the parent's host
-ends that run: waiters get `run-error.host-lost`, the child's state becomes
-`failed`, and `child.failure` is `host-lost` naming the host. The child's
-session is durable, so a later `send` starts a new run, placed again. A
+child's host goes away); mechanism decided here, with fencing added after
+the Codex review.* A child's run holds an exclusive lease in the session
+store with a fencing generation (a counter the store advances for each new
+lease) that every write, completion and tool dispatch for the run carries.
+The host running it renews the lease, and stops starting model and tool
+calls once it cannot. If the lease lapses (the operator sets the timeout;
+recommended 60 seconds), the parent's host ends that run: waiters get `run-error.host-lost`, the child's state becomes
+`failed`, and `child.failure` is `host-lost` naming the host. The store and
+the tool dispatcher reject anything carrying the old generation, so a host
+that was only cut off cannot write into the session or call tools for the
+lost run once a new one starts. The child's session is durable, so a later
+`send` starts a new run, placed again, under a new generation. A
 store the parent cannot reach answers `unavailable`, never a silent wait.
 
 *Alternatives.* Resuming the lost run elsewhere automatically: a run's
@@ -679,11 +701,17 @@ pass them.
    `over-limit(depth)`. `send` to a grandchild: `unknown`. `children(true)`
    lists the subtree parent-first. `end` on a child ends its subtree.
 7. **Across stores and hosts.** Start a run with `send`, drop the stream and
-   future, end the caller's store, and `wait` from a fresh store: the
-   outcome arrives, and the run was not cancelled. Place a child on another
-   host and stop that host mid-run: within the lease timeout, `wait` answers
-   `host-lost`, the child's state is `failed` with `failure` `host-lost`,
-   and a later `send` starts a new run elsewhere.
+   future, end the caller's store, and `wait` for its run id from a fresh
+   store: the outcome arrives, and the run was not cancelled. Let a person
+   start another run in the child first: `wait` still returns the caller's
+   run. Place a child on another host and cut that host off mid-run: within
+   the lease timeout, `wait` answers `host-lost`, the child's state is
+   `failed` with `failure` `host-lost`, a later `send` starts a new run
+   elsewhere, and writes or tool calls from the cut-off host are rejected.
+   From a sibling component in the same session, `children` lists none of
+   the first component's children and `send` answers `unknown`. With idle
+   children at the concurrency limit, a further `send` answers
+   `over-limit`.
 8. **Structured only.** A child that returns valid structured output and puts
    text in its reply, its finish reason and its model name: the caller sees
    only the structured value and the implementer's own fields.
@@ -810,3 +838,13 @@ teardown no longer cancelling a child's run (D7), and admission errors no
 longer promising that no start-up code ran (D5). Two smaller fixes: the
 README states the catalog condition for loads within the ceiling, and the
 interface-grant example no longer names a WASI 0.2 interface.
+
+A second round, on the hierarchical rework, found seven more; all are fixed:
+children are bound to the full identity of the component that spawned them,
+not only its session (D7); descendants' labels are no longer returned, since
+a child wrote them (D7); runs hold a fenced lease so a cut-off host cannot
+keep writing (D12); every run acceptance reserves its place against the
+concurrency limit, with `start-error.over-limit` (D10); `send` returns a run
+id and `wait` takes it (D7); a toolset still loading cannot be set aside
+(D3); and the function budget is the smallest across the caller's model
+aliases (D4).
