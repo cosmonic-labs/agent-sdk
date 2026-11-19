@@ -1,0 +1,212 @@
+package cosmonic:agent@0.4.4;
+
+/// Types shared by `lineage`, `children` and `spawn`. No functions:
+/// importing it grants nothing. Unstable behind `agent-spawn`, which also
+/// needs `agent-tool-loading`, `agent-run` and `session-status`, whose types
+/// these use. What an implementer must enforce is in
+/// `docs/spawn/CONFORMANCE.md`.
+///
+/// Sessions spawned from one root session form a tree. A child's reach
+/// never exceeds what its ancestors hold plus what a grantor approved for
+/// that child, and is checked again each time the child starts a run or
+/// loads a toolset. Budgets cover a session and everything below it.
+///
+/// What a caller sees of a child is the implementer's own: state, usage,
+/// progress, and the final outcome. Only the outcome's reply carries text the
+/// child wrote, and it can carry anything the child read; nothing here blocks
+/// prompt injection. Records about sessions below the caller's direct
+/// children carry no text a child chose. A child can still signal through how
+/// much it spends and when, and through tree-wide limits, as seen in usage,
+/// remaining budgets, `over-limit` answers and `watch-children` events.
+///
+/// Session ids and names authorize nothing on their own: the implementer
+/// acts only for the component that spawned a child.
+@unstable(feature = agent-spawn)
+interface spawn-types {
+    @unstable(feature = agent-spawn)
+    use wasi:clocks/types@0.3.0.{duration};
+    @unstable(feature = agent-spawn)
+    use run-types.{run-outcome, run-counts};
+    @unstable(feature = agent-spawn)
+    use session-status.{status};
+    @unstable(feature = agent-spawn)
+    use toolset-types.{pending-approval};
+
+    /// A budget that can leave a session unable to take another run.
+    @unstable(feature = agent-spawn)
+    variant budget-item {
+        /// The session's `max-runs`.
+        max-runs,
+        /// Tokens, the session's or an ancestor's.
+        max-total-tokens,
+        /// An ancestor's time. (A session's own `max-duration` ends it.)
+        max-duration,
+        /// An item not captured above.
+        other(option<string>),
+    }
+
+    /// Why a child takes no more runs.
+    @unstable(feature = agent-spawn)
+    variant child-failure {
+        /// A grantor refused it.
+        denied(option<string>),
+        /// Its approval request was withdrawn (the caller ended it) or
+        /// expired undecided.
+        withdrawn,
+        /// Its components could not start.
+        start-failed(option<string>),
+        /// A budget is spent, until an operator or person raises it.
+        exhausted(budget-item),
+        /// It no longer fits its ancestors' current reach or policy.
+        revoked(option<string>),
+        /// A reason not captured above.
+        other(option<string>),
+    }
+
+    /// Where a child stands.
+    @unstable(feature = agent-spawn)
+    variant child-state {
+        /// Waiting on a grantor. Holds no instance and no reach; runs sent
+        /// to it wait too. Below the caller's direct children the summary is
+        /// empty.
+        pending(pending-approval),
+        /// Admitted, with its session status. Below the caller's direct
+        /// children, `status.run` is none.
+        live(status),
+        /// Admitted, but takes no more runs, for this reason.
+        stopped(child-failure),
+        /// Ended; the reason, when it was not an orderly end. A refused or
+        /// withdrawn pending child ends this way, freeing its place.
+        ended(option<child-failure>),
+        /// A state not captured above.
+        other(option<string>),
+    }
+
+    /// Why a child's run failed after it started. Detail strings are the
+    /// implementer's, never the child's.
+    @unstable(feature = agent-spawn)
+    variant child-run-error {
+        /// Cancelled. Effects caused before the child stopped remain.
+        cancelled,
+        /// The outcome broke the output shape or size limit. The detail never
+        /// quotes the rejected output.
+        output-rejected(string),
+        /// The child was never admitted (refused, withdrawn or expired), so
+        /// the run never started.
+        not-admitted,
+        /// A person or auditor declined to release the outcome.
+        withheld,
+        /// The machine running the child was lost mid-run. Effects already
+        /// under way may remain; a later run starts afresh from the recorded
+        /// conversation.
+        host-lost(option<string>),
+        /// The child failed.
+        failed(option<string>),
+        /// The run ended and its outcome is no longer kept.
+        expired,
+        /// A failure not captured above.
+        other(option<string>),
+    }
+
+    /// How the last run the caller started in a child stands.
+    @unstable(feature = agent-spawn)
+    variant run-state {
+        /// Accepted and not yet ended.
+        in-progress,
+        /// Ended with an outcome.
+        done,
+        /// Ended without one.
+        failed(child-run-error),
+        /// A state not captured above.
+        other(option<string>),
+    }
+
+    /// Spend the implementer metered for a session and its whole subtree.
+    @unstable(feature = agent-spawn)
+    record usage-total {
+        /// Prompt plus completion tokens.
+        tokens: u64,
+        /// Runs accepted across the subtree.
+        runs: u32,
+        /// Model calls made.
+        model-calls: u32,
+    }
+
+    /// One session in the caller's subtree.
+    @unstable(feature = agent-spawn)
+    record child-info {
+        /// The name the caller gave it; set for the caller's direct children
+        /// only, since deeper names were written by a child.
+        name: option<string>,
+        /// Its session id, for drawing the tree.
+        session: string,
+        /// Its parent's session id.
+        parent: string,
+        /// 1 for a child of a root session.
+        depth: u32,
+        /// Where it stands.
+        state: child-state,
+        /// The last run the caller started there, and how it stands; none
+        /// for deeper descendants and for a child the caller never sent to.
+        last-run: option<tuple<string, run-state>>,
+        /// An operator-named host group or zone it last ran in, for display.
+        location: option<string>,
+        /// What it and its subtree have spent.
+        usage: usage-total,
+    }
+
+    /// What the caller has left. Its own figures are exact. Ancestor bounds
+    /// are coarse (rounded down to a power of two tokens or a whole minute,
+    /// refreshed at most once a minute) so they do not reveal what other
+    /// subtrees spend.
+    @unstable(feature = agent-spawn)
+    record remaining-budget {
+        /// Tokens left under its own budget; none if it sets no limit.
+        tokens: option<u64>,
+        /// Time left under its own limit, on that limit's clock (since
+        /// admission for a child, active time for a root); none if no limit.
+        duration: option<duration>,
+        /// Runs left under its own `max-runs`; none if no limit.
+        runs: option<u32>,
+        /// The tightest ancestor's tokens left, coarse. Always set, since
+        /// every root is finite; for a root it is its own budget, coarse.
+        ancestor-tokens: u64,
+        /// The tightest ancestor's time left, coarse; for a root, its own.
+        ancestor-duration: duration,
+    }
+
+    /// Why a run is paused.
+    @unstable(feature = agent-spawn)
+    variant blocked-reason {
+        /// The child is waiting on a grantor before its first run.
+        admission,
+        /// A tool call or load waits on a person or auditor.
+        tool-approval,
+        /// Policy holds the outcome for release.
+        outcome-release,
+        /// The run waits to be placed after its machine was lost.
+        placement-delay,
+        /// A reason not captured above.
+        other(option<string>),
+    }
+
+    /// Contentless progress, coalesced by the implementer.
+    @unstable(feature = agent-spawn)
+    variant progress {
+        /// Working.
+        working,
+        /// Paused.
+        blocked(blocked-reason),
+        /// Cancellation was requested and the child has not stopped yet.
+        cancelling,
+        /// Cumulative counts for this run, metered by the implementer.
+        counts(run-counts),
+        /// A frame not captured above. Safe to ignore.
+        other(option<string>),
+    }
+
+    /// A child's run: progress, then the outcome. Dropping either half only
+    /// stops listening; the run goes on, and `child.wait` collects it later.
+    @unstable(feature = agent-spawn)
+    type child-run = tuple<stream<progress>, future<result<run-outcome, child-run-error>>>;
+}

@@ -1,4 +1,4 @@
-package cosmonic:agent@0.4.3;
+package cosmonic:agent@0.4.4;
 
 /// Where a session stands, as its host reports it.
 ///

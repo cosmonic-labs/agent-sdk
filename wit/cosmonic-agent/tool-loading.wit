@@ -1,0 +1,152 @@
+package cosmonic:agent@0.4.4;
+
+/// The caller may change its own toolsets while it runs: load one and set
+/// one aside. Unstable behind `agent-tool-loading`.
+///
+/// A loaded toolset is one more component in the caller's own workload, with
+/// its own grants, offered through the caller's `tools` import to the
+/// component that loaded it only. The host's `load_tools` tool is an
+/// adapter over `load`, made on the agent's behalf.
+///
+/// Admission. A catalog load within the caller's ceiling (its own reach,
+/// plus toolsets a person approved earlier in this session) needs no
+/// grantor; anything else waits on one as `awaiting-approval`. A person's
+/// approval lasts for the session: loading the identical toolset again later
+/// needs no prompt, until the person removes it. A request nobody decides
+/// expires after a while.
+///
+/// Timing. A load serves the run in progress where the implementer can: the
+/// caller's `tools.list` includes the toolset's tools once it is `offered`.
+/// A harness that loads tools, or lets its model call `load_tools`, calls
+/// `tools.list` again before its next model call. An implementer that can
+/// change tools only between runs answers `next-run`.
+///
+/// Budget. The model's function budget (how many functions it is offered at
+/// once) comes from the model binding. When a load would exceed it, the
+/// implementer sets aside the least recently called toolset this caller
+/// loaded, never a pinned one, and says which.
+@unstable(feature = agent-tool-loading)
+interface tool-loading {
+    @unstable(feature = agent-tool-loading)
+    use toolset-types.{toolset-source, toolset-state, store-error};
+
+    /// Who put a toolset in the session.
+    @unstable(feature = agent-tool-loading)
+    variant origin {
+        /// The workload's declaration. Pinned.
+        declared,
+        /// A person. Pinned.
+        person,
+        /// The caller or its model. May be set aside.
+        loaded,
+        /// An origin not captured above. Treat as pinned.
+        other(option<string>),
+    }
+
+    /// One toolset in the caller's session.
+    @unstable(feature = agent-tool-loading)
+    record loaded-toolset {
+        /// Its name, unique among the caller's toolsets.
+        name: string,
+        /// The model-facing names its tools are offered under. They carry no
+        /// authority and do not change during the session.
+        aliases: list<string>,
+        /// Where it stands.
+        state: toolset-state,
+        /// Who added it.
+        origin: origin,
+    }
+
+    /// What a load did.
+    @unstable(feature = agent-tool-loading)
+    record load-result {
+        /// The toolset as it now stands.
+        toolset: loaded-toolset,
+        /// Toolsets set aside to stay within the function budget.
+        set-aside: list<string>,
+    }
+
+    /// The caller's toolsets and its function budget.
+    @unstable(feature = agent-tool-loading)
+    record working-set {
+        /// Declared first, then loaded, in order.
+        toolsets: list<loaded-toolset>,
+        /// Functions offered to the model now.
+        offered-functions: u32,
+        /// The model's function budget, where one applies.
+        max-offered-functions: option<u32>,
+    }
+
+    /// Which limit a load would exceed.
+    @unstable(feature = agent-tool-loading)
+    variant load-limit {
+        /// Nothing can be set aside to stay within the function budget.
+        offered-functions,
+        /// Toolset components bound in the workload.
+        loaded-toolsets,
+        /// Approvals pending at once.
+        pending-approvals,
+        /// A limit not captured above.
+        other(option<string>),
+    }
+
+    /// Why a load added nothing.
+    @unstable(feature = agent-tool-loading)
+    variant load-error {
+        /// Loading is not enabled for this caller. Permanent.
+        disabled,
+        /// Policy or a person refused, or a refusal's cooldown is running.
+        denied(option<string>),
+        /// Another toolset already holds the name.
+        name-taken,
+        /// A limit would be exceeded; the value where reported.
+        over-limit(tuple<load-limit, option<u64>>),
+        /// Malformed: an unknown catalog name or function, or a component
+        /// whose imports its grants do not cover.
+        invalid(string),
+        /// Could not be served now, or the toolset failed to start. Retry
+        /// may succeed.
+        unavailable(string),
+        /// A failure not captured above.
+        other(option<string>),
+    }
+
+    /// Why a set-aside did nothing.
+    @unstable(feature = agent-tool-loading)
+    variant unload-error {
+        /// This power is not enabled for the caller. Permanent.
+        disabled,
+        /// The caller holds no toolset of that name.
+        unknown-toolset,
+        /// It is pinned (declared, or added by a person).
+        pinned,
+        /// It is still loading.
+        not-offered,
+        /// Could not be served now.
+        unavailable(string),
+        /// A failure not captured above.
+        other(option<string>),
+    }
+
+    /// Load a toolset. Resolves when it is `offered`, `next-run` or
+    /// `awaiting-approval`, or with an error if it cannot load (a rollout
+    /// that fails or runs out of time answers `unavailable`). If the caller
+    /// already holds the identical one, a `ready` one returns to `offered`
+    /// (after the same checks, setting another aside if the budget needs
+    /// room), a `loading` one is joined, a `failed` or `denied` one is loaded
+    /// afresh (a refusal's cooldown still applies), and any other is returned
+    /// as it stands. Dropping the call stops waiting; the load goes on.
+    @unstable(feature = agent-tool-loading)
+    load: async func(toolset: toolset-source) -> result<load-result, load-error>;
+
+    /// Set aside a toolset the caller loaded: its tools leave the model's
+    /// list from the next `tools.list`, and it becomes `ready`. Its component
+    /// and approval stay. A call in progress finishes. On one still
+    /// `awaiting-approval`, this withdraws the request instead.
+    @unstable(feature = agent-tool-loading)
+    set-aside: async func(name: string) -> result<_, unload-error>;
+
+    /// The caller's toolsets now.
+    @unstable(feature = agent-tool-loading)
+    list-toolsets: async func() -> result<working-set, store-error>;
+}

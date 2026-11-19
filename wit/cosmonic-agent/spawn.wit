@@ -1,0 +1,290 @@
+package cosmonic:agent@0.4.4;
+
+/// The caller may start child agent sessions and drive them: send them
+/// input, wait for results, cancel and end them. Unstable behind
+/// `agent-spawn`.
+///
+/// A child is an agent session of its own (an agent component targeting
+/// `runnable-agent`, in its own workload, with its own conversation),
+/// inheriting nothing. It may run on another machine and outlive the
+/// caller's run: the caller names it, and the name, scoped to the caller's
+/// own component and session, is its durable address. A `child` handle is a
+/// reference for acting on it; dropping the handle releases the reference
+/// and the child lives on, and `get-child` finds it again from any later
+/// run.
+///
+/// Names are idempotency keys and are never reused: a child's name within
+/// the caller's session, and a run's name within its child, stay taken after
+/// the child or run ends. Both are 1 to 64 characters of `[a-z0-9-]`, and a
+/// name is matched before any other check, so a retry of a run in progress
+/// returns that run. A harness that lets its model choose names must keep
+/// them unique. Spawning a name that exists returns that child if
+/// the request and first run are identical, and `name-taken` otherwise;
+/// sending a run name that exists returns that run if the message is
+/// identical. A resend after a lost reply never starts a second child or
+/// run.
+///
+/// Admission happens in place. A request within the caller's ceiling, for
+/// catalogued code, needs no grantor. Otherwise the child exists in state
+/// `pending` (no instance, no reach) until a grantor decides; runs sent to it
+/// wait (`blocked(admission)`). A refusal, an expired request, or `end`
+/// while pending ends the child, and its waiting runs fail `not-admitted`.
+/// One approval admits one child, and that child only: what was approved
+/// for it counts as beyond its ceiling when its own children ask, so they
+/// are refused unless every higher ancestor holds it, and then need their
+/// own approval.
+///
+/// Stopping reaches the subtree. `cancel` and `end` cancel every run in
+/// progress below the child, cooperatively and then by force after a grace
+/// period, and resolve when all have stopped; a child that ends any other way
+/// (its `max-duration`, its parent ending) stops its subtree the same way. A
+/// run that ends on its own leaves its children's runs going.
+@unstable(feature = agent-spawn)
+interface spawn {
+    @unstable(feature = agent-spawn)
+    use wasi:clocks/types@0.3.0.{duration};
+    @unstable(feature = agent-spawn)
+    use inference-types.{json, user-message};
+    @unstable(feature = agent-spawn)
+    use run-types.{run-outcome};
+    @unstable(feature = agent-spawn)
+    use toolset-types.{component-ref, grants, toolset-source, store-error};
+    @unstable(feature = agent-spawn)
+    use spawn-types.{child-info, child-run, child-run-error};
+
+    /// An agent described by the caller.
+    @unstable(feature = agent-spawn)
+    record agent-spec {
+        /// A component targeting `runnable-agent`.
+        component: component-ref,
+        /// A model alias the caller was granted.
+        model-alias: string,
+        /// What the agent component may touch: within the caller's own
+        /// grants. Reach the caller lacks goes in a toolset.
+        grants: grants,
+        /// Its toolsets, in order.
+        toolsets: list<toolset-source>,
+    }
+
+    /// Which agent a child runs.
+    @unstable(feature = agent-spawn)
+    variant agent-source {
+        /// An agent definition in the implementer's catalog, by name,
+        /// admitted by the same rules as one the caller describes.
+        catalog(string),
+        /// An agent the caller describes.
+        custom(agent-spec),
+        /// A source not captured above.
+        other(option<string>),
+    }
+
+    /// What may come back to the caller.
+    @unstable(feature = agent-spawn)
+    variant output-shape {
+        /// Reply parts only.
+        reply,
+        /// Reply parts and a structured value matching this JSON Schema.
+        reply-and-structured(json),
+        /// Only a structured value matching this JSON Schema; the reply is
+        /// withheld and every other outcome field is the implementer's own.
+        /// For reading untrusted content in quarantine.
+        structured-only(json),
+        /// A shape not captured above.
+        other(option<string>),
+    }
+
+    /// What a child may spend. None takes the implementer's default. A
+    /// subtree's spend counts against every ancestor too.
+    @unstable(feature = agent-spawn)
+    record budget {
+        /// Runs it may take.
+        max-runs: option<u32>,
+        /// Model calls per run.
+        max-steps: option<u32>,
+        /// Prompt plus completion tokens across its subtree.
+        max-total-tokens: option<u64>,
+        /// Time from admission; passing it ends the child.
+        max-duration: option<duration>,
+        /// Children its subtree may spawn in all.
+        max-spawns: option<u32>,
+    }
+
+    /// Powers a child may receive; it gets one only if the caller holds it.
+    /// Every child may read its own `lineage`.
+    @unstable(feature = agent-spawn)
+    flags agent-powers {
+        /// Spawn and drive children of its own, and see them (`children`).
+        /// A requested power the caller lacks is `invalid`.
+        spawn,
+        /// Ask which toolsets are available.
+        tool-discovery,
+        /// Load toolsets into itself.
+        tool-loading,
+    }
+
+    /// Everything needed to start a child. Construction is lenient; `spawn`
+    /// validates.
+    @unstable(feature = agent-spawn)
+    record spawn-request {
+        /// The agent.
+        agent: agent-source,
+        /// Its instructions. Never shown to a grantor.
+        instructions: string,
+        /// What comes back.
+        output: output-shape,
+        /// Ceiling on one run's encoded outcome, in bytes.
+        max-bytes: u32,
+        /// What it may spend.
+        budget: budget,
+        /// Powers it receives.
+        powers: agent-powers,
+    }
+
+    /// Which limit a spawn or run would exceed.
+    @unstable(feature = agent-spawn)
+    variant spawn-limit {
+        /// Nesting depth.
+        depth,
+        /// Runs in progress at once in the tree.
+        concurrent-runs,
+        /// Children not yet ended in the tree.
+        live-children,
+        /// Children spawned in all, in the tree or under a child's
+        /// `max-spawns`.
+        total-children,
+        /// Approvals pending at once.
+        pending-approvals,
+        /// A limit not captured above.
+        other(option<string>),
+    }
+
+    /// Why `spawn` returned no child.
+    @unstable(feature = agent-spawn)
+    variant spawn-error {
+        /// Spawning is not enabled for this caller. Permanent.
+        disabled,
+        /// Policy refused, a refusal's cooldown is running, or the request
+        /// reaches beyond what any ancestor holds.
+        denied(option<string>),
+        /// The caller's own subtree is being stopped. Retry after it stops.
+        stopping,
+        /// The caller has a child of that name with a different request.
+        name-taken,
+        /// A limit would be exceeded; the value where reported.
+        over-limit(tuple<spawn-limit, option<u64>>),
+        /// Malformed: a bad name or schema, an unknown catalog entry or
+        /// model alias, a power the caller lacks, an image that could not be
+        /// read, or a component whose imports its grants and powers do not
+        /// cover.
+        invalid(string),
+        /// Could not be served now. Retry may succeed.
+        unavailable(string),
+        /// A failure not captured above.
+        other(option<string>),
+    }
+
+    /// Why `send` started no run.
+    @unstable(feature = agent-spawn)
+    variant send-error {
+        /// A run is in progress there, or the child's subtree is stopping.
+        busy,
+        /// The run name exists with a different message.
+        name-taken,
+        /// The child takes no more runs (see its state), or the caller's own
+        /// subtree is stopping.
+        stopped,
+        /// A limit would be exceeded.
+        over-limit(tuple<spawn-limit, option<u64>>),
+        /// The message cannot be taken.
+        invalid(string),
+        /// Could not be served now. Retry may succeed.
+        unavailable(string),
+        /// A failure not captured above.
+        other(option<string>),
+    }
+
+    /// Why `wait` returned no outcome.
+    @unstable(feature = agent-spawn)
+    variant wait-error {
+        /// The caller never sent a run of that name to this child.
+        unknown-run,
+        /// The run failed, or its outcome is no longer kept.
+        failed(child-run-error),
+        /// Could not be served now. Retry may succeed.
+        unavailable(string),
+        /// A failure not captured above.
+        other(option<string>),
+    }
+
+    /// Why `get-child` found nothing.
+    @unstable(feature = agent-spawn)
+    variant lookup-error {
+        /// Spawning is not enabled for this caller. Permanent.
+        disabled,
+        /// The caller has no child of that name.
+        unknown,
+        /// Could not be served now. Retry may succeed.
+        unavailable(string),
+        /// A failure not captured above.
+        other(option<string>),
+    }
+
+    /// A first run to start with the child.
+    @unstable(feature = agent-spawn)
+    record first-run {
+        /// The run's name.
+        run: string,
+        /// Its message.
+        message: user-message,
+    }
+
+    /// A reference to one of the caller's own children. Dropping it releases
+    /// the reference only.
+    @unstable(feature = agent-spawn)
+    resource child {
+        /// The name the caller gave it.
+        @unstable(feature = agent-spawn)
+        get-name: async func() -> string;
+
+        /// How it stands now.
+        @unstable(feature = agent-spawn)
+        get-info: async func() -> result<child-info, store-error>;
+
+        /// Start a run named `run`, or return that run if it exists with
+        /// this message. Resolves when accepted.
+        @unstable(feature = agent-spawn)
+        send: async func(run: string, message: user-message) -> result<child-run, send-error>;
+
+        /// The outcome of a run the caller sent here, once it ends. Works
+        /// from any later run and after the child has ended.
+        @unstable(feature = agent-spawn)
+        wait: async func(run: string) -> result<run-outcome, wait-error>;
+
+        /// Cancel the runs in progress in this child's subtree. Resolves when
+        /// all have stopped; nothing to cancel is ok.
+        @unstable(feature = agent-spawn)
+        cancel: async func() -> result<_, store-error>;
+
+        /// End the child and every session below it, after cancelling as
+        /// `cancel` does. Consumes the handle. Once begun, ending completes
+        /// even if this call fails; ending again (through `get-child`) is
+        /// harmless and reports when it is done.
+        @unstable(feature = agent-spawn)
+        end: static async func(this: child) -> result<_, store-error>;
+    }
+
+    /// Create the caller's child named `name` and its first run, together or
+    /// not at all, or return them if they exist with this request and first
+    /// run. The name is 1 to 64 characters of `[a-z0-9-]`. Resolves when the
+    /// request is accepted, pending or admitted.
+    @unstable(feature = agent-spawn)
+    spawn: async func(
+        name: string,
+        request: spawn-request,
+        first: option<first-run>,
+    ) -> result<child, spawn-error>;
+
+    /// The caller's child named `name`, ended or not.
+    @unstable(feature = agent-spawn)
+    get-child: async func(name: string) -> result<child, lookup-error>;
+}

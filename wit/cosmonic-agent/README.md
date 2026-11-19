@@ -120,12 +120,20 @@ Cosmonic hosts translate typed tools this way:
 
 ### Discovery and loading
 
-A host can let an agent find and add tools during a session. It does this with
-two tools of its own, `find_tools` and `load_tools`, listed beside the others;
-the names are reserved. Loading is a host decision under the host's policy, and
-a tool added mid-run arrives on the agent's next run. Nothing in the WIT
-changes for discovery: it is ordinary tool calls, and new tools appear in the
-next `tools.list`.
+An agent can find and add tools during a session. Most harnesses need do
+nothing: the host offers two tools of its own, `find_tools` and `load_tools`,
+the model calls them, and new tools appear in the next `tools.list` (so list
+again before each model call). A harness that manages tools in code
+(preloading, telling offered from ready, setting aside, waiting until a tool
+is callable in the same run) imports `tool-discovery` and `tool-loading`
+(unstable behind `agent-tool-loading`). Both are one mechanism: the host's
+tools are an adapter over the interfaces, with the same catalog, approvals
+and function budget. `lineage`, `children` and `spawn` (unstable behind `agent-spawn`) let an
+agent start named child agent sessions, possibly on other machines, see the
+tree below it, and read its remaining budget; a child's reach never exceeds
+its ancestors'. See [docs/spawn](docs/spawn/README.md), its
+[rationale](docs/spawn/RATIONALE.md) and
+[conformance](docs/spawn/CONFORMANCE.md) requirements.
 
 ## Session states
 
@@ -169,5 +177,6 @@ hosts and agents adopt it.
   `@since` for the new items. New interfaces, and new functions on interfaces
   the host serves, are additive.
 - Published artifacts never change. Interfaces that may still move are behind
-  `@unstable` features (`agent-run` today).
+  `@unstable` features (`agent-run`, `session-status`, `agent-tool-loading`
+  and `agent-spawn` today).
 - Versions never contain "draft".
