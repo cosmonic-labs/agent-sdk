@@ -1,0 +1,18 @@
+// The published Pi agent: the QuickJS component with its filesystem imports
+// satisfied by deny-fs (no preopened directories, every operation refused),
+// exporting its typed run, its compact export and its HTTP handler. The
+// componentization-time `init` export the QuickJS build leaves behind is not
+// re-exported.
+package cosmonic:pi-agent-composed@0.4.0;
+
+let fs = new cosmonic:deny-fs { ... };
+
+let agent = new cosmonic:pi-agent {
+  "wasi:filesystem/types@0.2.12": fs["wasi:filesystem/types@0.2.12"],
+  "wasi:filesystem/preopens@0.2.12": fs["wasi:filesystem/preopens@0.2.12"],
+  ...
+};
+
+export agent["cosmonic:agent/compact@0.4.2"];
+export agent["cosmonic:agent/run@0.4.2"];
+export agent["wasi:http/handler@0.3.0"];

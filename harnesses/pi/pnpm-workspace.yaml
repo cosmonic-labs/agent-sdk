@@ -1,0 +1,16 @@
+# A workspace of one package, so pnpm reads the settings below.
+packages:
+  - .
+
+# esbuild installs its platform binary; nothing else may run install scripts.
+allowBuilds:
+  esbuild: true
+  '@google/genai': false
+  protobufjs: false
+
+# Keep transitive dependencies on releases that fix published security advisories.
+overrides:
+  'undici@6': 6.29.1
+  glob: 14.0.2
+  minimatch: 11.0.1
+  zod: 4.6.6

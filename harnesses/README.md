@@ -7,11 +7,14 @@ They are examples to adopt and fork. Each one is versioned on its own with 0.x s
 | Path | What it is | Published as |
 | --- | --- | --- |
 | [`codex`](codex) | Codex's agent loop, ported from openai/codex 0.162.0 (Rust) | `ghcr.io/cosmonic/agents/codex` |
+| [`pi`](pi) | Pi's agent loop, built from unmodified upstream packages (JavaScript on QuickJS) | `ghcr.io/cosmonic/agents/pi` |
 
 ## Shared pieces
 
 - [`shared/scripts/fetch-wit.mjs`](shared/scripts/fetch-wit.mjs) fetches a harness's WIT through [`../wit/wkg-registries.toml`](../wit/wkg-registries.toml) and fails if the fetch would change its committed `wkg.lock`.
 - [`shared/scripts/check-harness.mjs`](shared/scripts/check-harness.mjs) is the sandbox gate. It holds a built harness to an allowlist: `cosmonic:agent` interfaces at one version, WASI clocks and random, the io and cli plumbing a language runtime links, and `wasi:http/types` (which alone cannot send a request). Outgoing HTTP, sockets and the filesystem fail the build.
+- [`shared/js`](shared/js) holds the journal, run and compaction rules the JavaScript harnesses share. They import nothing from the host, so they run under Node's tests.
+- [`shared/notices`](shared/notices) holds license notices that apply to more than one harness.
 - [`shared/test-host`](shared/test-host) is a scripted [Wasmtime](https://wasmtime.dev) host. It plays the model, the session store and a few tools, starts every call on a fresh instance, and runs a shared contract suite plus each harness's own cases. No model credentials are needed.
 
 Each harness's README covers what it imports, what it keeps from upstream, its notable decisions, and how to build, test and run it.

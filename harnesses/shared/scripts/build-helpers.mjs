@@ -4,7 +4,8 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { cpSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // The repository root (this file is harnesses/shared/scripts/build-helpers.mjs).
@@ -36,4 +37,27 @@ export async function runMain(action) {
         console.error(`  !! ${error.message}`);
         process.exitCode = error.status || 1;
     }
+}
+
+// The WIT feature gate the run export sits behind. It hides those items from
+// tools that cannot enable WIT features, so JavaScript harnesses build from a
+// copy with it taken off.
+const RUN_GATE = /@unstable\(feature\s*=\s*agent-run\)\s*/g;
+
+// Copy a WIT tree with the agent-run gate removed from every file.
+export function ungatedWit(source, destination) {
+    rmSync(destination, { recursive: true, force: true });
+    cpSync(source, destination, { recursive: true });
+    const walk = (dir) => {
+        for (const name of readdirSync(dir)) {
+            const path = join(dir, name);
+            if (statSync(path).isDirectory()) {
+                walk(path);
+            } else if (name.endsWith('.wit')) {
+                writeFileSync(path, readFileSync(path, 'utf8').replace(RUN_GATE, ''));
+            }
+        }
+    };
+    walk(destination);
+    return destination;
 }

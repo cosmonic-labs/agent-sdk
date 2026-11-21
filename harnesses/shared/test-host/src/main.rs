@@ -5,6 +5,7 @@
 //! another. No model credentials are needed: the model is scripted.
 //!
 //! cargo run --locked -- codex ../../codex/dist/codex-harness.wasm
+//! cargo run --locked -- pi ../../pi/dist/pi-harness.wasm
 mod agents;
 mod codex;
 mod fixture;
@@ -17,7 +18,7 @@ use fixture::Fixture;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let usage = "usage: test-host <codex> <component.wasm>";
+    let usage = "usage: test-host <codex | pi> <component.wasm>";
     let harness = std::env::args().nth(1).context(usage)?;
     let path = std::env::args().nth(2).context(usage)?;
     // The shared contract's session, and the harness's own.
@@ -37,6 +38,11 @@ async fn main() -> Result<()> {
             t.case("pre-turn compaction at 90% of the window", compaction(&f)).await;
             t.case("a schema is sent as the response format and checked", structured_output(&f)).await;
             t.case("a requested summary leaves the person's messages, then the summary", requested_history(&f)).await;
+        }
+        "pi" => {
+            contract_suite(&mut t, &contract, Covers::BeforeLatestExchange).await;
+            t.case("past 90% of the window a run compacts and streams compacted", agents::auto_threshold(&contract)).await;
+            t.case("one exchange has nothing to summarize: done, silent", agents::requested_after_one_exchange(&f)).await;
         }
         other => bail!("no suite for {other}; {usage}"),
     }
