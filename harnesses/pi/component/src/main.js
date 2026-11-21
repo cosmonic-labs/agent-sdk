@@ -603,9 +603,13 @@ async function work(acc, sink) {
         // added (the prompt, the replies and tool results), so the transcript is
         // the old one plus that, as compactions left it.
         transcript = view.apply(limited ?? [...context.messages, ...added]);
-        if (!failure && !gone && acc.schema) {
+        // A refused or filtered reply is not an answer: it carries no
+        // structured output and never fails the schema (finish refusal or
+        // content-filter instead).
+        const last = lastAssistant(transcript, view.index(base));
+        if (!failure && !gone && acc.schema && !last?.declined) {
             try {
-                acc.structured = structured(textOf(lastAssistant(transcript, view.index(base))));
+                acc.structured = structured(textOf(last));
             } catch (e) {
                 failure = e;
             }
@@ -634,17 +638,21 @@ async function work(acc, sink) {
     // Written before `done` and the outcome, so a client that redraws the
     // moment it sees either finds the run already stored.
     await journal.settle(transcript, at);
-    const finish = limit ?? 'done';
+    const reply = lastAssistant(transcript, at);
+    const finish = limit ?? DECLINED_FINISH[reply?.declined] ?? 'done';
     await journal.endRun(runResult(run, 'done', { finish }));
     return {
         status: 'done',
         finish,
         transcript,
-        reply: lastAssistant(transcript, at),
-        structured: acc.structured,
+        reply,
+        structured: reply?.declined ? undefined : acc.structured,
         counts,
     };
 }
+
+// How a reply the model refused, or a provider filter withheld, finishes.
+const DECLINED_FINISH = { refused: 'refusal', filtered: 'content-filter' };
 
 // The last assistant message this run added.
 function lastAssistant(transcript, base) {

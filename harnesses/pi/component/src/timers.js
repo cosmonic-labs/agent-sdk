@@ -19,3 +19,35 @@ globalThis.setTimeout = (fn, ms = 0, ...args) => {
     );
     return 0;
 };
+
+// setInterval over the same wait: each tick waits again until cleared. The
+// QuickJS runtime has no timers of its own, so without this the requested
+// compaction's heartbeat throws before its work starts.
+const intervals = new Set();
+let nextInterval = 1;
+
+globalThis.setInterval = (fn, ms = 0, ...args) => {
+    const id = nextInterval++;
+    const wait = Math.max(1, Math.floor(Number(ms) || 0)) * 1_000_000;
+    intervals.add(id);
+    const tick = () => {
+        if (!intervals.has(id)) {
+            return;
+        }
+        waitFor(wait).then(
+            () => {
+                if (intervals.has(id)) {
+                    fn(...args);
+                    tick();
+                }
+            },
+            () => intervals.delete(id),
+        );
+    };
+    tick();
+    return id;
+};
+
+globalThis.clearInterval = (id) => {
+    intervals.delete(id);
+};
