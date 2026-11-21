@@ -90,15 +90,9 @@ The build is locked: `pnpm install --frozen-lockfile` uses [`pnpm-lock.yaml`](pn
 
 Any host that serves `cosmonic:agent@0.4.2` and drives the `run` export can run this harness. [Cosmonic Desktop](https://cosmonic.com/desktop/) offers it as its Pi agent. [Cosmonic Control](https://cosmonic.com/control/) drives the same `run` export on Kubernetes; its agent support is experimental. To run your own build in Cosmonic Desktop, follow the steps in [minimal-agent's README](../../components/minimal-agent/README.md#run-it-in-cosmonic-desktop) with `dist/pi-harness.wasm`.
 
-## Releases
+## Versions
 
-Tags named `pi-harness-v<version>` publish the tested component as `ghcr.io/cosmonic/agents/pi:<version>` (and `latest`). Each published digest is signed with cosign, carries a GitHub build provenance attestation, and has this harness's license notices attached as an OCI referrer. Deploy by digest. To verify:
-
-```shell
-gh attestation verify oci://ghcr.io/cosmonic/agents/pi:<version> --owner cosmonic-labs
-```
-
-Reference harnesses are examples to adopt and fork, versioned on their own with 0.x semver; a minor version can break.
+This repository publishes no build of this harness; build it yourself with `just build`. Each pull request's CI run keeps the built component as a workflow artifact. Reference harnesses are examples to adopt and fork; what they do can change between commits.
 
 ## License
 
