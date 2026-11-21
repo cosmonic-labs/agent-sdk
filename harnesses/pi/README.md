@@ -45,13 +45,9 @@ The `compact` export lets a driver ask for a summary between runs, with an optio
 
   Upstream [componentize-qjs#91](https://github.com/andreiltd/componentize-qjs/pull/91) (async import cancellation and larger snapshots) and [#90](https://github.com/andreiltd/componentize-qjs/pull/90) (async export task ownership) have merged since the pinned commit, so a toolchain bump may shrink the patch. Re-test before bumping.
 - **deny-fs answers the filesystem inside the component.** The QuickJS runtime is built with wasi-libc, which links its filesystem support whether or not the harness touches a file, so the bare QuickJS component imports `wasi:filesystem`. [`deny-fs/`](deny-fs/) is a small Rust component that exports an empty filesystem: no preopened directories, and every operation refused with `access`. Composed in front of the harness ([`component/compose.wac`](component/compose.wac)), it satisfies those imports inside the component, so the published artifact imports no filesystem at all. Stubs that trap would crash the harness on a probe; an empty filesystem refuses instead. The interface version in [`deny-fs/wit/world.wit`](deny-fs/wit/world.wit) (`@0.2.12`) has to match what the QuickJS runtime imports; if a componentize-qjs update moves it, `wac compose` fails naming the import.
-- **Timers really suspend.** A microtask never returns control to the host; only a real suspension does. [`component/src/timers.js`](component/src/timers.js) makes `setTimeout` an actual `wait-for` of at least 1 ms, without which cancellation and response streaming starve.
+- **Timers really suspend.** The QuickJS runtime has no timers of its own, and a microtask never returns control to the host; only a real suspension does. [`component/src/timers.js`](component/src/timers.js) makes `setTimeout` and `setInterval` actual `wait-for` calls of at least 1 ms, without which cancellation, heartbeats and response streaming starve.
 - **Ids come from `wasi:random`, never `Math.random`.** The PRNG state is part of the Wizer heap snapshot every instance starts from, so `Math.random` would repeat across instances.
 - **Ops are committed before the call.** A reply's tool ops are committed conditionally on the state version and the journal end, so a writer that has been replaced stops before calling the tool, and unresolved tool calls are never repeated.
-
-## Known issue
-
-With the pinned componentize-qjs, the scripted test host's `compact` export cases time out (`just test-e2e`); the run, duplicate and cancellation cases pass. It is not yet known whether this is the toolchain or the harness. A componentize-qjs bump past #90 and #91 is the first thing to try. Until it is resolved, `just test` runs the build, the sandbox gate and the rule tests, and CI runs the scripted host without blocking on it.
 
 ## Notes on QuickJS, for anyone editing `component/src/`
 
@@ -84,9 +80,8 @@ From this directory, with `COMPONENTIZE_QJS` set:
 
 ```shell
 just build       # bundle, componentize, compose deny-fs, run the sandbox gate: dist/pi-harness.wasm
-just test        # build, then the rule tests under Node
+just test        # build, then the rule tests under Node and the scripted test host
 just test-unit   # the rule tests alone (Node only)
-just test-e2e    # the scripted test host (see Known issue)
 ```
 
 The build is locked: `pnpm install --frozen-lockfile` uses [`pnpm-lock.yaml`](pnpm-lock.yaml), `deny-fs` builds `--locked`, and the WIT is pinned by `component/wkg.lock` and `deny-fs/wkg.lock`. The harness's journal, run and compaction rules that do not depend on Pi live in [`../shared/js`](../shared/js) so they run under Node's tests.

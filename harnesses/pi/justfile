@@ -20,16 +20,16 @@ build:
     cp dist/pi-agent.wasm dist/pi-harness.wasm
     @ls -l dist/pi-harness.wasm
 
-# Build, then the journal, run and compaction rule tests under Node.
-test: build test-unit
+# Build, then the rule tests under Node and the scripted test host.
+test: build test-unit test-e2e
 
 # The rule tests alone, which need nothing beyond Node and the installed
 # dependencies.
 test-unit:
     {{node}} --test component/test/*.js
 
-# Drive the built component through the scripted test host. Its `compact`
-# cases currently time out with the pinned componentize-qjs (see README).
+# Drive the built component through the scripted test host: runs, the
+# compact export and the automatic compaction.
 test-e2e: build
     {{node}} {{scripts}}/fetch-wit.mjs {{test_host}}
     cd {{test_host}} && {{cargo}} run --locked -- pi "{{justfile_directory()}}/dist/pi-harness.wasm"
