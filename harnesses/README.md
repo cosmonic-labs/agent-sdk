@@ -2,11 +2,11 @@
 
 An agent harness is the loop that decides what to do next: it asks the model, runs the tool calls the model makes, records what happened and repeats. The harnesses here take that loop from an existing agent and run it as a WebAssembly component on `cosmonic:agent`. The host makes the model calls, runs the tools and keeps the session, so a harness gets only what a workload grants it.
 
-They are examples to adopt and fork. Each one is versioned on its own with 0.x semver, so a minor version can break.
+They are examples to adopt and fork, and this repository publishes no build of them: build one yourself from its directory.
 
-| Path | What it is | Published as |
-| --- | --- | --- |
-| [`codex`](codex) | Codex's agent loop, ported from openai/codex 0.162.0 (Rust) | `ghcr.io/cosmonic/agents/codex` |
+| Path | What it is |
+| --- | --- |
+| [`codex`](codex) | Codex's agent loop, ported from openai/codex 0.162.0 (Rust) |
 
 ## Shared pieces
 
