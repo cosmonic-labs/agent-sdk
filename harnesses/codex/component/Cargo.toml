@@ -1,0 +1,33 @@
+[package]
+name = "codex-agent"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Codex's agent loop as a cosmonic:agent@0.4.2 component: host model, host tools, host session"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Bindings for the agent world (models, chat, session, tools, and the run
+# export). 0.62 is the version wasip3 0.9 uses, so both share one async
+# runtime and one set of stream and future intrinsics.
+wit-bindgen = { version = "0.62.0", features = ["async-spawn"] }
+# WASI 0.3 random (commit ids), the monotonic clock (max-duration) and
+# spawn_local. Nothing else of it is used, so nothing else is imported.
+wasip3 = { version = "0.9", features = ["async-spawn"] }
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+# Not part of the repository's Rust workspace: this crate pins its own lock.
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

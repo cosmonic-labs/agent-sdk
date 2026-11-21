@@ -1,0 +1,10 @@
+// The world a scripted host drives: an agent that exports `run` and
+// `compact` (cosmonic:agent's `compactable-agent`, unstable, feature
+// `agent-run`) over the imports a host grants. The test host links
+// those imports to a scripted model, an in-memory session and three tools.
+// Fetched by wkg from the published package and pinned by digest in wkg.lock.
+package cosmonic:test-host@0.1.0;
+
+world agent-under-test {
+  include cosmonic:agent/compactable-agent@0.4.2;
+}
