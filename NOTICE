@@ -17,3 +17,18 @@ Licensed under the Apache License, Version 2.0. harnesses/codex/component
 ports modules of Codex 0.162.0 (history, truncation, compaction, models, the
 turn loop and the prompts) and keeps Codex's license as LICENSE-codex beside
 them. harnesses/codex/NOTICE lists the notices for the built component.
+
+-------------------------------------------------------------------------------
+componentize-qjs (https://github.com/andreiltd/componentize-qjs)
+-------------------------------------------------------------------------------
+
+Licensed under the Apache License, Version 2.0.
+harnesses/pi/patches/componentize-qjs.patch is a patch to its build-time
+initializer, applied to an upstream checkout that is fetched, not included.
+
+-------------------------------------------------------------------------------
+
+Pi (https://github.com/earendil-works/pi) and QuickJS-ng
+(https://github.com/quickjs-ng/quickjs) are MIT licensed. They are fetched at
+build time and are not included in this repository; harnesses/pi/NOTICE
+carries their notices for the built component.

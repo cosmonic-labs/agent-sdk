@@ -354,3 +354,68 @@ async fn compaction_dropped_mid_summary(f: &Fixture) -> Result<()> {
     ensure!(result.json()["outcome"] == "cancelled", "{}", result.data);
     Ok(())
 }
+
+
+/// One exchange and nothing before it: an agent that keeps the latest
+/// exchange verbatim has nothing to summarize. Done, no event, no model
+/// call, and agent.compact-result.v1 alone after its acceptance; the state
+/// as it was.
+pub(crate) async fn requested_after_one_exchange(f: &Fixture) -> Result<()> {
+    started(f.run("r1", "hello", None).await?)?;
+    let from = f.agent().entries.len();
+    let chats = f.agent().chats.len();
+    let version = f.agent().state.as_ref().map(|s| s.version.clone());
+    let (events, outcome) = started(f.compact("c0", None, |_| {}).await?)?;
+    ensure!(events.is_empty(), "events: {:?}", events.iter().map(describe).collect::<Vec<_>>());
+    ensure!(matches!(outcome.finish, Finish::Done) && outcome.reply.is_empty() && outcome.structured.is_none());
+    ensure!(outcome.counts.steps == 0, "{:?}", outcome.counts);
+    let agent = f.agent();
+    ensure!(agent.chats.len() == chats, "a model call was made");
+    ensure!(agent.kinds(from) == ["agent.compact.v1", "agent.compact-result.v1"], "journal: {:?}", agent.kinds(from));
+    let result = agent.entries[from + 1].json();
+    ensure!(result == json!({"compact": "c0", "outcome": "done", "finish": "done", "compacted": false}), "{result}");
+    ensure!(agent.state.as_ref().map(|s| s.version.clone()) == version, "the state was written");
+    Ok(())
+}
+
+/// Past 90 percent of a small window, a run summarizes before its first
+/// model call: the summary call between its op and op-result, its result
+/// with agent.compaction.v1 (trigger threshold) and the smaller state, then
+/// the compacted event, before the reply.
+pub(crate) async fn auto_threshold(f: &Fixture) -> Result<()> {
+    f.agent().context_length = Some(1200);
+    let from = f.agent().entries.len();
+    let ran = f.run("r-threshold", "past the threshold", None).await;
+    f.agent().context_length = None;
+    let (events, outcome) = started(ran?)?;
+    ensure!(reply_text(&outcome) == "Reply to: past the threshold", "reply: {:?}", outcome.reply);
+    let agent = f.agent();
+    let kinds = agent.kinds(from);
+    println!("    journal: {}", kinds.join(" "));
+    let at = kinds.iter().position(|k| k == "agent.compaction.v1").context("no compaction")?;
+    ensure!(kinds[at - 2] == "agent.op.v1" && kinds[at - 1] == "agent.op-result.v1", "the summary call is an op");
+    let entry = agent.entries[from + at].json();
+    ensure!(entry["trigger"] == "threshold", "{entry}");
+    let person = agent.entries[from..].iter().find(|e| e.kind == "agent.step.v1").context("no person's step")?.seq;
+    let through = agent.entries.iter().map(|e| e.seq).filter(|s| *s < person).max().context("nothing before")?;
+    ensure!(entry["through"] == json!({"start": 0, "end": through}), "through {}", entry["through"]);
+    let compacted: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            RunEvent::Compacted(c) => Some(*c),
+            _ => None,
+        })
+        .collect();
+    ensure!(compacted.len() == 1, "{} compacted events", compacted.len());
+    let c = compacted[0];
+    ensure!(
+        matches!(c.trigger, CompactionTrigger::Threshold)
+            && c.through.end == through
+            && c.seq == Some(agent.entries[from + at].seq),
+        "compacted event: {c:?}"
+    );
+    let compacted_at = events.iter().position(|e| matches!(e, RunEvent::Compacted(_)));
+    let reply_at = events.iter().position(|e| matches!(e, RunEvent::TextDelta(_) | RunEvent::Step(_)));
+    ensure!(compacted_at < reply_at, "compacted streams before the reply");
+    Ok(())
+}
