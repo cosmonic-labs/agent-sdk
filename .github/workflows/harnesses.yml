@@ -89,6 +89,7 @@ jobs:
             notices: |
               harnesses/codex/NOTICE
               harnesses/codex/component/LICENSE-codex
+              harnesses/shared/notices/wasi-libc.txt
     env:
       CARGO_BUILD_JOBS: "2"
     steps:
@@ -247,10 +248,30 @@ jobs:
           (cd out && sha256sum -c SHA256SUMS)
           node harnesses/shared/scripts/check-harness.mjs out/component.wasm
 
-      # Push once under the version, then point `latest` at the same manifest,
-      # so every tag resolves to the one digest that is signed and attested.
-      # An existing version tag is never overwritten: a version keeps meaning
-      # one build.
+      # Before anything is pushed: the key opens with its password and is the
+      # one the committed public key names, so a signing problem fails here
+      # rather than after an image is published.
+      - name: Check the signing key
+        if: steps.release.outputs.publish == 'true'
+        env:
+          COSIGN_KEY: ${{ secrets.COSMONIC_TOOLS_COSIGN_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSMONIC_TOOLS_COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KD="$(mktemp -d)"; trap 'rm -rf "$KD"' EXIT
+          ( umask 077; printf '%s\n' "$COSIGN_KEY" > "$KD/cosign.key" )
+          cosign public-key --key "$KD/cosign.key" > "$KD/derived.pub"
+          norm() { grep -v -- '-----' "$1" | tr -d '\n'; }
+          [ "$(norm "$KD/derived.pub")" = "$(norm .github/cosign/cosign-tools.pub)" ] || {
+            echo "::error::the signing key does not match .github/cosign/cosign-tools.pub"; exit 1
+          }
+
+      # Push once, under the version. `latest` moves only after the digest is
+      # signed, verified, carries its notices and is attested, so `latest`
+      # never names an unsigned image. An existing version tag is never
+      # overwritten: a version keeps meaning one build. If a later step fails,
+      # the version tag names an unsigned digest that hosts checking
+      # signatures refuse; release a new patch version.
       - name: Push
         id: push
         if: steps.release.outputs.publish == 'true'
@@ -271,17 +292,14 @@ jobs:
           digest=$(echo "$pushed" | jq -er '.data.digest | select(test("^sha256:[0-9a-f]{64}$"))') || {
             echo "::error::push reported no digest: $pushed"; exit 1
           }
-          oras tag "$IMAGE@$digest" latest
-          for tag in "$VERSION" latest; do
-            resolved=$(oras resolve "$IMAGE:$tag")
-            [ "$resolved" = "$digest" ] || { echo "::error::$IMAGE:$tag resolves to $resolved, not $digest"; exit 1; }
-          done
+          resolved=$(oras resolve "$IMAGE:$VERSION")
+          [ "$resolved" = "$digest" ] || { echo "::error::$IMAGE:$VERSION resolves to $resolved, not $digest"; exit 1; }
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "pushed $IMAGE:$VERSION and latest ($digest)"
+          echo "pushed $IMAGE:$VERSION ($digest)"
 
       # No transparency-log upload: hosts verify offline against the public
       # key, and a Rekor outage must not fail a release. Verified against the
-      # committed public key, so a key mix-up fails here.
+      # committed public key.
       - name: Sign and verify
         if: steps.release.outputs.publish == 'true'
         env:
@@ -323,6 +341,18 @@ jobs:
           subject-name: ${{ matrix.image }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+      - name: Move latest to the signed digest
+        if: steps.release.outputs.publish == 'true'
+        env:
+          IMAGE: ${{ matrix.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          oras tag "$IMAGE@$DIGEST" latest
+          resolved=$(oras resolve "$IMAGE:latest")
+          [ "$resolved" = "$DIGEST" ] || { echo "::error::$IMAGE:latest resolves to $resolved, not $DIGEST"; exit 1; }
+          echo "tagged $IMAGE:latest ($DIGEST)"
 
       - name: Remove registry credentials
         if: always() && steps.release.outputs.publish == 'true'
