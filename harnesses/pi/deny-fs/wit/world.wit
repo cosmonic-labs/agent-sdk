@@ -1,0 +1,11 @@
+// A filesystem with nothing in it: no preopened directories, and every
+// operation refused. Composed in front of the Pi agent so that wasi-libc's
+// filesystem imports (which the QuickJS runtime links whether or not the
+// agent touches a file) are satisfied inside the component instead of by the
+// host. The same idea as WASI-Virt's deny-all filesystem.
+package cosmonic:deny-fs@0.1.0;
+
+world deny-fs {
+  export wasi:filesystem/types@0.2.12;
+  export wasi:filesystem/preopens@0.2.12;
+}
