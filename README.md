@@ -10,6 +10,7 @@ This repository is the canonical source for:
 | [`components/minimal-agent`](components/minimal-agent) | A small reference agent harness in Rust | `ghcr.io/cosmonic-labs/components/minimal-agent` and `minimal-agent-small` |
 | [`components/units-tool`](components/units-tool) | A small typed tool in Rust, the one [Write a typed tool](https://cosmonic.com/docs/agent-sdk/write-a-typed-tool/) builds | Source only |
 | [`harnesses/codex`](harnesses/codex) | Codex's agent loop as a reference agent harness, ported from openai/codex | Source only |
+| [`harnesses/pi`](harnesses/pi) | Pi's agent loop as a reference agent harness, built from unmodified upstream packages | Source only |
 
 Everything here is licensed Apache-2.0. Third-party code carried in this repository is listed in [`NOTICE`](NOTICE).
 
