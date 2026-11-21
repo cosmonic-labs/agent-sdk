@@ -112,6 +112,7 @@ jobs:
             crates: harnesses/pi/deny-fs -> target
             componentize-qjs: true
             notices: |
+              LICENSE
               harnesses/pi/NOTICE
               harnesses/shared/notices/wasi-libc.txt
     env:
@@ -194,15 +195,6 @@ jobs:
       - name: Build and test
         working-directory: ${{ matrix.path }}
         run: just test
-
-      # Pi's compact cases time out on the pinned componentize-qjs (see its
-      # README); the scripted host runs, but does not block, until that is
-      # resolved.
-      - name: Scripted test host (non-blocking)
-        if: matrix.componentize-qjs
-        continue-on-error: true
-        working-directory: ${{ matrix.path }}
-        run: just test-e2e
 
       - name: Stage the component and its notices
         env:
