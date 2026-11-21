@@ -260,6 +260,11 @@ async fn work(
     }
 
     let (summary, replacement) = turn::rebuilt(&history, &completion);
+    // Nor is an empty one: it would replace the history with nothing.
+    if summary.trim().is_empty() {
+        let error = RunError::Failed("the summary was empty".into());
+        return ended(&journal, id, Some(&op), Err(("failed", error))).await;
+    }
     let kept = replacement.len().saturating_sub(1);
     let mut smaller = history.clone();
     smaller.replace(replacement);

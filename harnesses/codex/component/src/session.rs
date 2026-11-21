@@ -786,15 +786,23 @@ impl Journal {
         }
     }
 
-    /// Close every open op, as entries for the next commit (with an error
-    /// step for each unresolved call).
-    fn take_results(inner: &mut Inner) -> Vec<NewEntry> {
+    /// The entries that close every open op (with an error step for each
+    /// unresolved call). The ops stay open until a commit carrying these
+    /// lands ([`Self::closed`]), so a failed commit cannot lose a result.
+    fn take_results(inner: &Inner) -> Vec<NewEntry> {
         inner
             .ops
-            .drain(..)
+            .iter()
             .flat_map(|op| closing_entries(&op.id, &op.name, op.status))
             .map(|(kind, data)| entry(kind, &data))
             .collect()
+    }
+
+    /// The ops whose results a landed commit carried are closed.
+    fn closed(&self, count: usize) {
+        let mut inner = self.lock();
+        let count = count.min(inner.ops.len());
+        inner.ops.drain(..count);
     }
 
     /// Commit what one step of the machine applied, before the next step runs
@@ -812,10 +820,10 @@ impl Journal {
         conversation: &Conversation,
     ) -> Result<(), TurnError> {
         let new_ops: Vec<(String, Value)> = tool_ops(applied, known);
-        let (mut entries, version, end, superseded) = {
-            let mut inner = self.lock();
-            let results = Self::take_results(&mut inner);
-            (results, inner.version.clone(), inner.end, inner.superseded)
+        let (mut entries, closing, version, end, superseded) = {
+            let inner = self.lock();
+            let results = Self::take_results(&inner);
+            (results, inner.ops.len(), inner.version.clone(), inner.end, inner.superseded)
         };
         entries.extend(steps.iter().map(|s| entry(STEP_KIND, s)));
         if entries.is_empty() && new_ops.is_empty() {
@@ -850,7 +858,9 @@ impl Journal {
             };
         }
 
-        self.land(entries, conversation, version, end, superseded).await
+        self.land(entries, conversation, version, end, superseded).await?;
+        self.closed(closing);
+        Ok(())
     }
 
     /// Commit entries that record something that already happened, with the
@@ -912,15 +922,16 @@ impl Journal {
     /// already shown) with the conversation as far as it got.
     /// `extra` goes last in the same commit: the run's `agent.run-result.v1`.
     pub async fn close(&self, steps: Vec<Value>, conversation: &Conversation, extra: Vec<NewEntry>) {
-        let (mut entries, version, end, superseded) = {
-            let mut inner = self.lock();
-            let results = Self::take_results(&mut inner);
-            (results, inner.version.clone(), inner.end, inner.superseded)
+        let (mut entries, closing, version, end, superseded) = {
+            let inner = self.lock();
+            let results = Self::take_results(&inner);
+            (results, inner.ops.len(), inner.version.clone(), inner.end, inner.superseded)
         };
         entries.extend(steps.iter().map(|s| entry(STEP_KIND, s)));
         entries.extend(extra);
-        if let Err(e) = self.land(entries, conversation, version, end, superseded).await {
-            eprintln!("session: could not record the end of the turn: {e}");
+        match self.land(entries, conversation, version, end, superseded).await {
+            Ok(()) => self.closed(closing),
+            Err(e) => eprintln!("session: could not record the end of the turn: {e}"),
         }
     }
 
