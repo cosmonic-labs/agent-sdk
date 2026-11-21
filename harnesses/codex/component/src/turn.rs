@@ -336,10 +336,12 @@ pub(crate) async fn summary_call(
 }
 
 /// The summary a completion holds, and Codex's rebuilt history: the person's
-/// recent messages, then the summary under its prefix.
+/// recent messages, then the summary under its prefix. A reply may arrive as
+/// several text parts, each its own item here, so all of them make the
+/// summary (upstream's Responses API gives one message).
 pub(crate) fn rebuilt(history: &ContextManager, completion: &llm::Completion) -> (String, Vec<ResponseItem>) {
     let reply = host::to_items(&completion.message);
-    let summary = compact::get_last_assistant_message_from_turn(reply.iter()).unwrap_or_default();
+    let summary = compact::assistant_text_since_last_user(&reply);
     let summary_text = format!("{}\n{}", compact::SUMMARY_PREFIX, summary);
     let users = compact::collect_user_messages(history.raw_items());
     (summary, compact::build_compacted_history(&users, &summary_text))
@@ -436,15 +438,15 @@ impl<S: Sink> Turn<'_, S> {
             }
         };
         self.counted(&completion.usage, &completion.model).await?;
-        // A refused or filtered summary is never committed: the run goes on
-        // with the context it had.
-        if declined(&completion).is_some() {
+        // A refused, filtered or empty summary is never committed: the run
+        // goes on with the context it had.
+        let (summary, mut replacement) = rebuilt(&self.history, &completion);
+        if declined(&completion).is_some() || summary.trim().is_empty() {
             return match self.journal.compacted(&op, None, &unchanged, Vec::new()).await? {
                 Compacted::Superseded => Err(TurnError::Superseded.into()),
                 _ => Ok(false),
             };
         }
-        let (summary, mut replacement) = rebuilt(&self.history, &completion);
         // Carried over verbatim: the person's recent messages and the held one.
         let kept = replacement.len().saturating_sub(1) + usize::from(held.is_some());
         replacement.extend(held);
@@ -501,13 +503,11 @@ impl<S: Sink> Turn<'_, S> {
             let overflowed = match host::sample(messages, options, &mut *self.sink).await {
                 Ok(s) => return Ok(s),
                 Err(SampleError::Refused(llm::RequestError::ContextLengthExceeded(_))) => true,
-                Err(SampleError::Failed(llm::GenerationError::ContextLengthExceeded(_))) => true,
                 Err(e) => return Err(sample_failure(e)),
             };
             // Only reachable before any reply text: a refused request streams
-            // nothing, and a failed one is retried only when it streamed none
-            // (not tracked across the failure, so a failed generation is not
-            // retried at all).
+            // nothing. A generation that failed for length may already have
+            // streamed text, so it is not retried.
             if overflowed && self.overflow_retry {
                 self.overflow_retry = false;
                 // Nothing replaced: the same call would overflow again.
