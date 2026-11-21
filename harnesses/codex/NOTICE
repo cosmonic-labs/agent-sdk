@@ -1,0 +1,91 @@
+Codex agent harness
+Copyright 2026 Cosmonic, Inc.
+
+This harness's own code is licensed under the Apache License, Version 2.0
+(see LICENSE at the root of this repository). The built component also
+contains the third-party code below, under its own licenses. The WASI libc
+notices that apply to it are in ../shared/notices/wasi-libc.txt.
+
+===============================================================================
+OpenAI Codex (https://github.com/openai/codex)
+===============================================================================
+
+OpenAI Codex
+Copyright 2025 OpenAI
+
+Licensed under the Apache License, Version 2.0 (component/LICENSE-codex).
+component/src/codex/ and component/src/turn.rs port modules of Codex 0.162.0
+(history, truncation, compaction, models, the turn loop and the prompts).
+Each ported file names its upstream source and what it changed.
+
+===============================================================================
+Rust crates compiled into the component
+===============================================================================
+
+Used under the Apache License, Version 2.0 (each is offered under Apache-2.0
+or MIT, some also with the LLVM exception): base64, bitflags, futures,
+futures-channel, futures-core, futures-io, futures-sink, futures-task,
+futures-util, itoa, pin-project-lite, serde, serde_core, serde_json, wasip3,
+wit-bindgen.
+
+Used under the Unlicense: memchr (offered under Unlicense or MIT).
+
+Used under the MIT License: slab and zmij. Their notices follow.
+
+-------------------------------------------------------------------------------
+slab (https://github.com/tokio-rs/slab)
+-------------------------------------------------------------------------------
+
+Copyright (c) 2019 Carl Lerche
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+-------------------------------------------------------------------------------
+zmij (https://github.com/dtolnay/zmij)
+-------------------------------------------------------------------------------
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.

@@ -1,0 +1,362 @@
+# Builds and tests the reference agent harnesses, and publishes a tagged one.
+#
+# Every pull request and push to main builds each harness, runs its unit
+# tests and the scripted test host, and holds the built component to the
+# sandbox gate (harnesses/shared/scripts/check-harness.mjs).
+#
+# A tag named `<name>-v<version>` (`codex-harness-v0.1.0`) publishes that one
+# harness, the same tag convention as components.yml. Unlike the components,
+# a push to main publishes nothing: these images are signed with a release
+# key that hosts trust, so only a release is signed.
+#
+# Two jobs, so nothing that runs third-party build code can reach a secret:
+#   build    runs cargo build scripts from the harness's dependency graph. It
+#            has a read-only token and no environment.
+#   publish  runs only pinned, checksummed tools (wash, oras, cosign,
+#            wasm-tools) on the artifact build produced, inside the `release`
+#            environment, and gates the artifact again before signing it.
+#
+# What publish needs (in the `release` environment):
+#   AGENT_IMAGES_PACKAGES_TOKEN     a token that can write the image's package
+#                                   (ghcr.io/cosmonic/agents/*, which lives in
+#                                   another organization, so this repository's
+#                                   GITHUB_TOKEN cannot push there)
+#   COSMONIC_TOOLS_COSIGN_KEY       the signing key, and its password
+#   COSMONIC_TOOLS_COSIGN_PASSWORD
+# A release with any of them missing fails before it pushes anything, rather
+# than publishing an unsigned image.
+name: harnesses
+
+on:
+  push:
+    branches: [main]
+    tags: ["codex-harness-v*"]
+    paths:
+      - "harnesses/**"
+      - "wit/wkg-registries.toml"
+      - ".github/workflows/harnesses.yml"
+      - ".github/cosign/**"
+  pull_request:
+    paths:
+      - "harnesses/**"
+      - "wit/wkg-registries.toml"
+      - ".github/workflows/harnesses.yml"
+      - ".github/cosign/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  CI: "true"
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # Pinned by version and by the SHA-256 of each release download.
+  WKG_VERSION: "0.16.0"
+  WKG_SHA256: 8ab0f7138e1a84616cb0c87c2bd7b7d00a356b63d458be92bad3fbd463aa3e2a
+  WASM_TOOLS_VERSION: "1.258.0"
+  WASM_TOOLS_SHA256: b52d14eb74a4852cc249369bd4480c2b2fdd876145f41db51ff52269ded240ce
+  JUST_VERSION: "1.58.0"
+  JUST_SHA256: 4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d
+  WASH_VERSION: "2.7.0"
+  WASH_SHA256: 9b7846221b2acc4e11dcf264d1b3553d2d98d3ca36d9058770ea5f7ef9ee0e8e
+  ORAS_VERSION: "1.3.6"
+  ORAS_SHA256: 66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0
+  COSIGN_VERSION: "2.5.3"
+  COSIGN_SHA256: 783b5d6c74105401c63946c68d9b2a4e1aab3c8abce043e06b8510b02b623ec9
+  # The scripted test host builds with this; each harness pins its own
+  # toolchain in its rust-toolchain.toml.
+  RUST_VERSION: "1.97.1"
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: codex-harness
+            path: harnesses/codex
+            wasm: dist/codex-harness.wasm
+            notices: |
+              harnesses/codex/NOTICE
+              harnesses/codex/component/LICENSE-codex
+              harnesses/shared/notices/wasi-libc.txt
+    env:
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Install wkg, wasm-tools and just (checksummed)
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          curl -sSfL -o wkg "https://github.com/bytecodealliance/wasm-pkg-tools/releases/download/v${WKG_VERSION}/wkg-x86_64-unknown-linux-gnu"
+          echo "$WKG_SHA256  wkg" | sha256sum -c -
+          curl -sSfL -o wasm-tools.tgz "https://github.com/bytecodealliance/wasm-tools/releases/download/v${WASM_TOOLS_VERSION}/wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz"
+          echo "$WASM_TOOLS_SHA256  wasm-tools.tgz" | sha256sum -c -
+          tar xzf wasm-tools.tgz --strip-components=1 "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux/wasm-tools"
+          curl -sSfL -o just.tgz "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "$JUST_SHA256  just.tgz" | sha256sum -c -
+          tar xzf just.tgz just
+          sudo install -m 0755 wkg wasm-tools just /usr/local/bin/
+
+      - name: Install the test host's toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+
+      # No cache for a release build: what it publishes is built from scratch.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3 # zizmor: ignore[cache-poisoning] -- skipped on tags, the only builds that publish
+        if: github.ref_type != 'tag'
+        with:
+          workspaces: |
+            ${{ matrix.path }}/component
+            harnesses/shared/test-host
+
+      # Fetches the WIT under the committed lock, builds with the toolchain the
+      # harness pins, runs the sandbox gate, the unit tests and the scripted
+      # test host.
+      - name: Build and test
+        working-directory: ${{ matrix.path }}
+        run: just test
+
+      - name: Stage the component and its notices
+        env:
+          WASM: ${{ matrix.path }}/${{ matrix.wasm }}
+          NOTICES: ${{ matrix.notices }}
+        run: |
+          set -euo pipefail
+          mkdir -p out/notices
+          cp "$WASM" out/component.wasm
+          for f in $NOTICES; do cp "$f" "out/notices/$(basename "$f")"; done
+          (cd out && sha256sum component.wasm notices/*) | tee out/SHA256SUMS
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.name }}
+          path: out/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    name: publish ${{ matrix.name }}
+    needs: build
+    if: >-
+      github.event_name == 'push' &&
+      github.ref_type == 'tag' &&
+      github.repository == 'cosmonic-labs/agent-sdk'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # build provenance attestation
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: codex-harness
+            image: ghcr.io/cosmonic/agents/codex
+    steps:
+      # A tag names one harness; any other matrix entry stops here.
+      - name: Select the release
+        id: release
+        env:
+          NAME: ${{ matrix.name }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            "${NAME}-v"*) version="${TAG#"${NAME}-v"}" ;;
+            *) echo "tag $TAG does not name $NAME; nothing to publish"; echo "publish=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::$TAG is not <name>-v<semver>"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.release.outputs.publish == 'true'
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            harnesses/shared/scripts
+            .github/cosign
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: steps.release.outputs.publish == 'true'
+        with:
+          name: ${{ matrix.name }}
+          path: out
+
+      - name: Check the publishing credentials are configured
+        if: steps.release.outputs.publish == 'true'
+        env:
+          PACKAGES_TOKEN: ${{ secrets.AGENT_IMAGES_PACKAGES_TOKEN }}
+          COSIGN_KEY: ${{ secrets.COSMONIC_TOOLS_COSIGN_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "$PACKAGES_TOKEN" ] || { echo "::error::AGENT_IMAGES_PACKAGES_TOKEN is not set in the release environment"; exit 1; }
+          [ -n "$COSIGN_KEY" ] || { echo "::error::COSMONIC_TOOLS_COSIGN_KEY is not set; a release must be signed"; exit 1; }
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.release.outputs.publish == 'true'
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Install wash, oras, cosign and wasm-tools (checksummed)
+        if: steps.release.outputs.publish == 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          curl -sSfL -o wash "https://github.com/wasmCloud/wasmCloud/releases/download/v${WASH_VERSION}/wash-x86_64-unknown-linux-musl"
+          echo "$WASH_SHA256  wash" | sha256sum -c -
+          curl -sSfL -o oras.tgz "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          echo "$ORAS_SHA256  oras.tgz" | sha256sum -c -
+          tar xzf oras.tgz oras
+          curl -sSfL -o cosign "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "$COSIGN_SHA256  cosign" | sha256sum -c -
+          curl -sSfL -o wasm-tools.tgz "https://github.com/bytecodealliance/wasm-tools/releases/download/v${WASM_TOOLS_VERSION}/wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz"
+          echo "$WASM_TOOLS_SHA256  wasm-tools.tgz" | sha256sum -c -
+          tar xzf wasm-tools.tgz --strip-components=1 "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux/wasm-tools"
+          sudo install -m 0755 wash oras cosign wasm-tools /usr/local/bin/
+
+      # Again here, on what will be signed: the build runner also ran
+      # third-party build code, which could have changed the file after the
+      # gate ran there.
+      - name: Gate the component again
+        if: steps.release.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          (cd out && sha256sum -c SHA256SUMS)
+          node harnesses/shared/scripts/check-harness.mjs out/component.wasm
+
+      # Before anything is pushed: the key opens with its password and is the
+      # one the committed public key names, so a signing problem fails here
+      # rather than after an image is published.
+      - name: Check the signing key
+        if: steps.release.outputs.publish == 'true'
+        env:
+          COSIGN_KEY: ${{ secrets.COSMONIC_TOOLS_COSIGN_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSMONIC_TOOLS_COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KD="$(mktemp -d)"; trap 'rm -rf "$KD"' EXIT
+          ( umask 077; printf '%s\n' "$COSIGN_KEY" > "$KD/cosign.key" )
+          cosign public-key --key "$KD/cosign.key" > "$KD/derived.pub"
+          norm() { grep -v -- '-----' "$1" | tr -d '\n'; }
+          [ "$(norm "$KD/derived.pub")" = "$(norm .github/cosign/cosign-tools.pub)" ] || {
+            echo "::error::the signing key does not match .github/cosign/cosign-tools.pub"; exit 1
+          }
+
+      # Push once, under the version. `latest` moves only after the digest is
+      # signed, verified, carries its notices and is attested, so `latest`
+      # never names an unsigned image. An existing version tag is never
+      # overwritten: a version keeps meaning one build. If a later step fails,
+      # the version tag names an unsigned digest that hosts checking
+      # signatures refuse; release a new patch version.
+      - name: Push
+        id: push
+        if: steps.release.outputs.publish == 'true'
+        env:
+          PACKAGES_TOKEN: ${{ secrets.AGENT_IMAGES_PACKAGES_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PACKAGES_TOKEN" | oras login ghcr.io -u "$ACTOR" --password-stdin
+          if oras manifest fetch "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "::error::$IMAGE:$VERSION already exists; tag a new version"; exit 1
+          fi
+          # wash takes credentials only as flags. This job runs no third-party
+          # code, and the value is masked in logs.
+          pushed=$(wash oci push --output json -u "$ACTOR" -p "$PACKAGES_TOKEN" "$IMAGE:$VERSION" out/component.wasm)
+          digest=$(echo "$pushed" | jq -er '.data.digest | select(test("^sha256:[0-9a-f]{64}$"))') || {
+            echo "::error::push reported no digest: $pushed"; exit 1
+          }
+          resolved=$(oras resolve "$IMAGE:$VERSION")
+          [ "$resolved" = "$digest" ] || { echo "::error::$IMAGE:$VERSION resolves to $resolved, not $digest"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "pushed $IMAGE:$VERSION ($digest)"
+
+      # No transparency-log upload: hosts verify offline against the public
+      # key, and a Rekor outage must not fail a release. Verified against the
+      # committed public key.
+      - name: Sign and verify
+        if: steps.release.outputs.publish == 'true'
+        env:
+          COSIGN_KEY: ${{ secrets.COSMONIC_TOOLS_COSIGN_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSMONIC_TOOLS_COSIGN_PASSWORD }}
+          PACKAGES_TOKEN: ${{ secrets.AGENT_IMAGES_PACKAGES_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          REF: ${{ matrix.image }}@${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          KD="$(mktemp -d)"; trap 'rm -rf "$KD"' EXIT
+          ( umask 077; printf '%s\n' "$COSIGN_KEY" > "$KD/cosign.key" )
+          printf '%s' "$PACKAGES_TOKEN" | cosign login ghcr.io -u "$ACTOR" --password-stdin
+          cosign sign --yes --tlog-upload=false --key "$KD/cosign.key" "$REF"
+          cosign verify --insecure-ignore-tlog=true --key .github/cosign/cosign-tools.pub "$REF" >/dev/null
+          echo "signed and verified $REF"
+
+      # The license notices for the code compiled into the component, attached
+      # to the image as an OCI referrer, so they travel with the digest.
+      - name: Attach the license notices
+        if: steps.release.outputs.publish == 'true'
+        env:
+          REF: ${{ matrix.image }}@${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cd out/notices
+          oras attach --artifact-type application/vnd.cosmonic.license-notices.v1 "$REF" ./*
+
+      - name: Log in to GHCR for the attestation
+        if: steps.release.outputs.publish == 'true'
+        env:
+          PACKAGES_TOKEN: ${{ secrets.AGENT_IMAGES_PACKAGES_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$PACKAGES_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        if: steps.release.outputs.publish == 'true'
+        with:
+          subject-name: ${{ matrix.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Move latest to the signed digest
+        if: steps.release.outputs.publish == 'true'
+        env:
+          IMAGE: ${{ matrix.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          oras tag "$IMAGE@$DIGEST" latest
+          resolved=$(oras resolve "$IMAGE:latest")
+          [ "$resolved" = "$DIGEST" ] || { echo "::error::$IMAGE:latest resolves to $resolved, not $DIGEST"; exit 1; }
+          echo "tagged $IMAGE:latest ($DIGEST)"
+
+      - name: Remove registry credentials
+        if: always() && steps.release.outputs.publish == 'true'
+        continue-on-error: true
+        run: |
+          oras logout ghcr.io || true
+          docker logout ghcr.io || true

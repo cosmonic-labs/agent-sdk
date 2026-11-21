@@ -1,0 +1,19 @@
+Cosmonic Agent SDK
+Copyright 2026 Cosmonic, Inc.
+
+This product's own code is licensed under the Apache License, Version 2.0
+(see LICENSE).
+
+It also contains code from these projects, under their own licenses:
+
+-------------------------------------------------------------------------------
+OpenAI Codex (https://github.com/openai/codex)
+-------------------------------------------------------------------------------
+
+OpenAI Codex
+Copyright 2025 OpenAI
+
+Licensed under the Apache License, Version 2.0. harnesses/codex/component
+ports modules of Codex 0.162.0 (history, truncation, compaction, models, the
+turn loop and the prompts) and keeps Codex's license as LICENSE-codex beside
+them. harnesses/codex/NOTICE lists the notices for the built component.

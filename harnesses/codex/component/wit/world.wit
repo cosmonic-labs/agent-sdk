@@ -1,0 +1,28 @@
+// Everything the Codex harness imports from the host, and the typed run it
+// exports.
+//
+// Imports, all at cosmonic:agent@0.4.2: a model by host-resolved alias
+// (inference-types, models, chat), the session journal, and the tools the
+// workload grants. No outbound HTTP, no sockets, no filesystem, and no
+// wasi:http/handler export either: a host drives this agent only through
+// `run`, and through `compact` (both unstable, feature `agent-run`) when it
+// asks for a summary between runs: the `compactable-agent` world.
+//
+// This package names the harness's own world. It is not an interface for
+// anything else to import, and it is versioned apart from cosmonic:agent.
+//
+// cosmonic:agent@0.4.2 and wasi:clocks (whose duration type the run options
+// use) are fetched by wkg from their registries and pinned by digest in
+// wkg.lock.
+package cosmonic:codex-agent@0.1.0;
+
+world codex-agent {
+  import cosmonic:agent/inference-types@0.4.2;
+  import cosmonic:agent/models@0.4.2;
+  import cosmonic:agent/chat@0.4.2;
+  import cosmonic:agent/session@0.4.2;
+  import cosmonic:agent/tools@0.4.2;
+
+  export cosmonic:agent/compact@0.4.2;
+  export cosmonic:agent/run@0.4.2;
+}

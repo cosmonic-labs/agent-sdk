@@ -9,8 +9,9 @@ This repository is the canonical source for:
 | [`wit/cosmonic-agent`](wit/cosmonic-agent) | `cosmonic:agent`, the WIT package agents, tools and hosts are built against | `ghcr.io/cosmonic-labs/cosmonic/agent` |
 | [`components/minimal-agent`](components/minimal-agent) | A small reference agent harness in Rust | `ghcr.io/cosmonic-labs/components/minimal-agent` and `minimal-agent-small` |
 | [`components/units-tool`](components/units-tool) | A small typed tool in Rust, the one [Write a typed tool](https://cosmonic.com/docs/agent-sdk/write-a-typed-tool/) builds | Source only |
+| [`harnesses/codex`](harnesses/codex) | Codex's agent loop as a reference agent harness, ported from openai/codex | `ghcr.io/cosmonic/agents/codex` |
 
-Everything here is licensed Apache-2.0.
+Everything here is licensed Apache-2.0. Third-party code carried in this repository is listed in [`NOTICE`](NOTICE).
 
 ## Get started
 
@@ -37,6 +38,7 @@ Agents built on these interfaces run on any host that serves them. [Cosmonic Des
 
 - `cosmonic:agent` publishes when a new version lands on `main`. A version is never republished with different contents.
 - `minimal-agent` and `minimal-agent-small` publish on tags named `minimal-agent-v<version>` and `minimal-agent-small-v<version>`.
+- The Codex agent harness publishes on tags named `codex-harness-v<version>`, signed with cosign as well as attested.
 
 Every published artifact carries a GitHub build provenance attestation. Releases up to and including `minimal-agent-v0.3.1` and `cosmonic:agent` 0.4.2 were first built in [cosmonic-labs/awesome-cosmonic](https://github.com/cosmonic-labs/awesome-cosmonic), and this repository carries their history and tags. To verify an artifact:
 
