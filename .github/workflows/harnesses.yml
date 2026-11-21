@@ -39,9 +39,24 @@ env:
   WASM_TOOLS_SHA256: b52d14eb74a4852cc249369bd4480c2b2fdd876145f41db51ff52269ded240ce
   JUST_VERSION: "1.58.0"
   JUST_SHA256: 4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d
-  # The scripted test host builds with this; each harness pins its own
-  # toolchain in its rust-toolchain.toml.
+  # The scripted test host and deny-fs build with this; the Codex harness
+  # pins its own toolchain in its rust-toolchain.toml.
   RUST_VERSION: "1.97.1"
+  # The Pi harness's tools. pnpm is pinned by npm's published sha512 for the
+  # tarball, the rest by the SHA-256 of each release download.
+  WAC_VERSION: "0.11.0"
+  WAC_SHA256: 83259349b630f79a60490322b068e7ad2dba784720b0d467decccc0aecc743b5
+  PNPM_VERSION: "12.9.1"
+  PNPM_SHA512: BrBV//XNINwSeB3hc87TMQzglRvy7GICEaFgRdVETVyTpmMhB2TvKaZTphBFm6A2jw50+E2AxUcjz5Wq57wNbQ==
+  # componentize-qjs at its pinned commit, with harnesses/pi/patches applied.
+  # Its build script downloads wasi-sdk and binaryen unchecked when they are
+  # not supplied, so they are supplied, checksummed.
+  COMPONENTIZE_QJS_REPO: https://github.com/andreiltd/componentize-qjs
+  COMPONENTIZE_QJS_SHA: eee19a60b144321b2535a50cc58e05b73d9f5242
+  WASI_SDK_VERSION: "33"
+  WASI_SDK_SHA256: 0ba8b5bfaeb2adf3f29bab5841d76cf5318ab8e1642ea195f88baba1abd47bce
+  BINARYEN_VERSION: "130"
+  BINARYEN_SHA256: 0a18362361ad05465118cd8eeb72edaeec89de6894bc283576ef4e07aa3babcc
 
 jobs:
   build:
@@ -57,9 +72,19 @@ jobs:
           - name: codex-harness
             path: harnesses/codex
             wasm: dist/codex-harness.wasm
+            crates: harnesses/codex/component -> target
             notices: |
               harnesses/codex/NOTICE
               harnesses/codex/component/LICENSE-codex
+              harnesses/shared/notices/wasi-libc.txt
+          - name: pi-harness
+            path: harnesses/pi
+            wasm: dist/pi-harness.wasm
+            crates: harnesses/pi/deny-fs -> target
+            componentize-qjs: true
+            notices: |
+              LICENSE
+              harnesses/pi/NOTICE
               harnesses/shared/notices/wasi-libc.txt
     env:
       CARGO_BUILD_JOBS: "2"
@@ -89,16 +114,51 @@ jobs:
 
       - name: Install the test host's toolchain
         run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-wasip2
           rustup default "$RUST_VERSION"
+
+      - name: Install wac and pnpm (checksummed)
+        if: matrix.componentize-qjs
+        working-directory: ${{ runner.temp }}
+        run: | # zizmor: ignore[adhoc-packages] -- the pnpm tarball is sha512-pinned
+          set -euo pipefail
+          curl -sSfL -o wac "https://github.com/bytecodealliance/wac/releases/download/v${WAC_VERSION}/wac-cli-x86_64-unknown-linux-musl"
+          echo "$WAC_SHA256  wac" | sha256sum -c -
+          sudo install -m 0755 wac /usr/local/bin/
+          curl -sSfL -o pnpm.tgz "https://registry.npmjs.org/pnpm/-/pnpm-${PNPM_VERSION}.tgz"
+          [ "$(openssl dgst -sha512 -binary pnpm.tgz | base64 -w0)" = "$PNPM_SHA512" ] || { echo "::error::pnpm tarball does not match its pinned sha512"; exit 1; }
+          npm install --global --ignore-scripts ./pnpm.tgz
+
+      # The patched componentizer, from the pinned commit, the committed
+      # patch and checksummed wasi-sdk and binaryen.
+      - name: Build the patched componentize-qjs
+        if: matrix.componentize-qjs
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          curl -sSfL -o wasi-sdk.tgz "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz"
+          echo "$WASI_SDK_SHA256  wasi-sdk.tgz" | sha256sum -c -
+          curl -sSfL -o binaryen.tgz "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          echo "$BINARYEN_SHA256  binaryen.tgz" | sha256sum -c -
+          tar xzf wasi-sdk.tgz
+          tar xzf binaryen.tgz
+          git init --quiet componentize-qjs
+          cd componentize-qjs
+          git fetch --quiet --depth=1 "$COMPONENTIZE_QJS_REPO" "$COMPONENTIZE_QJS_SHA"
+          git checkout --quiet --detach FETCH_HEAD
+          git apply "$GITHUB_WORKSPACE/harnesses/pi/patches/componentize-qjs.patch"
+          WASI_SDK_PATH="$RUNNER_TEMP/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux" \
+            WASM_OPT="$RUNNER_TEMP/binaryen-version_${BINARYEN_VERSION}/bin/wasm-opt" \
+            cargo build --locked --release -p componentize-qjs-cli
+          echo "COMPONENTIZE_QJS=$RUNNER_TEMP/componentize-qjs/target/release/componentize-qjs" >> "$GITHUB_ENV"
 
       # Nothing this workflow builds is published, so a cache cannot reach a
       # release.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3 # zizmor: ignore[cache-poisoning] -- nothing built here is published
         with:
           workspaces: |
-            ${{ matrix.path }}/component
-            harnesses/shared/test-host
+            ${{ matrix.crates }}
+            harnesses/shared/test-host -> target
 
       # Fetches the WIT under the committed lock, builds with the toolchain the
       # harness pins, runs the sandbox gate, the unit tests and the scripted
