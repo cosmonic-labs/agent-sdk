@@ -79,4 +79,4 @@ Reference harnesses are examples to adopt and fork, versioned on their own with 
 
 ## License
 
-Apache-2.0. The modules ported from Codex keep Codex's license in [`component/LICENSE-codex`](component/LICENSE-codex), and [`NOTICE`](NOTICE) carries OpenAI's notice and the notices for the crates compiled into the component.
+Apache-2.0. The modules ported from Codex keep Codex's license in [`component/LICENSE-codex`](component/LICENSE-codex), [`NOTICE`](NOTICE) carries OpenAI's notice and the notices for the crates compiled into the component, and [`../shared/notices/wasi-libc.txt`](../shared/notices/wasi-libc.txt) the WASI libc notices.
