@@ -1,0 +1,6 @@
+# Pinned so a build is reproducible; any stable Rust with wasm32-wasip2 works.
+# Nothing here needs nightly or wasm32-wasip3: the WASI 0.3 interfaces come
+# from wit-bindgen's async support.
+[toolchain]
+channel = "1.96.1"
+targets = ["wasm32-wasip2"]

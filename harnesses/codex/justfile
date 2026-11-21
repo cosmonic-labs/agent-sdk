@@ -1,0 +1,27 @@
+cargo := env_var_or_default("CARGO", "cargo")
+node := env_var_or_default("NODE", "node")
+
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+target := env_var_or_default("CARGO_TARGET_DIR", justfile_directory() / "component/target")
+scripts := justfile_directory() / "../shared/scripts"
+test_host := justfile_directory() / "../shared/test-host"
+
+@_default:
+    just --list
+
+# Build the component and run the sandbox gate on it: dist/codex-harness.wasm.
+build:
+    {{node}} {{scripts}}/fetch-wit.mjs component
+    cd component && {{cargo}} build --locked --release --target wasm32-wasip2
+    {{node}} {{scripts}}/check-harness.mjs "{{target}}/wasm32-wasip2/release/codex_agent.wasm"
+    mkdir -p dist
+    cp "{{target}}/wasm32-wasip2/release/codex_agent.wasm" dist/codex-harness.wasm
+    @ls -l dist/codex-harness.wasm
+
+# Unit tests for the vendored Codex modules and the host mapping, then the
+# scripted test host against dist/codex-harness.wasm.
+test: build
+    cd component && {{cargo}} test --locked --lib
+    {{node}} {{scripts}}/fetch-wit.mjs {{test_host}}
+    cd {{test_host}} && {{cargo}} run --locked -- codex "{{justfile_directory()}}/dist/codex-harness.wasm"
