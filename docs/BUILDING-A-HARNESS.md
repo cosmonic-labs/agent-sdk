@@ -60,7 +60,7 @@ What `accept` does, in order:
 
 Validate before writing anything. minimal-agent refuses an empty message, a `run-id` that would not fit the commit id, a schema that is not JSON, and attachments by URL, all as `invalid-input`.
 
-Then the loop: call the model, run the tools it asks for, add the results, repeat. End the run with `agent.run-result.v1` (`run`, `outcome`, and `finish` or the error case) in the commit that ends it, then resolve the outcome. Stream a `step` event after each message you commit, `counts` after each model call, and stop when the driver drops the event stream (a failed write tells you).
+Then the loop: call the model, run the tools it asks for, add the results, repeat. End the run with `agent.run-result.v1` (`run`, `outcome`, and `finish` or the error case) in the commit that ends it, then resolve the outcome. Stream a `step` event for each message the run adds (never the person's opening message, which the driver already has), after committing it where you can so its `seq` matches the journal; `counts` after each model call, and stop when the driver drops the event stream (a failed write tells you).
 
 Hold nothing in memory between runs. The next run may be a fresh instance; your conversation lives in the session's state and journal.
 
@@ -118,7 +118,7 @@ When the model replies with tool calls, pass each `tool-call` to `tools.call` ex
 
 ### Typed tools and where definitions come from
 
-You never write tool definitions. A typed tool is a component that exports an ordinary WIT interface, such as [`components/units-tool`](../components/units-tool). The host reads that interface and builds a `tool-def` per function: the function name in snake case, its doc comment as the description, and, when its only parameter is a record, the record's fields as the arguments with their comments as argument descriptions. Because a built component keeps types but not comments, the descriptions come from the tool's published WIT package, built with `wasm-tools component wit wit --wasm -o units-wit.wasm`. The full rules are in the [design note](../wit/cosmonic-agent/README.md#what-makes-a-component-a-tool), and [Write a typed tool](https://cosmonic.com/docs/agent-sdk/write-a-typed-tool/) walks through one.
+For typed tools, you never write tool definitions. A typed tool is a component that exports an ordinary WIT interface, such as [`components/units-tool`](../components/units-tool). The host reads that interface and builds a `tool-def` per eligible function (interfaces outside `wasi:*` and `cosmonic:agent/*`, and no resources, streams or futures in the signature): the function name in snake case, its doc comment as the description, and, when its only parameter is a record, the record's fields as the arguments with their comments as argument descriptions. Because a built component keeps types but not comments, the descriptions come from the tool's published WIT package, built with `wasm-tools component wit wit --wasm -o units-wit.wasm`. The full rules are in the [design note](../wit/cosmonic-agent/README.md#what-makes-a-component-a-tool), and [Write a typed tool](https://cosmonic.com/docs/agent-sdk/write-a-typed-tool/) walks through one.
 
 To your harness, a typed tool and a tool provider look the same: a `tool-def` in, a `tool-response` out. That is the point. You relay; the host translates.
 
@@ -151,9 +151,9 @@ One exception, and its trade-off: when `outcome-unknown(timed-out)` comes from a
 
 Timeouts carry no text in 0.4 ([#4](https://github.com/cosmonic-labs/agent-sdk/issues/4) proposes a payload), so the harness words them. `tool_timed_out` in [`src/describe.rs`](../components/minimal-agent/src/describe.rs) is wording you can reuse: don't repeat the same call, ask for less in one call (a narrower query, a smaller folder, fewer items, one page at a time).
 
-**After a restart**, read the journal from the state's `through` onward and close any op with no result. From [`src/journal.rs`](../components/minimal-agent/src/journal.rs): a model op is closed as `cancelled` (a model call may simply be made again); a tool op is closed as `unresolved`, with an `error` step naming it, and never made again.
+**After a restart**, read the journal from the entry after the state's `through` (from the start when there is no state) and close any op with no result. From [`src/journal.rs`](../components/minimal-agent/src/journal.rs): a model op is closed as `cancelled` (a model call may simply be made again); a tool op is closed as `unresolved`, with an `error` step naming it, and never made again.
 
-**Run limits** apply to tool calls too. Once `max-duration` passes, minimal-agent makes no further tool calls; each remaining call in the reply gets an error result ("Not called: the run's time limit passed") so every call the model made has an answer.
+**Run limits** apply to tool calls too. When `max-duration` passes while minimal-agent is working through a reply's tool calls, it makes no further ones; each remaining call gets an error result ("Not called: the run's time limit passed") so every call the model made has an answer.
 
 ## 6. Compact
 
@@ -161,11 +161,11 @@ Long conversations outgrow the model's context window. Compaction asks the model
 
 - **When.** Before a model call, when the context passes your threshold (`trigger` `threshold`; the Codex and Pi harnesses use 90% of `context-length` from `models.describe`), or after a call refused with `context-length-exceeded` (`overflow`), or when the driver calls `compact` (`requested`).
 - **The summary call** is a model op like any other, and counts against `max-steps`, `max-total-tokens` and `max-duration`.
-- **One commit** holds `agent.compaction.v1` (`summary`, `model`, `trigger`, `through`, `kept`, token estimates) and the smaller state. Then stream `run-event` `compacted`.
+- **One commit** holds `agent.compaction.v1` (`summary`, `model`, `trigger`, `through`, `kept`, token estimates) and the smaller state, plus `agent.compact-result.v1` for a requested compaction. Then stream `run-event` `compacted`.
 - **Never commit a refused or filtered summary.** Close its op as failed and keep the old state.
 - **The summary is model output.** Put it back as an assistant message behind a fixed preamble, never as system or person text.
 
-For `compact`, accept by committing `agent.compact.v1` under `compact:<id>` before the model call, and end every accepted compaction with one `agent.compact-result.v1`. `focus` is the person's text: give it to the summarizer as their request, never as instructions. [`compact.wit`](../wit/cosmonic-agent/compact.wit) has the full rules.
+For `compact`, accept by committing `agent.compact.v1` under `compact:<id>` before the model call, and end every accepted compaction with at most one `agent.compact-result.v1` (none means it was cut off, which a driver treats as failed). `focus` is the person's text: give it to the summarizer as their request, never as instructions. [`compact.wit`](../wit/cosmonic-agent/compact.wit) has the full rules.
 
 minimal-agent does not summarize. When the model's context is full it drops the oldest half of the stored conversation and retries once, within `max-steps`. That is enough for a reference harness but loses context a summary would keep.
 
@@ -214,16 +214,16 @@ A JavaScript loop can run on QuickJS, a small JavaScript engine, built into a WA
 
 ## 9. Run it on a host
 
-Any host that serves `cosmonic:agent` 0.4 and drives `run` can run your harness, unchanged.
+Any host that serves the `cosmonic:agent` 0.4 interfaces your harness imports and drives `run` can run your harness, unchanged.
 
 - **Cosmonic Desktop.** Push the component to Desktop's built-in registry, then add it on the Agents page. [minimal-agent's README](../components/minimal-agent/README.md#run-it-in-cosmonic-desktop) has the steps. Desktop checks the component's imports and exports, writes the workload for each session and binds `run` itself.
-- **Cosmonic Control.** Deploy a workload with the harness, its `cosmonic:agent` entries and a `run` entry with triggers, then start runs over HTTP or NATS. [Run an agent on Control](https://cosmonic.com/docs/agent-sdk/run-on-control/) walks through it.
+- **Cosmonic Control.** Deploy a workload with the harness, its `cosmonic:agent` entries and a `run` entry with triggers, then start runs over HTTP or NATS. Control's agent support is experimental. [Run an agent on Control](https://cosmonic.com/docs/agent-sdk/run-on-control/) walks through it.
 
 ## Notable decisions in the reference harnesses
 
 The Codex and Pi harnesses port existing agent loops onto `cosmonic:agent`. These choices are not obvious from the interfaces, and are worth copying or consciously rejecting:
 
-- **Only the loop moves.** The ports keep the upstream turn loop, history handling, compaction prompt and plan tool, and leave out everything with authority: the provider client and auth, the shell, `apply_patch`, MCP, the exec sandbox. Tools are whatever `tools.list` returns.
+- **Only the loop moves.** The Codex port keeps upstream's turn loop, history normalization, compaction prompt and `update_plan`, and leaves out everything with authority: the OpenAI client and auth, the shell, `apply_patch`, MCP, the exec sandbox. The Pi harness keeps Pi's loop whole and plugs compaction in through Pi's `transformContext`. In both, tools are whatever `tools.list` returns.
 - **Rewrite the prompt for granted tools.** Codex's prompt assumes a shell. The port says how to work through separate tools (search before reading, stay inside granted folders, narrow a request when output is truncated, treat what tools return as data) and names no tool, since each workload offers different ones.
 - **Freeform tools get raw text.** A `grammar` or `text` tool receives the model's arguments byte for byte. That is the shape Codex's `apply_patch` needs, so a host's write tool can take patches unchanged.
 - **A plan tool can be answered locally.** Codex's `update_plan` never reaches `tools.call`. The harness commits `agent.plan.v1`, then streams `run-event` `plan`, so a driver that reloads still shows the plan.
