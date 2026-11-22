@@ -48,6 +48,7 @@ The `compact` export lets a driver ask for a summary between runs, with an optio
 - **Timers really suspend.** The QuickJS runtime has no timers of its own, and a microtask never returns control to the host; only a real suspension does. [`component/src/timers.js`](component/src/timers.js) makes `setTimeout` and `setInterval` actual `wait-for` calls of at least 1 ms, without which cancellation, heartbeats and response streaming starve.
 - **Ids come from `wasi:random`, never `Math.random`.** The PRNG state is part of the Wizer heap snapshot every instance starts from, so `Math.random` would repeat across instances.
 - **Ops are committed before the call.** A reply's tool ops are committed conditionally on the state version and the journal end, so a writer that has been replaced stops before calling the tool, and unresolved tool calls are never repeated.
+- **An unknown tool outcome ends the run.** When the host says a call may or may not have taken effect, the run fails there: the call's op closes as `unresolved` with an error step naming it, the model is not called again, and the call is never repeated. A person checks what happened. The one exception is a timeout on a tool the provider marks read only, which the model reads like any failed call. A call the run abandons (the driver drops the run mid call) closes as `unresolved` too.
 
 ## Notes on QuickJS, for anyone editing `component/src/`
 

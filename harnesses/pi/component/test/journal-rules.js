@@ -21,6 +21,7 @@ import {
     closingEntries,
     outcomeForCallError,
     outcomeForToolError,
+    stopsTheRun,
     outcomeOf,
     readableTranscript,
     resolutionEntries,
@@ -184,4 +185,17 @@ test('a tools@0.4.0 call that never started is cancelled; one that may have run 
     assert.equal(outcomeForToolError(notDispatched('denied')), 'cancelled');
     assert.equal(outcomeForToolError({ tag: 'outcome-unknown', val: { tag: 'timed-out' } }), 'unresolved');
     assert.equal(outcomeForToolError(undefined), 'unresolved');
+    // A read-only tool that timed out has nothing to resolve.
+    assert.equal(outcomeForToolError({ tag: 'outcome-unknown', val: { tag: 'timed-out' } }, true), 'failed');
+});
+
+test('an unknown outcome stops the run, except a timeout on a read-only tool', () => {
+    const unknown = (tag) => ({ tag: 'outcome-unknown', val: { tag } });
+    assert.equal(stopsTheRun({ tag: 'not-dispatched', val: { tag: 'timed-out' } }), false);
+    assert.equal(stopsTheRun(unknown('upstream'), true), true);
+    assert.equal(stopsTheRun(unknown('cancelled'), true), true);
+    assert.equal(stopsTheRun(unknown('timed-out')), true);
+    assert.equal(stopsTheRun(unknown('timed-out'), false), true);
+    assert.equal(stopsTheRun(unknown('timed-out'), true), false);
+    assert.equal(stopsTheRun(undefined), true);
 });

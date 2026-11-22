@@ -168,12 +168,26 @@ export function outcomeForCallError(tag) {
 /* The same for cosmonic:agent/tools@0.4.2, whose call-error says whether the
    call started. `not-dispatched` produced no effects, which the session
    conventions record as cancelled. `outcome-unknown` may have taken effect:
-   unresolved. */
-export function outcomeForToolError(error) {
+   unresolved, and the run stops there (`stopsTheRun`), except a timeout on a
+   tool its provider marks read only, which closes as failed. */
+export function outcomeForToolError(error, readOnly) {
     if (error?.tag === 'not-dispatched') {
         return 'cancelled';
     }
-    return 'unresolved';
+    return stopsTheRun(error, readOnly) ? 'unresolved' : 'failed';
+}
+
+/* Whether a call error ends the run. An unknown outcome does, so the run never
+   goes past a call that may have taken effect and the model cannot ask for it
+   again, with one exception: a timeout on a tool whose provider says it is
+   read only. That claim is the provider's, taken at its word, so the model
+   reads the timeout and can ask for less. A missing `readOnly` annotation
+   counts as not read only. An error of no known shape stops the run. */
+export function stopsTheRun(error, readOnly) {
+    if (error?.tag === 'not-dispatched') {
+        return false;
+    }
+    return !(error?.tag === 'outcome-unknown' && error.val?.tag === 'timed-out' && readOnly === true);
 }
 
 export function outcomeOf(status) {

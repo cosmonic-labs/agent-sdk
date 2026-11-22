@@ -45,6 +45,8 @@ async fn main() -> Result<()> {
             contract_suite(&mut t, &contract, Covers::BeforeLatestExchange).await;
             t.case("past 90% of the window a run compacts and streams compacted", agents::auto_threshold(&contract)).await;
             t.case("one exchange has nothing to summarize: done, silent", agents::requested_after_one_exchange(&f)).await;
+            let unknown = Fixture::new(&path)?;
+            t.case("an unknown tool outcome ends the run, and nothing is called again", agents::unknown_outcome_stops(&unknown)).await;
         }
         other => bail!("no suite for {other}; {usage}"),
     }
