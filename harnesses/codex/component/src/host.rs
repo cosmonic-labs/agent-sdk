@@ -300,8 +300,35 @@ pub fn output_of(response: tt::ToolResponse) -> FunctionCallOutputPayload {
 /// A failed tool call as the output the model reads. "unsupported call" is
 /// Codex's own text for a function it does not know.
 pub fn output_of_error(name: &str, error: &tt::CallError) -> FunctionCallOutputPayload {
+    FunctionCallOutputPayload { body: FunctionCallOutputBody::Text(error_text(name, error)), success: Some(false) }
+}
+
+/// Whether a call error stops the run. An unknown outcome does, so the run
+/// never goes past a call that may have taken effect and the model cannot
+/// ask for it again, with one exception: a timeout on a tool whose provider
+/// says it is read only. That claim is the provider's, taken at its word, so
+/// the model reads the timeout and can ask for less. A missing `read-only`
+/// annotation counts as not read only.
+pub fn stops_the_run(error: &tt::CallError, read_only: Option<bool>) -> bool {
+    match error {
+        tt::CallError::NotDispatched(_) => false,
+        tt::CallError::OutcomeUnknown(tt::OutcomeError::TimedOut) => read_only != Some(true),
+        tt::CallError::OutcomeUnknown(_) => true,
+    }
+}
+
+/// The `read-only` annotation of the offered tool by this name: `Some(true)`
+/// only when every tool offered by that name says so, and `None` when none is.
+pub fn read_only(tools: &[tt::ToolDef], name: &str) -> Option<bool> {
+    let mut flags = tools.iter().filter(|t| t.name == name).map(|t| t.annotations.read_only);
+    let first = flags.next()?;
+    Some(first == Some(true) && flags.all(|f| f == Some(true)))
+}
+
+/// What a failed tool call says, for the model or for the run's error.
+pub fn error_text(name: &str, error: &tt::CallError) -> String {
     use tt::{CallError as C, DispatchError as D, OutcomeError as O};
-    let text = match error {
+    match error {
         C::NotDispatched(D::UnknownTool(_)) => format!("unsupported call: {name}"),
         C::NotDispatched(D::InvalidArguments(m)) => format!("invalid arguments: {m}"),
         C::NotDispatched(D::Denied(m)) => format!("the call was denied: {m}"),
@@ -313,8 +340,7 @@ pub fn output_of_error(name: &str, error: &tt::CallError) -> FunctionCallOutputP
         C::OutcomeUnknown(O::Upstream(m) | O::Other(m)) => {
             format!("the call failed: {m}; it may or may not have taken effect")
         }
-    };
-    FunctionCallOutputPayload { body: FunctionCallOutputBody::Text(text), success: Some(false) }
+    }
 }
 
 // ----- the calls -----
@@ -474,6 +500,38 @@ pub fn chat_options(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn def(name: &str, read_only: Option<bool>) -> tt::ToolDef {
+        tt::ToolDef {
+            name: name.into(),
+            title: None,
+            description: String::new(),
+            input: llm::ToolInput::Text,
+            output_schema: None,
+            annotations: tt::ToolAnnotations { read_only, destructive: None, idempotent: None, open_world: None },
+            version: None,
+        }
+    }
+
+    #[test]
+    fn an_unknown_outcome_stops_the_run_except_a_read_only_timeout() {
+        use tt::{CallError as C, DispatchError as D, OutcomeError as O};
+        assert!(!stops_the_run(&C::NotDispatched(D::TimedOut), None));
+        assert!(stops_the_run(&C::OutcomeUnknown(O::Upstream("gone".into())), Some(true)));
+        assert!(stops_the_run(&C::OutcomeUnknown(O::Cancelled), Some(true)));
+        assert!(stops_the_run(&C::OutcomeUnknown(O::TimedOut), None));
+        assert!(stops_the_run(&C::OutcomeUnknown(O::TimedOut), Some(false)));
+        assert!(!stops_the_run(&C::OutcomeUnknown(O::TimedOut), Some(true)));
+    }
+
+    #[test]
+    fn read_only_only_when_every_tool_by_that_name_says_so() {
+        let tools = [def("a", Some(true)), def("b", Some(true)), def("b", None), def("c", Some(false))];
+        assert_eq!(read_only(&tools, "a"), Some(true));
+        assert_eq!(read_only(&tools, "b"), Some(false));
+        assert_eq!(read_only(&tools, "c"), Some(false));
+        assert_eq!(read_only(&tools, "missing"), None);
+    }
 
     fn part(content: llm::AssistantContent, opaque: Option<&str>) -> llm::AssistantPart {
         llm::AssistantPart { content, opaque: opaque.map(str::to_string), citations: Vec::new() }

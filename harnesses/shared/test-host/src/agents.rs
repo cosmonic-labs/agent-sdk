@@ -354,3 +354,35 @@ async fn compaction_dropped_mid_summary(f: &Fixture) -> Result<()> {
     ensure!(result.json()["outcome"] == "cancelled", "{}", result.data);
     Ok(())
 }
+
+/// A tool call whose outcome is unknown ends the run with an error. Its op
+/// closes as unresolved with an error step naming it, the run result says
+/// failed, and nothing else is called: no second model call, and the tool is
+/// never asked again. Run on a fresh session.
+pub(crate) async fn unknown_outcome_stops(f: &Fixture) -> Result<()> {
+    f.agent().unknown_outcome = true;
+    match f.run("r-unknown", "echo once only", None).await? {
+        Ran::Started { outcome: Err(RunError::Failed(m)), .. } => {
+            ensure!(m.contains("call-1"), "the error does not name the call: {m}")
+        }
+        Ran::Started { outcome, .. } => bail!("expected the run to fail, got {outcome:?}"),
+        Ran::Refused(e) => bail!("did not start: {e:?}"),
+    }
+    let agent = f.agent();
+    ensure!(agent.chats.len() == 1, "{} model calls; the run went on after the call", agent.chats.len());
+    ensure!(agent.tool_calls.len() == 1, "{} tool calls; the call was made again", agent.tool_calls.len());
+    let results: Vec<serde_json::Value> =
+        agent.entries.iter().filter(|e| e.kind == "agent.op-result.v1").map(Entry::json).collect();
+    ensure!(
+        results.len() == 1 && results[0]["op"] == "call-1" && results[0]["outcome"] == "unresolved",
+        "op results: {results:?}"
+    );
+    let at = agent.entries.iter().position(|e| e.kind == "agent.op-result.v1").context("no op result")?;
+    ensure!(
+        agent.entries[at + 1..].iter().any(|e| e.kind == "agent.step.v1" && e.json()["role"] == "error"),
+        "no error step after the unresolved call"
+    );
+    let result = agent.entries.last().context("empty journal")?.json();
+    ensure!(result["run"] == "r-unknown" && result["outcome"] == "failed", "{result}");
+    Ok(())
+}

@@ -37,6 +37,8 @@ async fn main() -> Result<()> {
             t.case("pre-turn compaction at 90% of the window", compaction(&f)).await;
             t.case("a schema is sent as the response format and checked", structured_output(&f)).await;
             t.case("a requested summary leaves the person's messages, then the summary", requested_history(&f)).await;
+            let unknown = Fixture::new(&path)?;
+            t.case("an unknown tool outcome ends the run, and nothing is called again", agents::unknown_outcome_stops(&unknown)).await;
         }
         other => bail!("no suite for {other}; {usage}"),
     }
