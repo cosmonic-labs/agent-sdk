@@ -116,7 +116,8 @@ async function agentTools(journal) {
             } catch (e) {
                 // not-dispatched: nothing ran. outcome-unknown, or a cancellation:
                 // whether it took effect is not known.
-                const readOnly = t.annotations?.readOnly;
+                // Read only only when every listed tool by this name says so.
+                const readOnly = defs.filter((d) => d.name === t.name).every((d) => d.annotations?.readOnly === true);
                 journal.finish(callId, e?.payload ? outcomeForToolError(e.payload, readOnly) : 'unresolved');
                 if (!e?.payload || stopsTheRun(e.payload, readOnly)) {
                     // The run stops here, before the model can ask for the
