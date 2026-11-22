@@ -68,7 +68,7 @@ cd test-host
 cargo run -- ../target/wasm32-wasip2/release/minimal_agent.wasm
 ```
 
-[`agent-tests/`](agent-tests/) holds the same kind of check written as test files for [`agent-test`](../../testing/agent-test), the format any agent harness can use: a scripted model, the tools a test grants, and assertions on what the host recorded, including calls and requests the grants refused.
+[`tests/minimal-agent`](../../tests/minimal-agent) holds the same kind of check written as test files for [`agent-test`](../../test-runner), the format any agent harness can use: a scripted model, the tools a test grants, and assertions on what the host recorded, including calls and requests the grants refused.
 
 ## Run it in Cosmonic Desktop
 

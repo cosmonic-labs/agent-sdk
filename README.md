@@ -11,7 +11,8 @@ This repository is the canonical source for:
 | [`components/units-tool`](components/units-tool) | A small typed tool in Rust, the one [Write a typed tool](https://cosmonic.com/docs/agent-sdk/write-a-typed-tool/) builds | Source only |
 | [`harnesses/codex`](harnesses/codex) | Codex's agent loop as a reference agent harness, ported from openai/codex | Source only |
 | [`harnesses/pi`](harnesses/pi) | Pi's agent loop as a reference agent harness, built from unmodified upstream packages | Source only |
-| [`testing/agent-test`](testing/agent-test) | Deterministic agent tests: a scripted model, granted tools, and assertions on what the host recorded | Source only |
+| [`test-runner`](test-runner) | `agent-test`, the runner for deterministic agent tests: a scripted model, granted tools, and assertions on what the host recorded | Source only |
+| [`tests`](tests) | Agent test cases and the fixtures they use | Source only |
 
 Everything here is licensed Apache-2.0. Third-party code carried in this repository is listed in [`NOTICE`](NOTICE).
 
@@ -25,7 +26,7 @@ Everything here is licensed Apache-2.0. Third-party code carried in this reposit
 
 ## Test an agent
 
-[`testing/agent-test`](testing/agent-test) runs an agent against a scripted model and the tools a test grants, with no network and no keys, and checks what the host recorded: the tool calls it dispatched, the calls and requests its grants refused, and the hosts any component reached. [`components/minimal-agent/agent-tests`](components/minimal-agent/agent-tests) are examples.
+[`test-runner`](test-runner) runs an agent against a scripted model and the tools a test grants, with no network and no keys, and checks what the host recorded: the tool calls it dispatched, the calls and requests its grants refused, and the hosts any component reached. The cases are in [`tests`](tests); [`tests/minimal-agent`](tests/minimal-agent) are examples.
 
 ## Depend on `cosmonic:agent`
 

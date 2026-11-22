@@ -15,7 +15,7 @@ An agent's reply is text a model wrote. It can say a tool was never called when 
 - every outbound HTTP request any component made, let through or not;
 - how many model calls the host served, and the session journal the agent wrote.
 
-`never: {calls: [delete_file]}` passes only if the host never dispatched `delete_file`, whatever the model says. [`must-fail/model-says-otherwise.yaml`](must-fail/model-says-otherwise.yaml) shows a run where the model claims it deleted nothing; the test fails because the host's record says otherwise.
+`never: {calls: [delete_file]}` passes only if the host never dispatched `delete_file`, whatever the model says. [`tests/must-fail/model-says-otherwise.yaml`](../tests/must-fail/model-says-otherwise.yaml) shows a run where the model claims it deleted nothing; the test fails because the host's record says otherwise.
 
 The model is scripted, so what these tests exercise is the agent harness (the loop around the model) and the grants around it: does the harness pass the model's calls through faithfully, handle refusals and failures, stop when it should, and record what it did; and does a tool reach only what it was granted.
 
@@ -24,15 +24,15 @@ The model is scripted, so what these tests exercise is the agent harness (the lo
 Build the runner once. It needs the `cosmonic:agent` WIT, fetched with [`wkg`](https://github.com/bytecodealliance/wasm-pkg-tools):
 
 ```shell
-cd testing/agent-test
-WKG_CONFIG_FILE=../../wit/wkg-registries.toml wkg wit fetch
+cd test-runner
+WKG_CONFIG_FILE=../wit/wkg-registries.toml wkg wit fetch
 cargo build --release
 ```
 
 Then run a file or a directory of them:
 
 ```shell
-target/release/agent-test ../../components/minimal-agent/agent-tests
+target/release/agent-test ../tests/minimal-agent
 ```
 
 Each file prints one line. A failing test lists every way the record differs from what it expects; here, an agent build that ignored its tool grants:
@@ -48,7 +48,7 @@ FAIL a tool that is not granted is refused and never runs (.../02-ungranted-tool
 
 `--agent <component.wasm>` runs every file against that component instead of the one each file names, so one suite can test a build from CI. From Rust, call `agent_test::run_file(path, agent)`.
 
-The examples in [`components/minimal-agent/agent-tests`](../../components/minimal-agent/agent-tests) need minimal-agent and the [`fetch-tool`](fixtures/fetch-tool) fixture built first (`cargo build --target wasm32-wasip2 --release` in each, after the same `wkg wit fetch`).
+The cases live in [`tests/`](../tests) at the repository root, as in WebAssembly's wasi-testsuite: [`tests/minimal-agent`](../tests/minimal-agent) are the examples, [`tests/must-fail`](../tests/must-fail) must fail, and [`tests/fixtures`](../tests/fixtures) holds what they use. The examples need [minimal-agent](../components/minimal-agent) and the [`fetch-tool`](../tests/fixtures/fetch-tool) fixture built first (`cargo build --target wasm32-wasip2 --release` in each, after the same `wkg wit fetch`).
 
 ## The format
 
@@ -56,7 +56,7 @@ The examples in [`components/minimal-agent/agent-tests`](../../components/minima
 version: 1
 name: a tool that is not granted is refused and never runs
 agent:
-  component: ../target/wasm32-wasip2/release/minimal_agent.wasm
+  component: ../../components/minimal-agent/target/wasm32-wasip2/release/minimal_agent.wasm
 grants:
   tools: [echo]
 tools:
@@ -119,7 +119,7 @@ A stub has a `name` and answers from `results`, one per call in order (the last 
 A tool component exports `cosmonic:agent/tools` and is hosted on a fresh instance for each call, with its own grants, as it would be in a workload. It is linked with WASI and HTTP behind its grants, never with the model, the session or other tools:
 
 ```yaml
-- component: fixtures/fetch-tool.wasm
+- component: ../fixtures/fetch-tool/target/wasm32-wasip2/release/fetch_tool.wasm
   hosts: [api.example.com]
   folders:
     - {path: files, guest: /data}

@@ -3,7 +3,7 @@
 version: 1
 name: a short script is reported
 agent:
-  component: ../../../components/minimal-agent/target/wasm32-wasip2/release/minimal_agent.wasm
+  component: ../../components/minimal-agent/target/wasm32-wasip2/release/minimal_agent.wasm
 tools:
   - name: echo
 model:

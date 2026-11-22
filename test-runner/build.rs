@@ -32,7 +32,7 @@ fn main() -> std::io::Result<()> {
     println!("cargo:rerun-if-changed=wit");
     if !source.join("deps").is_dir() {
         return Err(std::io::Error::other(
-            "wit/deps is missing: run `WKG_CONFIG_FILE=../../wit/wkg-registries.toml wkg wit fetch` here first",
+            "wit/deps is missing: run `WKG_CONFIG_FILE=../wit/wkg-registries.toml wkg wit fetch` here first",
         ));
     }
     let dest = Path::new("wit-host");

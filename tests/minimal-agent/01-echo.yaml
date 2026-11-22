@@ -3,7 +3,7 @@
 version: 1
 name: a granted tool is called with the model's arguments
 agent:
-  component: ../target/wasm32-wasip2/release/minimal_agent.wasm
+  component: ../../components/minimal-agent/target/wasm32-wasip2/release/minimal_agent.wasm
 grants:
   tools: [echo]
 tools:
