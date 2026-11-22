@@ -70,7 +70,7 @@ A **typed tool** exports its own interface and nothing from `cosmonic:agent`. Th
 
 ### The session journal
 
-`session` ([`session.wit`](../wit/cosmonic-agent/session.wit)) is an append-only journal plus opaque working state that the host keeps for the harness. A commit appends entries and optionally replaces state atomically, on conditions (`require-state`, `require-end`) that make two writers merge instead of overwrite. A `commit-id` makes a retried commit safe.
+`session` ([`session.wit`](../wit/cosmonic-agent/session.wit)) is an append-only journal plus opaque working state that the host keeps for the harness. A commit appends entries and optionally replaces state atomically, on conditions (`require-state`, `require-end`). A commit whose conditions no longer hold writes nothing and returns the current snapshot, so a writer never overwrites another; reconciling is the writer's job, or it stops (minimal-agent ends the run `superseded`). A `commit-id` makes a retried commit safe.
 
 All `agent.*` entry kinds are reserved, and each entry's data is JSON. A host or a person's tool can redraw a conversation from these alone:
 
@@ -112,13 +112,13 @@ From the [design note](../wit/cosmonic-agent/README.md#versioning):
 
 - **Breaking changes bump the minor version** (0.4 to 0.5). Adding a case to a variant, a field to a record, or a function to an interface a guest exports (`tools`, `run`) breaks compiled consumers.
 - **Additive changes bump the patch version** (0.4.0 to 0.4.1) and carry `@since` on the new items. New interfaces, and new functions on interfaces the host serves, are additive.
-- **0.4.x versions link to each other.** A harness built against 0.4.2 links to a host that names 0.4.0 or 0.4.1.
+- **Patch versions link to each other.** A harness built against 0.4.2 links to a host entry that names 0.4.0 or 0.4.1, as long as the host serves every interface it imports, including the unstable ones.
 - **Published versions never change.** 0.4.2 corrected 0.4.0's docs without changing its types.
 - **Unstable items may still change.** Items behind `@unstable(feature = ...)` are outside these promises. In 0.4.2 the one feature is `agent-run`, which gates `run`, `run-types`, `compact` and the worlds that use them. A consumer sees these only when it enables the feature (in Rust, `features: ["agent-run"]` in `wit_bindgen::generate!`).
 
-Two things follow for a harness. Match every variant with a fallback arm, since `other` cases exist for exactly this. Pin the version you build against, and expect to rebuild for a minor version.
+Two things follow for a harness. Handle every case of every variant, including the `other` cases where a variant defines one, and never parse their detail strings. Pin the version you build against, and expect to rebuild for a minor version.
 
-Further interfaces are in design and not part of any release: tool discovery and loading, and spawning child agents. Don't build against them until they ship.
+Tool discovery needs no new interface today: a host that offers it adds its own `find_tools` and `load_tools` tools to `tools.list`, and the harness calls them like any other tool. Interfaces for spawning child agents are in design and not part of any release.
 
 ## Host conventions
 
@@ -129,8 +129,8 @@ Everything below is a host's choice. Two hosts serving the same `cosmonic:agent`
 The contract says a driver calls `run`. Who that driver is, and what reaches it, is up to the host:
 
 - **A chat interface.** Cosmonic Desktop drives `run` from its Agents page. It adds the binding to the agent's workload itself and refuses a manifest that names `run` ([minimal-agent's README](../components/minimal-agent/README.md#run-it-in-cosmonic-desktop)).
-- **HTTP.** A host can accept requests in some public format and translate them into `run` calls. Cosmonic Control accepts requests in the OpenAI Responses API format at `/v1/responses`, streams server-sent events, and maps fields such as `input`, `instructions` and `reasoning.effort` onto `run-options` ([Run an agent on Control](https://cosmonic.com/docs/agent-sdk/run-on-control/)).
-- **Messaging.** Control also starts runs from NATS requests on a per-workload subject, with the same JSON body.
+- **HTTP.** A host can accept requests in some public format and translate them into `run` calls. Cosmonic Control accepts requests in the OpenAI Responses API format at `/v1/responses`, streams server-sent events, and maps `input` onto the `user-message` and fields such as `instructions` and `reasoning.effort` onto `run-options` ([Run an agent on Control](https://cosmonic.com/docs/agent-sdk/run-on-control/)).
+- **Messaging.** Control's agent support is experimental. It also starts runs from NATS requests on a per-workload subject, with the same JSON body.
 - **An adapter component.** A component on the `run-client` world can import `run` and serve another protocol itself.
 
 The response format, status codes (Control answers a second concurrent request with `409 busy`), cancellation endpoints, authentication and default deadlines all belong to the host. None of them changes what your harness sees: one `run` call with a `user-message` and `run-options`.
@@ -172,7 +172,7 @@ What carries from host to host:
 - The components and their images. Pin images by digest in production.
 - Each component's own grants: `allowedHosts`, volumes and the like. A harness has `allowedHosts: []`.
 - One entry per interface group (`session`; `inference-types`, `models`, `chat`; `tools`), each naming the components it is granted to with `components`.
-- Any `0.4.x` version on an entry links to a harness built against any other `0.4.x`.
+- An entry naming an earlier 0.4 patch version (Desktop writes 0.4.0) links to a harness built against 0.4.2.
 
 What does not carry, and why:
 
