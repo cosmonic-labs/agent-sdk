@@ -4,7 +4,7 @@
 version: 1
 name: a model's claim does not hide a call the host made
 agent:
-  component: ../../../components/minimal-agent/target/wasm32-wasip2/release/minimal_agent.wasm
+  component: ../../components/minimal-agent/target/wasm32-wasip2/release/minimal_agent.wasm
 tools:
   - name: delete_file
     results:

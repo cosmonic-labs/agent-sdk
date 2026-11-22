@@ -4,7 +4,7 @@
 version: 1
 name: a tool that is not granted is refused and never runs
 agent:
-  component: ../target/wasm32-wasip2/release/minimal_agent.wasm
+  component: ../../components/minimal-agent/target/wasm32-wasip2/release/minimal_agent.wasm
 grants:
   tools: [echo]
 tools:

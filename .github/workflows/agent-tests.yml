@@ -8,13 +8,15 @@ on:
     branches: [main]
     paths:
       - "components/minimal-agent/**"
-      - "testing/agent-test/**"
+      - "test-runner/**"
+      - "tests/**"
       - "wit/wkg-registries.toml"
       - ".github/workflows/agent-tests.yml"
   pull_request:
     paths:
       - "components/minimal-agent/**"
-      - "testing/agent-test/**"
+      - "test-runner/**"
+      - "tests/**"
       - "wit/wkg-registries.toml"
       - ".github/workflows/agent-tests.yml"
   workflow_dispatch:
@@ -63,14 +65,14 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3 # zizmor: ignore[cache-poisoning] -- nothing built here is published
         with:
           workspaces: |
-            testing/agent-test
-            testing/agent-test/fixtures/fetch-tool
+            test-runner
+            tests/fixtures/fetch-tool
             components/minimal-agent
 
       - name: Fetch the WIT
         run: |
           set -euo pipefail
-          for dir in testing/agent-test testing/agent-test/fixtures/fetch-tool components/minimal-agent; do
+          for dir in test-runner tests/fixtures/fetch-tool components/minimal-agent; do
             (cd "$dir" && wkg wit fetch)
           done
 
@@ -78,31 +80,31 @@ jobs:
         run: |
           set -euo pipefail
           (cd components/minimal-agent && cargo build --target wasm32-wasip2 --release)
-          (cd testing/agent-test/fixtures/fetch-tool && cargo build --target wasm32-wasip2 --release)
+          (cd tests/fixtures/fetch-tool && cargo build --target wasm32-wasip2 --release)
 
       - name: Build and unit test the runner
-        working-directory: testing/agent-test
+        working-directory: test-runner
         run: |
           cargo test
           cargo build
 
       - name: Run minimal-agent's agent tests
-        working-directory: testing/agent-test
-        run: target/debug/agent-test ../../components/minimal-agent/agent-tests
+        working-directory: test-runner
+        run: target/debug/agent-test ../tests/minimal-agent
 
       - name: Check that the must-fail tests fail
-        working-directory: testing/agent-test
+        working-directory: test-runner
         run: |
           set -uo pipefail
           # Bash runs with -e here; capture the expected failure's status.
           status=0
-          out=$(target/debug/agent-test must-fail) || status=$?
+          out=$(target/debug/agent-test ../tests/must-fail) || status=$?
           echo "$out"
           if [ "$status" -ne 1 ]; then
             echo "::error::agent-test exited $status on the must-fail tests, expected 1"
             exit 1
           fi
-          want=$(ls must-fail/*.yaml | wc -l)
+          want=$(ls ../tests/must-fail/*.yaml | wc -l)
           if ! echo "$out" | grep -q "^0 passed, ${want} failed$"; then
             echo "::error::every must-fail test should fail"
             exit 1
