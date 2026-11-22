@@ -172,15 +172,49 @@ fn check_calls(spec: &Calls, got: &[Dispatched], fail: &mut Vec<String>) {
             }
         }
     }
-    for m in includes.into_iter().flatten() {
-        if !got.iter().any(|d| call_matches(m, d)) {
-            fail.push(format!(
-                "tool calls: no matching call to {}; the host dispatched: {}",
-                m.name,
-                show_all(got)
-            ));
-        }
+    if let Some(want) = includes
+        && !distinct_matches(want, got)
+    {
+        fail.push(format!(
+            "tool calls: expected [{}] each matched by its own call; the host dispatched: {}",
+            want.iter()
+                .map(|m| m.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            show_all(got)
+        ));
     }
+}
+
+/// Whether every expected call can be given its own recorded call: a
+/// bipartite matching, by augmenting paths, so overlapping matchers are
+/// assigned correctly.
+fn distinct_matches(want: &[CallMatch], got: &[Dispatched]) -> bool {
+    fn assign(
+        w: usize,
+        want: &[CallMatch],
+        got: &[Dispatched],
+        owner: &mut [Option<usize>],
+        seen: &mut [bool],
+    ) -> bool {
+        for (g, d) in got.iter().enumerate() {
+            if seen[g] || !call_matches(&want[w], d) {
+                continue;
+            }
+            seen[g] = true;
+            let free = match owner[g] {
+                None => true,
+                Some(other) => assign(other, want, got, owner, seen),
+            };
+            if free {
+                owner[g] = Some(w);
+                return true;
+            }
+        }
+        false
+    }
+    let mut owner = vec![None; got.len()];
+    (0..want.len()).all(|w| assign(w, want, got, &mut owner, &mut vec![false; got.len()]))
 }
 
 fn refusal_matches(want: &RefusalSpec, got: &Refused) -> bool {
@@ -285,11 +319,9 @@ pub fn check(expect: &Expect, finished: &Finished) -> Vec<String> {
         }
     }
     for h in &expect.never.reaches {
-        for e in rec
-            .egress
-            .iter()
-            .filter(|e| e.allowed && e.host.eq_ignore_ascii_case(h))
-        {
+        for e in rec.egress.iter().filter(|e| {
+            e.allowed && crate::gate::granted(std::slice::from_ref(h), &e.host, &e.authority)
+        }) {
             fail.push(format!(
                 "never: {} reached {h} ({} {})",
                 e.by, e.method, e.url
@@ -327,6 +359,33 @@ mod tests {
         assert!(includes(&got, &json!({"b": {"c": 2}})));
         assert!(!includes(&got, &json!({"b": {"c": 3}})));
         assert!(!includes(&got, &json!({"x": 1})));
+    }
+
+    fn call(name: &str, args: Value) -> Dispatched {
+        Dispatched {
+            id: String::new(),
+            name: name.into(),
+            arguments: Some(args),
+            text: None,
+            response: Response::Returned {
+                text: String::new(),
+                is_error: false,
+            },
+        }
+    }
+
+    #[test]
+    fn includes_needs_distinct_calls() {
+        let any: CallMatch = serde_yaml_ng::from_str("{name: echo}").unwrap();
+        let hi: CallMatch = serde_yaml_ng::from_str("{name: echo, arguments: {text: hi}}").unwrap();
+        let one = [call("echo", json!({"text": "hi"}))];
+        assert!(!distinct_matches(&[any.clone(), any.clone()], &one));
+        // The loose matcher must take the second call for both to match.
+        let two = [
+            call("echo", json!({"text": "hi"})),
+            call("echo", json!({"text": "yo"})),
+        ];
+        assert!(distinct_matches(&[any, hi], &two));
     }
 
     #[test]

@@ -94,8 +94,9 @@ jobs:
         working-directory: testing/agent-test
         run: |
           set -uo pipefail
-          out=$(target/debug/agent-test must-fail)
-          status=$?
+          # Bash runs with -e here; capture the expected failure's status.
+          status=0
+          out=$(target/debug/agent-test must-fail) || status=$?
           echo "$out"
           if [ "$status" -ne 1 ]; then
             echo "::error::agent-test exited $status on the must-fail tests, expected 1"

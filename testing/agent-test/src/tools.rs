@@ -66,6 +66,7 @@ async fn instance(
 ) -> anyhow::Result<(Store<crate::host::State>, tool_bindings::ToolUnderTest)> {
     let state = host.state(&tool.name, &tool.hosts, &tool.folders)?;
     let mut store = Store::new(&host.engine, state);
+    crate::runner::set_deadline(&mut store, host.timeout);
     let inst = tool_bindings::ToolUnderTest::instantiate_async(
         &mut store,
         &tool.component,
@@ -165,6 +166,19 @@ impl<T: Send> tools::HostWithStore<T> for HasSelf<crate::host::State> {
             },
             ToolArguments::Text(t) => (None, Some(t.clone())),
         };
+        // Recorded before it runs, so a call the agent abandons (cancelled,
+        // or dropped) still shows as dispatched.
+        let slot = {
+            let mut rec = host.record();
+            rec.dispatched.push(Dispatched {
+                id: request.id.clone(),
+                name: request.name.clone(),
+                arguments,
+                text,
+                response: Response::Failed("unfinished: the agent stopped waiting".into()),
+            });
+            rec.dispatched.len() - 1
+        };
         let result = match source {
             Source::Stub(results) => {
                 let n = {
@@ -183,12 +197,14 @@ impl<T: Send> tools::HostWithStore<T> for HasSelf<crate::host::State> {
                 }
             }
             Source::Component(tool) => {
-                let task = tokio::spawn(call_component(
+                // Aborted if the agent drops this call, so nothing keeps
+                // running behind the test's back.
+                let mut task = AbortOnDrop(tokio::spawn(call_component(
                     Arc::clone(&host),
                     Arc::clone(tool),
                     request.clone(),
-                ));
-                match task.await {
+                )));
+                match (&mut task.0).await {
                     Ok(Ok(r)) => r,
                     Ok(Err(e)) => {
                         host.record()
@@ -209,13 +225,17 @@ impl<T: Send> tools::HostWithStore<T> for HasSelf<crate::host::State> {
                 }
             }
         };
-        host.record().dispatched.push(Dispatched {
-            id: request.id.clone(),
-            name: request.name.clone(),
-            arguments,
-            text,
-            response: summarize(&result),
-        });
+        if let Some(d) = host.record().dispatched.get_mut(slot) {
+            d.response = summarize(&result);
+        }
         Ok(result)
+    }
+}
+
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }

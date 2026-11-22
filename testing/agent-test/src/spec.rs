@@ -115,6 +115,12 @@ pub struct StubResult {
     pub error: Option<CallErrorSpec>,
 }
 
+/// A field that is present, even as `null`, is `Some`: `arguments: null`
+/// means null arguments, never "don't check".
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(d).map(Some)
+}
+
 /// YAML's enum syntax is tags (`!not-dispatched`); read these as the plain
 /// maps and strings a reader expects, the way JSON spells an enum.
 fn via_json<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
@@ -218,7 +224,7 @@ pub struct CallSpec {
     pub id: Option<String>,
     pub name: String,
     /// JSON arguments, written as YAML.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     pub arguments: Option<Value>,
     /// Freeform arguments, for a `text` tool. Exclusive with `arguments`.
     #[serde(default)]
@@ -336,10 +342,10 @@ pub struct CallsRule {
 pub struct CallMatch {
     pub name: String,
     /// The JSON arguments, equal.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     pub arguments: Option<Value>,
     /// The JSON arguments contain these fields (recursively).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     pub arguments_include: Option<Value>,
     /// Freeform arguments.
     #[serde(default)]
@@ -500,6 +506,14 @@ expect:
         ));
         assert!(matches!(t.expect.tool_calls, Some(Calls::Exactly(_))));
         assert_eq!(t.resolve("a.wasm"), PathBuf::from("/t/a.wasm"));
+    }
+
+    #[test]
+    fn null_arguments_are_checked() {
+        let m: CallMatch = serde_yaml_ng::from_str("{name: a, arguments: null}").unwrap();
+        assert_eq!(m.arguments, Some(Value::Null));
+        let m: CallMatch = serde_yaml_ng::from_str("{name: a}").unwrap();
+        assert_eq!(m.arguments, None);
     }
 
     #[test]

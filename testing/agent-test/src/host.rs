@@ -75,7 +75,7 @@ pub struct Scripted {
 pub struct Entry {
     pub seq: u64,
     pub kind: String,
-    pub data: String,
+    pub data: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -95,6 +95,8 @@ pub struct Host {
     /// session or other tools.
     pub tool_linker: Linker<State>,
     pub alias: String,
+    /// The test's time limit in seconds, for every store.
+    pub timeout: u64,
     pub replies: Mutex<VecDeque<Scripted>>,
     pub script_len: usize,
     /// Every tool the test declares, set once tool components are listed.
