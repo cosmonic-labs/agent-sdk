@@ -557,6 +557,12 @@ impl<S: Sink> Turn<'_, S> {
                 // Never dispatched: the journal closes the op as cancelled.
                 break;
             } else {
+                // A driver that went away while an earlier call ran is
+                // noticed here, before the next call is made: its op then
+                // closes as cancelled, never made.
+                if !self.sink.counts(&self.counts).await {
+                    return Err(Stop::Cancelled);
+                }
                 if !self.journal.dispatch(call_id) {
                     return Err(Stop::Failed(Failure {
                         case: "failed",

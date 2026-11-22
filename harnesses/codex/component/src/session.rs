@@ -921,15 +921,20 @@ impl Journal {
     /// dropped mid-flight is unresolved, with an error step) and stores `steps` (the error, or the text the person was
     /// already shown) with the conversation as far as it got.
     /// `extra` goes last in the same commit: the run's `agent.run-result.v1`.
+    ///
+    /// When a call closes unresolved, only the entries are committed: the
+    /// saved conversation stays as it was before the call, so nothing after
+    /// it builds on a call whose effect is unknown.
     pub async fn close(&self, steps: Vec<Value>, conversation: &Conversation, extra: Vec<NewEntry>) {
-        let (mut entries, closing, version, end, superseded) = {
+        let (mut entries, closing, version, end, keep_state) = {
             let inner = self.lock();
             let results = Self::take_results(&inner);
-            (results, inner.ops.len(), inner.version.clone(), inner.end, inner.superseded)
+            let unresolved = inner.ops.iter().any(|o| o.status.outcome() == Outcome::Unresolved);
+            (results, inner.ops.len(), inner.version.clone(), inner.end, inner.superseded || unresolved)
         };
         entries.extend(steps.iter().map(|s| entry(STEP_KIND, s)));
         entries.extend(extra);
-        match self.land(entries, conversation, version, end, superseded).await {
+        match self.land(entries, conversation, version, end, keep_state).await {
             Ok(()) => self.closed(closing),
             Err(e) => eprintln!("session: could not record the end of the turn: {e}"),
         }
