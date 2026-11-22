@@ -106,9 +106,11 @@ pub(crate) async fn call_tool(
     let (output, is_error, outcome) = match tools::call(call.clone()).await {
         Ok(r) if r.is_error => (r.output, true, "failed"),
         Ok(r) => (r.output, false, "succeeded"),
-        // Not made: the model gets the reason, so it can try again.
+        // Not made: the model gets the reason, so it can try again. The
+        // session conventions record a call that was not dispatched as
+        // cancelled; failed is for a call that returned.
         Err(e @ CallError::NotDispatched(_)) => {
-            (vec![ToolOutput::Text(e.describe())], true, "failed")
+            (vec![ToolOutput::Text(e.describe())], true, "cancelled")
         }
         // Made, or perhaps made, and whether it took effect is not known.
         // The session conventions say never to advance state past it.

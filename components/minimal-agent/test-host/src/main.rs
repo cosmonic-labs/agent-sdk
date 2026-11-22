@@ -676,9 +676,10 @@ async fn unresolved(f: &Fixture) -> Result<()> {
 }
 
 /// A tool call that timed out before it started had no effect, so the run
-/// goes on: the model gets the timeout's text, which tells it to ask for less
-/// rather than repeat the call.
+/// goes on: the call is closed as cancelled, and the model gets the timeout's
+/// text, which tells it to ask for less rather than repeat the call.
 async fn timed_out_before_start(f: &Fixture) -> Result<()> {
+    let from = f.host().entries.len();
     let (events, outcome) = started(f.run(Ask::new("r-queue", "queue it")).await?)?;
     ensure!(
         matches!(outcome.finish, Finish::Done),
@@ -695,6 +696,13 @@ async fn timed_out_before_start(f: &Fixture) -> Result<()> {
             if matches!(&s.content, StepContent::Tool(r)
                 if r.first().is_some_and(|r| r.call_id == "call-queue" && r.is_error)))),
         "no error tool step for the call"
+    );
+    ensure!(
+        f.host().entries[from..].iter().any(|e| {
+            let j = e.json();
+            j["op"] == "call-queue" && j["outcome"] == "cancelled"
+        }),
+        "the call is not closed as cancelled"
     );
     Ok(())
 }
