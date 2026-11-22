@@ -115,8 +115,9 @@ From the [design note](../wit/cosmonic-agent/README.md#versioning):
 - **Patch versions link to each other.** A harness built against 0.4.2 links to a host entry that names 0.4.0 or 0.4.1, as long as the host serves every interface it imports, including the unstable ones.
 - **Published versions never change.** 0.4.2 corrected 0.4.0's docs without changing its types.
 - **Unstable items may still change.** Items behind `@unstable(feature = ...)` are outside these promises. In 0.4.2 the one feature is `agent-run`, which gates `run`, `run-types`, `compact` and the worlds that use them. A consumer sees these only when it enables the feature (in Rust, `features: ["agent-run"]` in `wit_bindgen::generate!`).
+- **A release that changes only unstable items takes a patch bump,** even when the change would break a consumer of those items. Code that uses no unstable feature sees no change. Code that enables one has opted into breakage: rebuild against the new patch release and check what moved.
 
-Two things follow for a harness. Handle every case of every variant, including the `other` cases where a variant defines one, and never parse their detail strings. Pin the version you build against, and expect to rebuild for a minor version.
+Two things follow for a harness. Handle every case of every variant, including the `other` cases where a variant defines one, and never parse their detail strings. Pin the version you build against, and expect to rebuild for a minor version, or for any release if you enable an unstable feature.
 
 Tool discovery needs no new interface today: a host that offers it adds its own `find_tools` and `load_tools` tools to `tools.list`, and the harness calls them like any other tool. Interfaces for spawning child agents are in design and not part of any release.
 
