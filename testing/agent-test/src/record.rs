@@ -47,6 +47,8 @@ pub struct Egress {
     pub method: String,
     pub url: String,
     pub host: String,
+    /// The host with its port, when the URL gave one.
+    pub authority: String,
     pub allowed: bool,
 }
 

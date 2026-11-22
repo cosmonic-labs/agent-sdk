@@ -178,9 +178,9 @@ Every field is optional; `outcome` defaults to `done`.
 | `reply` | The reply's text matches: a string (exact), or `{contains, starts-with, matches}` (`matches` is a regular expression). |
 | `tool-calls` | The calls the host dispatched. A list means exactly these, in order. `{in-order: [...]}` allows others between; `{includes: [...]}` allows any order. Each call matches on `name`, and optionally `arguments` (equal), `arguments-include` (these fields, recursively), `text`, `is-error` and `result` (the response's text). |
 | `call-counts` | `{tool: n}`: how many times each tool was dispatched. |
-| `refused` | Every refusal the host recorded, in order: `{tool}` or `{host}`, with optional `by` (`agent`, or the tool component's file name without `.wasm`). `[]` means none. |
+| `refused` | Every refusal the host recorded, in order: `{tool}` or `{host}` (a socket refusal is `{host: <ip>:<port>}`), with optional `by` (`agent`, or the tool component's file name without `.wasm`). `[]` means none. |
 | `never.calls` | These tools were never dispatched. |
-| `never.reaches` | No component's request to these hosts was let through. |
+| `never.reaches` | No component's request to these hosts was let through. Written like a grant: `host`, `host:port` or `*.domain`. |
 | `model-calls` | The host served this many model calls. |
 | `journal` | The session journal's entry kinds, in order. |
 
@@ -190,6 +190,8 @@ Workload manifests are YAML, so a test's grants read like the workload they stan
 
 ## Limits
 
+- The record covers the whole test, including listing tool components before the run.
+- Every store has a deadline of `run.timeout` plus five seconds, enforced by epoch interruption, so a guest stuck in a loop traps instead of hanging the runner.
 - One run per test. A second run that continues the session is future work.
 - Folder access is preopens only: a path outside the granted folders does not exist for the component, so there is nothing to refuse and nothing is recorded. Only the tool's own response shows the failed read.
 - A held approval (a host asking a person before a tool call) is not modeled. A stub can return `{not-dispatched: {denied: ...}}` to stand for a person saying no.

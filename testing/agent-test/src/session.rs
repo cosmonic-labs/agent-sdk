@@ -72,7 +72,7 @@ fn commit(
         s.entries.push(Entry {
             seq,
             kind: entry.kind,
-            data: String::from_utf8_lossy(&entry.data).into_owned(),
+            data: entry.data,
         });
     }
     let mut version = None;
@@ -129,7 +129,7 @@ impl<T: Send> session::HostWithStore<T> for HasSelf<State> {
                     author: "agent".into(),
                     at_ms: 0,
                     kind: e.kind.clone(),
-                    data: e.data.clone().into_bytes(),
+                    data: e.data.clone(),
                 })
                 .collect()
         })))

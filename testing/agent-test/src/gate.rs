@@ -55,6 +55,7 @@ impl WasiHttpHooks for Gate {
             method: method.clone(),
             url: url.clone(),
             host: host.clone(),
+            authority: authority.clone(),
             allowed,
         });
         if !allowed {
@@ -90,9 +91,20 @@ impl WasiHttpHooks for Gate {
     }
 }
 
-/// URLs compare without a trailing slash on an empty path.
+/// URLs compare exactly, except that an empty path is `/`.
 fn same_url(a: &str, b: &str) -> bool {
-    a.trim_end_matches('/') == b.trim_end_matches('/')
+    let (Ok(a), Ok(b)) = (a.parse::<http::Uri>(), b.parse::<http::Uri>()) else {
+        return false;
+    };
+    let path = |u: &http::Uri| match u.path() {
+        "" => "/".to_string(),
+        p => p.to_string(),
+    };
+    a.scheme() == b.scheme()
+        && a.authority().map(|x| x.as_str().to_ascii_lowercase())
+            == b.authority().map(|x| x.as_str().to_ascii_lowercase())
+        && path(&a) == path(&b)
+        && a.query() == b.query()
 }
 
 #[cfg(test)]
@@ -115,5 +127,14 @@ mod tests {
         assert!(granted(&g, "local", "local:8080"));
         assert!(!granted(&g, "local", "local:9090"));
         assert!(!granted(&[], "api.example.com", "api.example.com"));
+    }
+
+    #[test]
+    fn urls_compare_exactly() {
+        use super::same_url;
+        assert!(same_url("https://a.test", "https://a.test/"));
+        assert!(!same_url("https://a.test/status", "https://a.test/status/"));
+        assert!(!same_url("https://a.test/x?q=1", "https://a.test/x?q=1/"));
+        assert!(!same_url("https://a.test/x", "http://a.test/x"));
     }
 }

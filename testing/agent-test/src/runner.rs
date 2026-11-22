@@ -105,8 +105,30 @@ pub fn engine() -> Result<Engine> {
     config.wasm_component_model_async(true);
     // Each component runs briefly: compile time is what counts.
     config.cranelift_opt_level(OptLevel::None);
+    // Lets a deadline stop a guest stuck in a loop, which a timeout on the
+    // future alone cannot.
+    config.epoch_interruption(true);
     let engine = Engine::new(&config)?;
-    Ok(ENGINE.get_or_init(|| engine).clone())
+    let engine = ENGINE.get_or_init(|| engine).clone();
+    static TICKER: OnceLock<()> = OnceLock::new();
+    TICKER.get_or_init(|| {
+        let e = engine.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(TICK_MS));
+                e.increment_epoch();
+            }
+        });
+    });
+    Ok(engine)
+}
+
+const TICK_MS: u64 = 100;
+
+/// Trap any guest code in `store` still running `seconds` (plus a margin)
+/// from now.
+pub fn set_deadline<T>(store: &mut Store<T>, seconds: u64) {
+    store.set_epoch_deadline(seconds.saturating_add(5).saturating_mul(1000 / TICK_MS));
 }
 
 fn folders(test: &Test, list: &[Folder]) -> Vec<(PathBuf, Folder)> {
@@ -146,6 +168,7 @@ pub async fn run(test: &Test, agent: Option<&Path>) -> Result<Finished> {
         linker,
         tool_linker: host::tool_linker(&engine)?,
         alias: test.model.alias.clone(),
+        timeout: test.run.timeout,
         script_len: replies.len(),
         replies: Mutex::new(replies),
         tools: OnceLock::new(),
@@ -196,8 +219,6 @@ pub async fn run(test: &Test, agent: Option<&Path>) -> Result<Finished> {
         }
     }
     let _ = host.tools.set(offered);
-    // Listing tool components may have touched the record; start clean.
-    *host.record() = Record::default();
 
     let state = host.state(
         "agent",
@@ -205,6 +226,7 @@ pub async fn run(test: &Test, agent: Option<&Path>) -> Result<Finished> {
         &folders(test, &test.grants.folders),
     )?;
     let mut store = Store::new(&engine, state);
+    set_deadline(&mut store, test.run.timeout);
     let agent =
         bindings::AgentUnderTest::instantiate_async(&mut store, &agent_component, &host.linker)
             .await
