@@ -1,0 +1,22 @@
+# A tool call whose outcome the host cannot confirm stops minimal-agent's
+# run: it may have had effects, so the agent does not call the model again.
+version: 1
+name: an unknown tool outcome stops the run
+agent:
+  component: ../target/wasm32-wasip2/release/minimal_agent.wasm
+tools:
+  - name: deploy
+    read-only: false
+    results:
+      - error: {outcome-unknown: timed-out}
+model:
+  replies:
+    - tool-calls:
+        - name: deploy
+          arguments: {env: staging}
+run:
+  message: deploy to staging
+expect:
+  outcome: failed
+  call-counts: {deploy: 1}
+  model-calls: 1

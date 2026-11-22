@@ -1,0 +1,110 @@
+# Builds the agent-test runner and runs the agent tests: minimal-agent's
+# suite must pass, and the runner's must-fail files must fail, so an
+# assertion that stopped checking anything is caught. Publishes nothing.
+name: agent-tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "components/minimal-agent/**"
+      - "testing/agent-test/**"
+      - "wit/wkg-registries.toml"
+      - ".github/workflows/agent-tests.yml"
+  pull_request:
+    paths:
+      - "components/minimal-agent/**"
+      - "testing/agent-test/**"
+      - "wit/wkg-registries.toml"
+      - ".github/workflows/agent-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_VERSION: "1.97.1"
+  # Pinned by version and by the SHA-256 of the release download.
+  WKG_VERSION: "0.16.0"
+  WKG_SHA256: 8ab0f7138e1a84616cb0c87c2bd7b7d00a356b63d458be92bad3fbd463aa3e2a
+  WKG_CONFIG_FILE: ${{ github.workspace }}/wit/wkg-registries.toml
+
+jobs:
+  test:
+    name: agent tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install wkg (checksummed)
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          curl -sSfL -o wkg "https://github.com/bytecodealliance/wasm-pkg-tools/releases/download/v${WKG_VERSION}/wkg-x86_64-unknown-linux-gnu"
+          echo "$WKG_SHA256  wkg" | sha256sum -c -
+          sudo install -m 0755 wkg /usr/local/bin/
+
+      - name: Install the toolchain and the wasm target
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-wasip2
+          rustup default "$RUST_VERSION"
+
+      # Nothing this workflow builds is published, so a cache cannot reach a
+      # release.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3 # zizmor: ignore[cache-poisoning] -- nothing built here is published
+        with:
+          workspaces: |
+            testing/agent-test
+            testing/agent-test/fixtures/fetch-tool
+            components/minimal-agent
+
+      - name: Fetch the WIT
+        run: |
+          set -euo pipefail
+          for dir in testing/agent-test testing/agent-test/fixtures/fetch-tool components/minimal-agent; do
+            (cd "$dir" && wkg wit fetch)
+          done
+
+      - name: Build the components under test
+        run: |
+          set -euo pipefail
+          (cd components/minimal-agent && cargo build --target wasm32-wasip2 --release)
+          (cd testing/agent-test/fixtures/fetch-tool && cargo build --target wasm32-wasip2 --release)
+
+      - name: Build and unit test the runner
+        working-directory: testing/agent-test
+        run: |
+          cargo test
+          cargo build
+
+      - name: Run minimal-agent's agent tests
+        working-directory: testing/agent-test
+        run: target/debug/agent-test ../../components/minimal-agent/agent-tests
+
+      - name: Check that the must-fail tests fail
+        working-directory: testing/agent-test
+        run: |
+          set -uo pipefail
+          out=$(target/debug/agent-test must-fail)
+          status=$?
+          echo "$out"
+          if [ "$status" -ne 1 ]; then
+            echo "::error::agent-test exited $status on the must-fail tests, expected 1"
+            exit 1
+          fi
+          want=$(ls must-fail/*.yaml | wc -l)
+          if ! echo "$out" | grep -q "^0 passed, ${want} failed$"; then
+            echo "::error::every must-fail test should fail"
+            exit 1
+          fi
+          echo "$out" | grep -q "never: delete_file was dispatched 1 times"
+          echo "$out" | grep -q "the script has 1 replies"
