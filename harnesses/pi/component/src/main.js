@@ -55,7 +55,7 @@ import {
     plan,
     transcriptText,
 } from './compaction.js';
-import { outcomeForToolError, toolOps } from './journal-rules.js';
+import { outcomeForToolError, stopsTheRun, toolOps } from './journal-rules.js';
 import {
     MODEL,
     completeOnce,
@@ -116,7 +116,18 @@ async function agentTools(journal) {
             } catch (e) {
                 // not-dispatched: nothing ran. outcome-unknown, or a cancellation:
                 // whether it took effect is not known.
-                journal.finish(callId, e?.payload ? outcomeForToolError(e.payload) : 'unresolved');
+                const readOnly = t.annotations?.readOnly;
+                journal.finish(callId, e?.payload ? outcomeForToolError(e.payload, readOnly) : 'unresolved');
+                if (!e?.payload || stopsTheRun(e.payload, readOnly)) {
+                    // The run stops here, before the model can ask for the
+                    // call again and before the saved transcript moves past
+                    // it: the journal closes its op as unresolved, with an
+                    // error step, and a person resolves it. Nothing retries it.
+                    journal.unresolved(
+                        `the ${t.name} tool call ${callId} stopped the run: ${describe(e)}. It was not made ` +
+                            'again; check whether it took effect before asking again',
+                    );
+                }
                 throw new Error(describe(e));
             }
             journal.finish(callId, r.isError ? 'failed' : 'succeeded');
@@ -267,10 +278,14 @@ async function accept(req) {
     let tools = [];
     let toolsError = null;
     let journalRef = null;
+    // Set by the run once it starts: what a tool call with an unknown outcome
+    // does to it.
+    const hooks = {};
     try {
         tools = await agentTools({
             dispatch: (id) => journalRef?.dispatch(id) ?? false,
             finish: (id, o) => journalRef?.finish(id, o),
+            unresolved: (why) => hooks.unresolved?.(why),
         });
     } catch (e) {
         toolsError = `listing tools failed, so this run has none: ${describe(e)}`;
@@ -287,7 +302,7 @@ async function accept(req) {
     const turn = await openTurn(req.user, userStep, (prior) => (prior.length ? prior : [system]), req.run);
     journalRef = turn.journal;
     const deadline = req.maxDuration != null ? now() + req.maxDuration : null;
-    return { ...req, turn, tools, toolsError, deadline };
+    return { ...req, turn, tools, toolsError, deadline, hooks };
 }
 
 // The tool loop: Pi calls the model, makes the tool calls it asks for, hands
@@ -348,6 +363,20 @@ async function work(acc, sink) {
     const view = new View();
     let seen = null; // the loop's transcript as the last model call was built from it
     let overflowRetry = true; // an overflow is answered by compacting once per run
+
+    // A tool call whose outcome is unknown ends the run, failed, with the
+    // transcript as of the reply that asked for it: no further model or tool
+    // call is made, and the call's op closes as unresolved when the journal
+    // closes. `failed` until run-error has a dedicated case for an unresolved
+    // call, which is planned.
+    acc.hooks.unresolved = (why) => {
+        if (failure || limit) {
+            return;
+        }
+        failure = new Failure('failed', why);
+        limited = [...progress];
+        stop.abort();
+    };
 
     // A limit reached before a model call (after a summary, or before one)
     // ends the run there, with what it has: the call is not made.
