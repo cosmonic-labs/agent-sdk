@@ -1,0 +1,15 @@
+// The worlds the test runner plays the host for. Fetched by wkg from the
+// published cosmonic:agent package and pinned by digest in wkg.lock.
+package cosmonic:agent-test@0.1.0;
+
+// An agent under test: cosmonic:agent's `runnable-agent` (unstable, feature
+// `agent-run`). The runner serves its imports with a scripted model, an
+// in-memory session and the tools the test grants, and drives its `run`.
+world agent-under-test {
+  include cosmonic:agent/runnable-agent@0.4.2;
+}
+
+// A real tool component a test grants to the agent.
+world tool-under-test {
+  include cosmonic:agent/tool-provider@0.4.2;
+}

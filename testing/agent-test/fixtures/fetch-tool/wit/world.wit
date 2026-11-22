@@ -1,0 +1,9 @@
+// A test fixture: a tool component with two tools that reach outside it, so
+// the runner's grants have something to allow and refuse. `fetch` makes an
+// HTTP GET (wasi:http/client, from the wasip3 crate) and `read_file` reads a
+// file (wasi:filesystem, from Rust's std).
+package cosmonic:fetch-tool@0.1.0;
+
+world fetch-tool {
+  export cosmonic:agent/tools@0.4.2;
+}

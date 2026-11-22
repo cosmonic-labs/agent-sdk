@@ -1,0 +1,24 @@
+[package]
+name = "fetch-tool"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+publish = false
+description = "A test fixture for agent-test: a tool component that fetches a URL and reads a file."
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# wasi:http/client@0.3 for the fetch.
+wasip3 = "0.9.0"
+# Pinned to the version wasip3 uses: one async runtime.
+wit-bindgen = { version = "0.62.0", features = ["async-spawn"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+strip = true
+
+[workspace]
