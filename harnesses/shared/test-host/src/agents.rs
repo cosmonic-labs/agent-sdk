@@ -358,7 +358,8 @@ async fn compaction_dropped_mid_summary(f: &Fixture) -> Result<()> {
 /// A tool call whose outcome is unknown ends the run with an error. Its op
 /// closes as unresolved with an error step naming it, the run result says
 /// failed, and nothing else is called: no second model call, and the tool is
-/// never asked again. Run on a fresh session.
+/// never asked again. The saved state stays as it was before the reply that
+/// asked for the call. Run on a fresh session.
 pub(crate) async fn unknown_outcome_stops(f: &Fixture) -> Result<()> {
     f.agent().unknown_outcome = true;
     match f.run("r-unknown", "echo once only", None).await? {
@@ -384,5 +385,10 @@ pub(crate) async fn unknown_outcome_stops(f: &Fixture) -> Result<()> {
     );
     let result = agent.entries.last().context("empty journal")?.json();
     ensure!(result["run"] == "r-unknown" && result["outcome"] == "failed", "{result}");
+    let state = agent.state.as_ref().context("no saved state")?;
+    ensure!(
+        !String::from_utf8_lossy(&state.value).contains("call-1"),
+        "the saved state moved past the unresolved call"
+    );
     Ok(())
 }
