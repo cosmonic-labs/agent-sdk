@@ -1,0 +1,52 @@
+# The basic shape: the model asks for a granted tool, the host runs it, and
+# the model answers from its result.
+version: 1
+name: a granted tool is called with the model's arguments
+agent:
+  component: ../target/wasm32-wasip2/release/minimal_agent.wasm
+grants:
+  tools: [echo]
+tools:
+  - name: echo
+    description: Echo the text back
+    input:
+      type: object
+      properties: {text: {type: string}}
+      required: [text]
+    read-only: true
+    results:
+      - output: hello
+model:
+  replies:
+    - reasoning: Planning the call.
+      text: Using the tool.
+      tool-calls:
+        - name: echo
+          arguments: {text: hello}
+    - text: "The tool said: hello"
+run:
+  message: echo hello
+expect:
+  outcome: done
+  finish: done
+  reply: "The tool said: hello"
+  tool-calls:
+    - name: echo
+      arguments: {text: hello}
+      is-error: false
+      result: hello
+  refused: []
+  model-calls: 2
+  journal:
+    - agent.step.v1
+    - agent.run.v1
+    - agent.op.v1
+    - agent.op-result.v1
+    - agent.step.v1
+    - agent.op.v1
+    - agent.op-result.v1
+    - agent.step.v1
+    - agent.op.v1
+    - agent.op-result.v1
+    - agent.step.v1
+    - agent.run-result.v1
