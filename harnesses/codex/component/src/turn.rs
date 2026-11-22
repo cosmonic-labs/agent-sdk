@@ -575,10 +575,31 @@ impl<S: Sink> Turn<'_, S> {
                         self.journal.finish(call_id, if response.is_error { Outcome::Failed } else { Outcome::Succeeded });
                         host::output_of(response)
                     }
+                    Err(error) if host::stops_the_run(&error, host::read_only(&self.tools, name)) => {
+                        // Whether the call took effect is unknown. The run
+                        // stops before the model can ask for it again and
+                        // before the saved conversation moves past it: the
+                        // journal closes its op as unresolved, with an error
+                        // step, and a person resolves it. Nothing retries it.
+                        self.journal.finish(call_id, Outcome::Unresolved);
+                        // `failed` until run-error has a dedicated case for
+                        // an unresolved call, which is planned.
+                        return Err(Stop::Failed(Failure {
+                            case: "failed",
+                            message: format!(
+                                "the {name} tool call {call_id} stopped the run: {}. It was not made again; \
+                                 check whether it took effect before asking again",
+                                host::error_text(name, &error)
+                            ),
+                            host: None,
+                        }));
+                    }
                     Err(error) => {
                         let outcome = match &error {
                             tt::CallError::NotDispatched(_) => Outcome::Cancelled,
-                            tt::CallError::OutcomeUnknown(_) => Outcome::Unresolved,
+                            // A read-only tool that timed out: nothing to
+                            // resolve, so the model reads the timeout.
+                            tt::CallError::OutcomeUnknown(_) => Outcome::Failed,
                         };
                         self.journal.finish(call_id, outcome);
                         host::output_of_error(name, &error)
