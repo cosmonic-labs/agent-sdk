@@ -56,6 +56,7 @@ import {
     condition,
     entry,
     later,
+    outcomeOf,
     readEntries,
     readableTranscript,
     resolutionEntries,
@@ -421,10 +422,17 @@ class Journal {
     // End a turn that did not finish: closes the open ops (a call never made is
     // cancelled; one dropped mid-flight is unresolved, with an error step) and
     // stores `steps` with the transcript as far as it got.
+    // When a call closes unresolved, only the entries are committed: the saved
+    // transcript stays as it was before the call, so nothing after it builds
+    // on a call whose effect is unknown.
     async close(steps, messages, extra = []) {
+        const unresolved = [...this.ops.values()].some((status) => outcomeOf(status) === 'unresolved');
+        if (unresolved) {
+            messages = undefined;
+        }
         const entries = [...this.takeResults(), ...steps.map((s) => entry(STEP_KIND, s)), ...extra];
         // Nothing new to record and the state already holds this transcript.
-        if (!entries.length && !this.statePending && this.written === messages.length) {
+        if (!entries.length && (!messages || (!this.statePending && this.written === messages.length))) {
             return;
         }
         try {
