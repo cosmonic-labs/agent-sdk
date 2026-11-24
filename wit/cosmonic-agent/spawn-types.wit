@@ -1,13 +1,13 @@
 package cosmonic:agent@0.4.4;
 
-/// Types shared by `lineage`, `child-sessions` and `spawn`. No functions:
+/// Types shared by `session-tree` and `spawn`. No functions:
 /// importing it grants nothing. Unstable behind `agent-spawn`, which also
 /// needs `agent-tool-loading`, `agent-run` and `session-status`, whose types
 /// these use.
 ///
-/// Sessions spawned from one root session form a tree. A child's reach
-/// never exceeds what its ancestors hold plus what a grantor approved for
-/// that child, and is checked again each time the child starts a run or
+/// Sessions spawned from one root session form a session tree. A child's
+/// reach never exceeds what its ancestors hold plus what a grantor approved
+/// for that child, and is checked again each time the child starts a run or
 /// loads a tool component. Budgets cover a session and everything below it.
 ///
 /// What a caller sees of a child is the implementer's own: state, usage,

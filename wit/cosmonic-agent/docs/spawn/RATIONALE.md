@@ -1,6 +1,6 @@
 # Spawn and tool loading: rationale
 
-Why `tool-discovery`, `tool-loading`, `lineage`, `child-sessions` and `spawn` look the way they do,
+Why `tool-discovery`, `tool-loading`, `session-tree` and `spawn` look the way they do,
 for people implementing them or reviewing the interfaces.
 The WIT comments say what a caller can rely on;
 [CONFORMANCE.md](CONFORMANCE.md) says what a host and an implementer must do;
@@ -49,23 +49,31 @@ Nothing here blocks prompt injection.
 | `tool-discovery` | ask which tool components are available | `agent-tool-loading` |
 | `tool-loading` | load tool components into itself and set them aside | `agent-tool-loading` |
 | `spawn-types` | (types only: child state, runs, budgets) | `agent-spawn` |
-| `lineage` | read its own place in the tree and its remaining budget | `agent-spawn` |
-| `child-sessions` | see the sessions below it | `agent-spawn` |
+| `session-tree` | read the session tree it belongs to: where it sits, its remaining budget, and the sessions below it | `agent-spawn` |
 | `spawn` | start child sessions and drive them | `agent-spawn` |
 
 ### 2.2 One power per interface
 
 Each interface grants one power, so a component's import list says what it may do.
-A leaf agent can read its remaining budget (`lineage`) without being able to spawn,
-and an agent can be given `spawn` without a separate grant to watch (`child-sessions`),
-or a leaf the right to read its budget.
+A leaf agent can read its place and remaining budget (`session-tree`) without being able to spawn,
+and only a component that imports `spawn` can start or drive a session.
 
-### 2.3 `child-sessions` stays apart from `lineage`
+### 2.3 Reading the session tree is one power, acting on it is another
 
-Every spawned child may read its own lineage, but seeing the sessions below it is a separate power.
-A parent may or may not hand that power on.
-Merging the two would make it an implementer's runtime choice
-instead of something visible in the import list.
+`session-tree` holds every read of the session tree,
+in both directions: the caller's own place and remaining budget, and the sessions below it.
+`spawn` is the only power that acts on the tree.
+This merges what would otherwise be two read interfaces, one looking up and one looking down,
+because the line that matters for what a component can do is reading versus acting.
+
+- **Reading changes nothing.** Every record it returns is the implementer's own,
+  and below the caller's direct children it carries nothing a child chose (CONFORMANCE 7.15).
+- **Splitting reads protects nothing.** A caller sees only the sessions its own component spawned,
+  so a child without `spawn` sees an empty list,
+  and a separate interface for looking down would only lengthen the import list.
+- **It is a familiar shape.** An OS process tree works the same way:
+  a process reads its own parent and lists its children,
+  and starting or signalling a process is a separate call.
 
 ### 2.4 Tool loading has its own gate
 
@@ -154,7 +162,7 @@ A catalog entry is a record with a named field, so it says what the string is an
 ### 3.7 Each function has its own error
 
 Errors are per function or per interface
-(`spawn-error`, `send-error`, `load-error`, `unload-error`, `child-sessions-error`),
+(`spawn-error`, `send-error`, `load-error`, `unload-error`, `session-tree-error`),
 so each names only what can be returned.
 
 ### 3.8 Listing and watching stay two functions

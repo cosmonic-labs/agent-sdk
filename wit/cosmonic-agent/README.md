@@ -163,9 +163,9 @@ Both are one mechanism:
 the host's tools are an adapter over the interfaces,
 with the same catalog, approvals and function budget.
 
-`lineage`, `child-sessions` and `spawn` (unstable behind `agent-spawn`)
-let an agent start named child agent sessions, possibly on other machines,
-see the tree below it, and read its remaining budget.
+`session-tree` and `spawn` (unstable behind `agent-spawn`)
+let an agent read the session tree it belongs to and its remaining budget,
+and start named child agent sessions (often called subagents), possibly on other machines.
 A child's reach never exceeds its ancestors'.
 See [docs/spawn](docs/spawn/README.md), its [rationale](docs/spawn/RATIONALE.md)
 and [conformance](docs/spawn/CONFORMANCE.md) requirements.

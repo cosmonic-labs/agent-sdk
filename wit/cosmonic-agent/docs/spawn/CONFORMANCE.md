@@ -1,6 +1,6 @@
 # Spawn and tool loading: conformance
 
-What must hold for `tool-discovery`, `tool-loading`, `lineage`, `child-sessions` and `spawn`
+What must hold for `tool-discovery`, `tool-loading`, `session-tree` and `spawn`
 beyond the WIT signatures.
 The WIT comments say what a caller can observe and rely on;
 this page says how those promises are kept.
@@ -26,8 +26,7 @@ may skip the mechanics but must not contradict what a caller observes.
 | `tool-discovery` | 5 | Answer from the same catalog, ceiling and policy the loader admits against, and show each offer's import list. |
 | `tool-loading` | 6, 10.9 | Serve the run in progress or answer `next-run`, set aside only `agent-loaded` tool components, and keep aliases fixed for the session. |
 | `spawn` | 7, 8, 9, 10 | Accept a child and its first run in one atomic step, never reuse a name, stop a subtree behind a barrier, and, across machines, fence every run with a lease. |
-| `child-sessions` | 11, 7.8, 7.15 | Return the same records as `spawn`, with nothing a child chose below the caller's direct children, and cap open watches. |
-| `lineage` | 10.5, 11 | Report the caller's own figures exactly and its ancestors' coarsely. |
+| `session-tree` | 11, 7.8, 7.15, 10.5 | List only sessions below the caller, return the same records as `spawn` with nothing a child chose below its direct children, cap open watches, and report the caller's own budget figures exactly and its ancestors' coarsely. |
 
 Section 13 lists the cases a conforming implementation passes.
 
@@ -475,8 +474,9 @@ A retry compares both the request and the first run; any difference is `name-tak
 
 ### 7.10 Powers
 
-A child that receives `spawn` also gets `child-sessions`.
-Every spawned child may import `lineage`.
+Every spawned child may import `session-tree`, whatever powers it was given.
+It reads only the child's own place and the sessions below it (11.1),
+so a child without `spawn` lists no sessions.
 
 ### 7.11 Authority by provenance
 
@@ -511,7 +511,7 @@ Each of these stops the child's subtree as section 9 describes.
 
 ### 7.15 Nothing a child chose reaches the grandparent
 
-For sessions below the caller's direct children,
+In every record `session-tree` or `spawn` returns for a session below the caller's direct children,
 return no name, no `session-status.run`, and a pending state with the approval id only.
 
 ### 7.16 Size caps
@@ -659,7 +659,7 @@ a run's `max-steps` never exceeds the budget's.
 
 ### 10.5 Remaining budgets
 
-`lineage` reports the caller's own limits exactly
+`session-tree.get-lineage` reports the caller's own limits exactly
 and ancestors' coarsely (rounded down to a power of two tokens or a whole minute, refreshed at most once a minute).
 A root's ancestor figures repeat its own, coarse.
 
@@ -696,14 +696,20 @@ Every spawn and run acceptance reserves its place atomically.
 | Cancel grace period | 15 s |
 | `watch-children` streams | 4 per caller |
 
-## 11. `child-sessions` and `lineage`
+## 11. `session-tree`
 
-### 11.1 Same records as `spawn`
+### 11.1 Only below the caller
+
+`list-children` and `watch-children` cover only children the caller's own component spawned
+and their descendants, never the caller's ancestors, siblings or their subtrees.
+`get-lineage` reports the caller's own place and the budget figures of 10.5.
+
+### 11.2 Same records as `spawn`
 
 Listings and watches return the same `session-info` records `spawn` does,
-under the same rules: only children the caller's own component spawned and their descendants (7.15, 7.8).
+under the same rules (7.15, 7.8).
 
-### 11.2 Open watches
+### 11.3 Open watches
 
 Cap open `watch-children` streams per caller (10.9);
 a call over the cap answers `unavailable`.
@@ -828,6 +834,7 @@ Pass a handle to another component: it addresses nothing.
 A child with `spawn` names its own runs and children with arbitrary text:
 the grandparent's `list-children` with `descendants` shows no names, no `status.run`,
 and pending states with ids only.
+A child given no `spawn` lists no sessions, and no child's listing shows its parent or siblings.
 
 ### 13.17 Disabled powers
 

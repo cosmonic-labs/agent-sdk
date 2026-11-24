@@ -5,7 +5,8 @@ a tool it finds it needs halfway through a task,
 or a second agent to review one file or to read content it should not trust.
 These interfaces give it both.
 **Tool loading** adds a tool component to the agent's own session while it works.
-**Spawn** starts a child agent session, with its own model, tools and budget,
+**Spawn** starts a child agent session (often called a subagent),
+with its own model, tools and budget,
 and collects what it returns.
 
 ```mermaid
@@ -39,7 +40,7 @@ and [CONFORMANCE.md](CONFORMANCE.md) says what a host and an implementer must do
 | Session | The conversation that persists across runs, identified by a session id. |
 | Run | One call of `run` on a session, from an incoming message to an outcome, with any number of model and tool calls between. |
 | Child | A session another session spawned, running in its own workload and inheriting nothing. |
-| Spawn tree | The tree of sessions under one root session. |
+| Session tree | A root session and every session spawned below it, which works like an OS process tree: each session has one parent, and its children and their descendants sit below it. |
 | Reach | What a component can actually touch: its grants, limited to the interfaces it imports. |
 | Ceiling | What a caller may add without asking anyone: its own reach plus tool components already approved for it. |
 | Grantor | Whoever may approve a request beyond a ceiling: policy, an auditor, or a person. |
@@ -125,9 +126,11 @@ Each power is its own import, so a component's world says exactly what it may do
 | --- | --- |
 | `tool-discovery` | ask which tool components are available |
 | `tool-loading` | load tool components into itself and set them aside |
-| `lineage` | read its place in a spawn tree and its remaining budget (every spawned child may) |
-| `child-sessions` | see the sessions below it |
+| `session-tree` | read the session tree it belongs to: where it sits, its remaining budget, and the sessions below it (every spawned child may) |
 | `spawn` | start child agent sessions and drive them |
+
+Reading the session tree and acting on it are separate powers:
+`session-tree` only reads, and `spawn` is the only power that acts.
 
 These interfaces come with no worlds of their own:
 a component imports the ones it needs into its own world,
@@ -136,9 +139,9 @@ so the import list shows exactly which powers it holds.
 | Component | Usually imports | Exports |
 | --- | --- | --- |
 | An agent that finds and loads its own tools | `tool-discovery`, `tool-loading` | `run` |
-| An agent that delegates to children | `spawn`, `child-sessions`, `lineage` | `run` |
-| A spawned child | `lineage`, and the powers its parent gave it | `run` |
-| A component that watches a subtree without driving it | `child-sessions` | |
+| An agent that delegates to children | `spawn`, `session-tree` | `run` |
+| A spawned child | `session-tree`, and the powers its parent gave it | `run` |
+| A component that watches a subtree without driving it | `session-tree` | |
 | An implementer or a test double | | the interfaces it serves, and `tools` with `tool-loading` |
 
 An agent builds on `runnable-agent` and adds the powers it needs:
@@ -150,7 +153,7 @@ world coder {
     include cosmonic:agent/runnable-agent@0.4.4;
 
     import cosmonic:agent/tool-loading@0.4.4;
-    import cosmonic:agent/lineage@0.4.4;
+    import cosmonic:agent/session-tree@0.4.4;
     import cosmonic:agent/spawn@0.4.4;
 }
 ```
@@ -284,7 +287,7 @@ for topic in ["pricing", "competitors", "regulation"] {
 }
 
 // Run 2, maybe on another machine: where does each stand?
-for info in child_sessions::list_children(ChildQuery { descendants: false }).await? {
+for info in session_tree::list_children(ChildQuery { descendants: false }).await? {
     // info.name = Some("research-pricing"), info.session_id = "ses-41d2…",
     // info.last_run = Some(("r1", RunState::Done))
     if let Some((run, RunState::Done)) = &info.last_run {
@@ -299,7 +302,7 @@ What happens:
 
 - Dropping a handle releases the reference only;
   `get-child` finds the child again by name from any later run (7.8, 7.17).
-- `watch-children` streams the same records within a run (11.1).
+- `watch-children` streams the same records within a run (11.2).
 - If a child's machine is lost mid-run, its `last-run` becomes `failed(host-lost)` rather than hanging,
   and a later `send` starts a new run (8.2).
 - `cancel` and `end` reach everything below the child (section 9).
@@ -337,7 +340,7 @@ What happens:
 **Status: unstable.** These interfaces are part of `cosmonic:agent` 0.4.4 and may change before they are marked `@since`.
 
 - Tool discovery and loading are behind the `agent-tool-loading` feature.
-- Lineage, child sessions and spawn are behind `agent-spawn`,
+- The session tree and spawn are behind `agent-spawn`,
   which also needs `agent-tool-loading`, `agent-run` and `session-status`.
 
 For wit-bindgen, list the features you need
@@ -353,6 +356,5 @@ its generated `add_to_linker` takes.
 | [`tool-discovery.wit`](../../tool-discovery.wit) | `tool-discovery` |
 | [`tool-loading.wit`](../../tool-loading.wit) | `tool-loading` |
 | [`spawn-types.wit`](../../spawn-types.wit) | Child state, runs, budgets |
-| [`lineage.wit`](../../lineage.wit) | `lineage` |
-| [`child-sessions.wit`](../../child-sessions.wit) | `child-sessions` |
+| [`session-tree.wit`](../../session-tree.wit) | `session-tree` |
 | [`spawn.wit`](../../spawn.wit) | `spawn` and the `child-session` resource |

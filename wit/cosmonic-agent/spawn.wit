@@ -116,12 +116,12 @@ interface spawn {
     }
 
     /// Powers a child may receive; it gets one only if the caller holds it.
-    /// Every child may read its own `lineage`.
+    /// Every child also gets `session-tree`, which reads only its own place
+    /// and the sessions below it.
     @unstable(feature = agent-spawn)
     flags agent-powers {
-        /// Spawn and drive children of its own, and see them
-        /// (`child-sessions`). A requested power the caller lacks is
-        /// `invalid`.
+        /// Spawn and drive children of its own. A requested power the caller
+        /// lacks is `invalid`.
         spawn,
         /// Ask which tool components are available.
         tool-discovery,
