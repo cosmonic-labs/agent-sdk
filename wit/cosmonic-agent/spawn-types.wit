@@ -69,8 +69,12 @@ interface spawn-types {
         /// to it wait too. Below the caller's direct children the summary is
         /// empty.
         pending(pending-approval),
-        /// Admitted, with its session status. Below the caller's direct
-        /// children, its `run` is none.
+        /// Admitted, with its session status: what is in progress, whether
+        /// it holds something for a person, and how its last run ended,
+        /// whoever started that run. A `finish` the child reported as
+        /// `other` carries an empty string here, so the status carries no
+        /// text a child chose. Below the caller's direct children, the run
+        /// ids in `activity.running` and `last-run.run` are `none` too.
         live(session-status),
         /// Admitted, but takes no more runs, for this reason.
         stopped(child-failure),
@@ -145,9 +149,13 @@ interface spawn-types {
         depth: u32,
         /// Where it stands.
         state: child-state,
-        /// The last run the caller started there, and how it stands; none
-        /// for deeper descendants and for a child the caller never sent to.
-        last-run: option<tuple<string, run-state>>,
+        /// The last run the caller started there, by its run name, and how
+        /// it stands as the caller sees it, including endings only the
+        /// caller sees, such as `withheld`, `not-admitted` and `expired`.
+        /// `none` for deeper descendants and for a child the caller never
+        /// sent to. The child's own last ended run, whoever started it, is
+        /// `last-run` in its `live` status.
+        sent-run: option<tuple<string, run-state>>,
         /// An operator-named host group or zone it last ran in, for display.
         location: option<string>,
         /// What it and its subtree have spent.
@@ -179,7 +187,9 @@ interface spawn-types {
     variant run-blocked-reason {
         /// The child is waiting on a grantor before its first run.
         admission,
-        /// A tool call or load waits on a person or auditor.
+        /// A tool call or load waits on a person or auditor. When a person
+        /// is asked, this is the same condition that sets `needs-input` in
+        /// the child's `live` status, seen at run level.
         tool-approval,
         /// Policy holds the outcome for release.
         outcome-release,

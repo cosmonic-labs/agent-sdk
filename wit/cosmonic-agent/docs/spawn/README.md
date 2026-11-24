@@ -106,7 +106,7 @@ sequenceDiagram
     I->>C: admit and start run "review"
     I-->>P: child-session handle
     P->>I: get-info()
-    I-->>P: last-run: review, in-progress
+    I-->>P: sent-run: review, in-progress
     P->>I: wait("review")
     C->>I: outcome
     I->>I: check output shape and size
@@ -117,6 +117,14 @@ sequenceDiagram
 
 `spawn` resolves as soon as the request is accepted,
 so the parent can do other work and wait later, even from a later run.
+
+A parent reads two things about a child in its `session-info`.
+`state` says where the child stands; once admitted, it is `live`
+with the child's `session-status`:
+what is in progress, whether it holds something for a person,
+and how its last run ended, whoever started it.
+`sent-run` says how the last run this parent sent there stands, as the parent sees it,
+including endings only the parent sees, such as `withheld` or `expired`.
 
 ## Interfaces
 
@@ -262,7 +270,7 @@ let (auth, billing) = (auth?, billing?);
 
 let info = auth.get_info().await?;
 // info.name = Some("reviewer-pr-42-auth"), info.session_id = "ses-8c1f…",
-// info.last_run = Some(("review", RunState::InProgress))
+// info.sent_run = Some(("review", RunState::InProgress))
 
 let (a, b) = futures::join!(auth.wait("review"), billing.wait("review"));
 let (auth_review, billing_review): (Review, Review) = (a?.structured()?, b?.structured()?);
@@ -296,8 +304,8 @@ for topic in ["pricing", "competitors", "regulation"] {
 // Run 2, maybe on another machine: where does each stand?
 for info in session_tree::list_children(ChildQuery { descendants: false }).await? {
     // info.name = Some("research-pricing"), info.session_id = "ses-41d2…",
-    // info.last_run = Some(("r1", RunState::Done))
-    if let Some((run, RunState::Done)) = &info.last_run {
+    // info.sent_run = Some(("r1", RunState::Done))
+    if let Some((run, RunState::Done)) = &info.sent_run {
         let child = spawn::get_child(info.name.as_deref().unwrap()).await?;
         let notes = child.wait(run).await?;
         // ...
@@ -310,7 +318,7 @@ What happens:
 - Dropping a handle releases the reference only;
   `get-child` finds the child again by name from any later run (7.8, 7.17).
 - `watch-children` streams the same records within a run (11.2).
-- If a child's machine is lost mid-run, its `last-run` becomes `failed(host-lost)` rather than hanging,
+- If a child's machine is lost mid-run, its `sent-run` becomes `failed(host-lost)` rather than hanging,
   and a later `send` starts a new run (8.2).
 - `cancel` and `end` reach everything below the child (section 9).
 

@@ -121,10 +121,10 @@ interface session-status-types {
         /// The run failed: `run` returned a `run-error` other than
         /// `cancelled`, or the agent trapped while running it.
         failed,
-        /// Cut off: the implementer stopped or restarted, other than to carry
-        /// out a cancellation, before `run` returned the run's outcome or
-        /// error. Reported even when the journal holds a result the agent
-        /// wrote for that run, since that result is the agent's own report.
+        /// Cut off because the host stopped or restarted before the run
+        /// recorded a result. A run whose own result is in the journal ended
+        /// as that result says; a closing entry the host wrote for it
+        /// afterwards does not change this.
         interrupted,
         /// The implementer carried out a cancellation before `run` returned
         /// an outcome: `run` returned `run-error.cancelled`, or the
@@ -156,9 +156,12 @@ interface session-status-types {
         /// When `activity` took its current value. `none` when the
         /// implementer does not know, such as a session that has never run.
         activity-since: option<instant>,
-        /// Set while the implementer holds something for a person, whether
-        /// or not a run is in progress. Time held during a run counts toward
-        /// that run's `run-options.max-duration`.
+        /// Set while the host holds something for a person, whether or not
+        /// a run is in progress. Time held during a run counts toward that
+        /// run's `run-options.max-duration`.
+        /// For a spawned child whose run waits on a tool call or load held
+        /// this way, its caller sees `run-progress.blocked(tool-approval)`:
+        /// the same condition, seen at run level.
         needs-input: option<hold>,
         /// The most recent run that ended. Stays set while a later run is
         /// in progress, and changes only when a run ends or when the driver

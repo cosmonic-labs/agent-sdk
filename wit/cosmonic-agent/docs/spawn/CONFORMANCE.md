@@ -398,7 +398,10 @@ stateDiagram-v2
     stopped --> ended: the same triggers
 ```
 
-The last run a caller started in a child moves through these (`run-state`),
+In `live`, report the child's `session-status` as its host reports it under that interface,
+with no `finish` text the child chose (7.14) and no run ids below the caller's direct children (7.15).
+
+The last run a caller started in a child moves through these (`run-state`, in `session-info.sent-run`),
 with contentless progress (`run-progress`) while it is in progress:
 
 ```mermaid
@@ -534,11 +537,14 @@ Each of these stops the child's subtree as section 9 describes.
 - Copy stored attachments across the boundary and re-issue them in the receiving session;
   they count toward `max-output-bytes`.
 - Enforce `max-runs` and `max-steps` by the implementer's own count, never the child's.
+- In every `live` status, at any depth, a `finish` the child reported as `other` carries an empty string,
+  and with `structured-only` the `finish` in `last-run` comes from the implementer's own records, as in the outcome.
 
 ### 7.15 Nothing a child chose reaches the grandparent
 
 In every record `session-tree` or `spawn` returns for a session below the caller's direct children,
-return no name, no `session-status.run`, and a pending state with the approval id only.
+return no name, a pending state with the approval id only,
+and a `live` status whose run ids (`activity.running`, `last-run.run`) are `none`.
 
 ### 7.16 Size caps
 
@@ -617,6 +623,8 @@ append the closing entries the run could not:
 `agent.op-result.v1` with outcome `unresolved` for each tool op with no result,
 then `agent.run-result.v1` with outcome `cancelled` or `failed` and why.
 Nothing is replayed.
+The child's `live` status keeps reporting that run's `last-run` as `interrupted`,
+since these entries are the implementer's, not the run's own result.
 
 ### 8.7 What fencing does not stop
 
@@ -811,7 +819,7 @@ Drop the handle, call `get-child` from a fresh instance: the same child, and `wa
 ### 13.8 State, not notices
 
 Start runs in three children and end the caller's run.
-The next run's `list-children` shows each child's `last-run` with its state.
+The next run's `list-children` shows each child's `sent-run` with its state.
 
 ### 13.9 Subtree stop
 
@@ -822,7 +830,7 @@ During the stop, a `send` into the subtree answers `busy` and a spawn from insid
 ### 13.10 Lost machine
 
 Cut off a child's machine mid-run:
-within the lease timeout its `last-run` is `failed(host-lost)`;
+within the lease timeout its `sent-run` is `failed(host-lost)` and its `live` status shows `last-run` ended `interrupted`;
 a later write from that machine is rejected;
 the next run shows `blocked(placement-delay)`;
 the journal ends the interrupted run with `unresolved` op results.
@@ -836,7 +844,8 @@ A sibling's `get-lineage` shows only coarse ancestor figures.
 ### 13.12 Structured only
 
 A child that writes text in its reply, finish reason and model name:
-the caller sees only the structured value and the implementer's own fields.
+the caller sees only the structured value and the implementer's own fields,
+in the outcome and in the `finish` of the child's `live` status.
 
 ### 13.13 Sessions apart
 
@@ -858,8 +867,10 @@ Pass a handle to another component: it addresses nothing.
 ### 13.16 No child-chosen text upward
 
 A child with `spawn` names its own runs and children with arbitrary text:
-the grandparent's `list-children` with `descendants` shows no names, no `status.run`,
+the grandparent's `list-children` with `descendants` shows no names,
+no run ids in a `live` status (`activity.running` and `last-run.run` are `none`),
 and pending states with ids only.
+A child whose run finishes `other` with text shows an empty string there at every depth.
 A child given no `spawn` lists no sessions, and no child's listing shows its parent or siblings.
 
 ### 13.17 Disabled powers

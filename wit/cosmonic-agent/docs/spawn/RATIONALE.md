@@ -128,7 +128,7 @@ One rule also covers cases that would otherwise each need a special refusal.
 ### 3.4 State on the child, not a notice queue
 
 What a parent needs about a child is the current state of the last run it started there,
-carried in `session-info.last-run`; `watch-children` covers the in-run case.
+carried in `session-info.sent-run`; `watch-children` covers the in-run case.
 A child runs one run at a time, started only by its parent or a person,
 so at the start of its next run a parent needs where each child stands,
 not a stream of events delivered once.
@@ -284,6 +284,34 @@ With `structured-only`, the parent receives the validated structured value
 and fields (`finish`, `model`, counts) the implementer fills from its own records.
 Nothing the child chose to write, other than the value its schema allows,
 then reaches the parent.
+
+### 3.22 Session status reports three facts
+
+`session-status`, which a `live` child carries, reports three independent facts
+rather than one state:
+`activity` (what is in progress), `needs-input` (whether the host holds something for a person)
+and `last-run` (how the most recent ended run ended).
+The single state a badge shows is a fixed derivation from them, stated once in the interface.
+
+- **It derives one way only.** The single state is a function of the three facts,
+  but the facts cannot be recovered from it:
+  one state cannot say whether a held session also has a run in progress,
+  that a cancelled run happened at all,
+  or that a run failed just before the next one started.
+- **Needs-input is independent of activity.** A host holds things for a person with or without a run in progress,
+  so it is a separate fact, not a kind of activity.
+  Held time during a run counts toward that run's `max-duration`, and held time with no run does not.
+- **It ages better.** Adding a variant case is breaking, so a value a version does not name arrives as `other`.
+  With one state, an unknown value hides everything, including whether a person is needed;
+  with three facts, the other two stay readable.
+  One ordered state also makes each new value change the meaning of the ones below it.
+- **It matches the child records.** `child-state` already keeps where a child stands apart from its runs,
+  and `sent-run` keeps the caller's own view of the run it sent.
+  A child's `last-run` is the session's last ended run, whoever started it;
+  `sent-run` is the last run this caller started there, with endings only the caller sees.
+- **It follows established practice.** The Kubernetes API conventions move away from a single phase field
+  toward separate conditions, because a phase is a state machine that cannot grow without breaking clients,
+  while conditions are observations a client combines for display.
 
 ## 4. Where this departs from the WIT design guidance
 

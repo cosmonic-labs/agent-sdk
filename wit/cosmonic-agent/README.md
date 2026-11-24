@@ -49,7 +49,7 @@ allow.
   [What makes a component a tool](#what-makes-a-component-a-tool), then export
   `tools` or a typed interface of your own.
 - **Implementing a host:** the `.wit` files are the contract. Read
-  [Running an agent](#running-an-agent), [Session states](#session-states) and
+  [Running an agent](#running-an-agent), [Session status](#session-status) and
   [Versioning](#versioning), and for the unstable discovery, loading and spawn
   interfaces, [the conformance requirements](docs/spawn/CONFORMANCE.md).
 
@@ -172,9 +172,22 @@ and [conformance](docs/spawn/CONFORMANCE.md) requirements.
 
 ## Session status
 
-`session-status` (unstable behind the `session-status` feature) names where a
-session stands, so every host reports it the same way: a desktop app's session list, a cluster's session API, and
-a component that drives an agent.
+`session-status` (unstable behind the `session-status` feature, which also
+needs `agent-run`) reports where a session stands, so every host reports it
+the same way: a desktop app's session list, a cluster's session API, and a
+component that drives an agent. It reports three facts, each independent of
+the others, so every combination is valid:
+
+| Fact | What it says |
+| --- | --- |
+| `activity` | What is in progress now: `idle`, `running` with the run's id, or `compacting` when the driver asked for a compaction. A run waiting on a person is still `running`. |
+| `needs-input` | Set while the host holds something for a person: a tool call or outbound request waiting to be allowed, a tool waiting to be added, a change waiting for review. It can be set with or without a run in progress. |
+| `last-run` | The most recent run that ended, and how: `replied` with its `finish`, `failed`, `interrupted` (the host stopped or restarted before the run recorded a result), or `cancelled`. It stays set while the next run is in progress. |
+
+### The state to show
+
+A badge or a session list shows one state. A caller derives it from the three
+facts by taking the first row that applies:
 
 | State | When |
 | --- | --- |
@@ -184,23 +197,16 @@ a component that drives an agent.
 | done | `last-run` ended `replied`. |
 | idle | Otherwise: no run has ended since the session began or was cleared, the last run was cancelled, or it ended in a way this version does not name. |
 
-### What sets the facts
-
-The implementer, whatever serves the import, sets all three facts only from
-what it observed itself: the run or compaction it is driving, what it holds
-at its gates, and how each run it drove ended, by the outcome or error `run`
-returned, a cancellation it carried out, a trap, or a stop or restart that cut
-the run off. An agent can't set any of them, and a model can't either: even
-the agent's own `session.clear` leaves `last-run` as it was. The run result an
-agent writes to the journal is the agent's own report, so a run cut off before
-`run` returned is `interrupted` even when the journal holds a result for it.
-
-The one value the agent reports is the `finish` inside `replied`, which
-arrived in the run's outcome. A caller routes on it, to tell a finished run
+The host owns all three facts and derives them from its own: the run or
+compaction it is driving, the approvals it holds at its gates, and the outcome
+it received or the result the journal records. An agent can't set `activity`
+or `needs-input`, and a model can't either. The one value the agent reports is
+the `finish` inside `replied`: a caller routes on it, to tell a finished run
 from one stopped at a limit or one that asked a question, and never allows
-anything on it. `needs-input` comes from the implementer's gates, never from
-a reply that asks a question: a run that finishes `input-required` ends
-`replied`, and the person's answer starts the next run.
+anything on it. `needs-input` comes
+from the host's gates, never from a reply that asks a question: a run that
+finishes `input-required` ends `replied`, and the person's answer starts the
+next run.
 
 The activities and the run endings will grow. Until a minor release names a
 new one, a host reports it as `other` with its name, and a caller treats it as
