@@ -47,7 +47,7 @@ Everything else applies to both.
   list from the pinned binary before running anything. Refuse (`invalid`) a
   component that imports a capability its baseline and grants do not cover.
   The baseline is the role's world: `agent` for an agent component (plus
-  the client worlds of the powers it was given), and for a toolset only
+  the client worlds of the powers it was given), and for a tool component only
   function-less type interfaces. A grant for an interface the component does
   not import is dropped before the ceiling check and before asking anyone,
   and leaves the admitted snapshot, so it is never applied. An import the
@@ -71,8 +71,8 @@ Everything else applies to both.
 - **No agent powers by grant.** Refuse an `interface-grant` naming a
   `cosmonic:agent` interface. Powers reach a child only through
   `agent-powers`, and only if the caller holds them.
-- **The ceiling** is the caller's own grants (containment) plus its toolset
-  entries (exact match): declared toolsets, a child's spawned toolsets, and
+- **The ceiling** is the caller's own grants (containment) plus its tool component
+  entries (exact match): declared tool components, a child's spawned tool components, and
   the session ceiling. An entry's reach never counts as the caller's own.
 - **Containment.** A volume fits a caller's mount of the same storage
   (names are never compared); a read-only request fits a read-only or
@@ -86,14 +86,14 @@ Everything else applies to both.
   reach cannot be compared does not fit.
 - **Location-dependent hosts.** Loopback, link-local and private-range
   addresses, single-label names and cluster-local names mean different
-  services on different machines. A child whose grants (or toolsets') name
+  services on different machines. A child whose grants (or tool components') name
   one runs on its parent's machine, and any child runs only where its
   snapshot resolves identically (the same storage, bindings and model).
 - **Within the ceiling,** admit at once only digests in the operator's
   catalog or matching an entry; send any other digest to a grantor.
-- **Toolsets are dispatched, never linked.** A toolset's exports are reached
+- **Tool components are dispatched, never linked.** A tool component's exports are reached
   only through dispatch; its imports are served only by its own grants. Refuse
-  a toolset the runtime would link to a sibling (for example a tool provider
+  a tool component the runtime would link to a sibling (for example a tool provider
   under a served-within-workload rule).
 
 ## Approvals
@@ -105,7 +105,7 @@ Everything else applies to both.
   executable digest and import list, and every default the request left open.
   Show it to the grantor; never return it to the caller. Admitting re-resolves
   and compares; any difference asks again.
-- **Spawn.** A child's toolset beyond the parent's ceiling goes to a grantor
+- **Spawn.** A child's tool component beyond the parent's ceiling goes to a grantor
   only if the ceiling of every ancestor above the parent covers it (none, for
   a root parent); otherwise `spawn` answers `denied`. Record that dependency
   for later re-checks. The child exists from the first accepted `spawn`, in
@@ -126,16 +126,16 @@ Everything else applies to both.
   `not-admitted`. A pending load the caller sets aside is withdrawn the same
   way. Removal of an entry, or any narrowing of an ancestor, a pending child
   rests on withdraws it too.
-- **Load.** The toolset waits as `awaiting-approval`; a later identical
+- **Load.** The tool component waits as `awaiting-approval`; a later identical
   `load` returns that state. A grant admits it and adds it to the **session
-  ceiling**: an entry keyed to the caller, the toolset and its snapshot. A
+  ceiling**: an entry keyed to the caller, the tool component and its snapshot. A
   later identical load is within the ceiling, re-checked against the snapshot
   and current policy each time.
-- **A spawn's approved toolsets** become the child's own entries, bound to
+- **A spawn's approved tool components** become the child's own entries, bound to
   that child's request (output shape, size limit, budget, powers). They never
   join the parent's ceiling, so the parent cannot load them and another child
   cannot use them. They do not extend to the child's own descendants: when a
-  descendant's toolset matches only an entry approved for its parent's
+  descendant's tool component matches only an entry approved for its parent's
   admission, it counts as beyond the parent's ceiling, so the ancestor gate
   above applies: `denied` unless every higher ancestor covers it, and then a
   grantor is asked as for the descendant's own request. The grantor summary
@@ -189,7 +189,7 @@ Everything else applies to both.
   record what it rested on: an ancestor's grant or entry, or a grantor's
   approval of this child. At each run acceptance and each child load,
   re-check against that authority as it stands and against current policy. A
-  toolset that no longer fits is withdrawn; a child whose own grants no
+  tool component that no longer fits is withdrawn; a child whose own grants no
   longer fit is `stopped(revoked)`. A child's own load beyond its ceiling
   goes to a grantor only if every ancestor's ceiling covers it; otherwise
   `denied`.
@@ -232,7 +232,7 @@ For implementers that place sessions across machines.
   that generation. Whichever machine next reads the child reports the run
   `host-lost`; no particular machine has to be alive.
 - **Self-fencing.** The running machine stops the run's instances (agent and
-  toolsets) and cancels calls in flight once its monotonic clock shows the
+  tool components) and cancels calls in flight once its monotonic clock shows the
   store's timeout minus a margin (recommended 15 seconds) since it *sent* its
   last renewal that succeeded. A late reply does not revive a fenced run.
 - **Brokered calls** (model calls, credential-brokered egress, tool dispatch,
@@ -306,7 +306,7 @@ For implementers that place sessions across machines.
 | Runs in progress per tree | 20 (fail fast, never queue) |
 | Live children per tree | 50 |
 | Children spawned per tree | 500 |
-| Toolset components bound per agent workload | 16 |
+| Tool components bound per agent workload | 16 |
 | Approval lifetime (pending, undecided) | 24 hours |
 | `max-spawns` when unset | a quarter of what is left of the tree's total |
 | Pending approvals | 3 per caller, 3 per child subtree, 5 per tree |
@@ -329,25 +329,25 @@ For implementers that place sessions across machines.
   harness that never imports the interfaces still gets it. The names
   `find_tools` and `load_tools` are reserved: no tool may take them.
 
-- **Same run where possible.** Tools are dispatched, so a new toolset can be
+- **Same run where possible.** Tools are dispatched, so a new tool component can be
   callable while the caller's instance keeps running: roll the workload out
   to a revision that adds the component, route calls to it there, and retire
   the old revision when the run ends. An implementer that cannot do this
-  reports `next-run`. Before publishing, check the toolset's entry or
+  reports `next-run`. Before publishing, check the tool component's entry or
   admission still stands. `load` resolves at `offered`, `next-run`,
   `awaiting-approval` or an error, so a caller never polls.
 - **Rollout deadline.** Abandon a rollout not prepared within the deadline:
-  the toolset becomes `failed`, frees its place, and a waiting `load` answers
+  the tool component becomes `failed`, frees its place, and a waiting `load` answers
   `unavailable`. A revision prepared for the next run is kept until that run
   starts on it.
 - **Function budget.** From the model binding (`max-offered-functions`),
   which the manifest may only lower; the smallest among the caller's model
-  aliases. Set aside the least recently called toolset the caller loaded
+  aliases. Set aside the least recently called tool component the caller loaded
   (never called first, then oldest), never a pinned one or one loaded or
   called within the residency window. Unbind only at the component cap, only
-  set-aside toolsets with no call in flight.
+  set-aside tool components with no call in flight.
 - **Aliases** are fixed for the session and never reused for another
-  toolset's tool. A call to a set-aside toolset's alias answers
+  tool component's tool. A call to a set-aside tool component's alias answers
   `unknown-tool`. Record which digest each alias denoted in the tool list
   sent with each model call, and refuse a call whose alias now denotes
   another.
@@ -388,7 +388,7 @@ Each case names the property it checks.
    first run fails `not-admitted`, its place is freed, and a matching request
    in the cooldown answers `denied`.
 2. **The parent and grandchildren gain nothing.** After approving a child's
-   toolset that the root lacks, the parent's `load` of it waits on a
+   tool component that the root lacks, the parent's `load` of it waits on a
    grantor, a second child using it waits too, and the child's own child
    using it is `denied`.
 3. **Admission re-checks.** While a child is pending, narrow the parent's
@@ -398,14 +398,14 @@ Each case names the property it checks.
    `offered` with no prompt. Have the person remove it: the next load waits on
    a grantor. Remove it during its rollout: the rollout is not published.
    Rebind its volume or publish a new digest: it waits again.
-5. **Reach from imports.** A toolset whose component imports no HTTP or
+5. **Reach from imports.** A tool component that imports no HTTP or
    socket interface but is granted allowed hosts: the hosts are dropped before
    the ceiling check. A component importing a capability nothing grants:
    `invalid`. An interface grant naming `cosmonic:agent/spawn`: `invalid`.
 6. **Never beyond an ancestor.** A child whose agent grants exceed the
    parent's: `denied`. Narrow the parent's grants: the child's next `send`
    answers `stopped`, and its state is `stopped(revoked)`. Remove a parent's
-   entry a child's toolset rested on: the child loses it.
+   entry a child's tool component rested on: the child loses it.
 7. **Names and retries.** Send run `r1`, drop the reply, send `r1` again with
    the same message: one run. With another message: `name-taken`. Drop the
    handle, call `get-child` from a fresh instance: the same child, `wait` on
@@ -434,7 +434,7 @@ Each case names the property it checks.
 14. **Same-run loading.** `load` returns `offered` and the tool is callable in
     the same run, or returns `next-run` and the tools are in the next run's
     `tools.list`. A hung rollout answers `unavailable` after the deadline and
-    the toolset shows `failed`.
+    the tool component shows `failed`.
 15. **Handles.** End a child through its handle: the handle is consumed and
     the child ends. Crash a caller holding handles: the children are
     unaffected and reachable by name. Pass a handle to another component: it

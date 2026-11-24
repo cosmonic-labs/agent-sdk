@@ -8,7 +8,7 @@ package cosmonic:agent@0.4.4;
 /// Sessions spawned from one root session form a tree. A child's reach
 /// never exceeds what its ancestors hold plus what a grantor approved for
 /// that child, and is checked again each time the child starts a run or
-/// loads a toolset. Budgets cover a session and everything below it.
+/// loads a tool component. Budgets cover a session and everything below it.
 ///
 /// What a caller sees of a child is the implementer's own: state, usage,
 /// progress, and the final outcome. Only the outcome's reply carries text the
@@ -29,7 +29,7 @@ interface spawn-types {
     @unstable(feature = agent-spawn)
     use session-status.{session-status};
     @unstable(feature = agent-spawn)
-    use toolset-types.{pending-approval};
+    use tool-component-types.{pending-approval};
 
     /// A budget that can leave a session unable to take another run.
     @unstable(feature = agent-spawn)
@@ -205,7 +205,8 @@ interface spawn-types {
     }
 
     /// A child's run: progress, then the outcome. Dropping either half only
-    /// stops listening; the run goes on, and `child-session.wait` collects it later.
+    /// stops listening; the run goes on, and `child-session.wait` collects it
+    /// later.
     @unstable(feature = agent-spawn)
     type child-run = tuple<stream<progress>, future<result<run-outcome, child-run-error>>>;
 }

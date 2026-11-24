@@ -10,7 +10,7 @@ scenarios. Everything is unstable and cheap to change before `@since`.
 
 A child agent's reach (what it can read and send data to) never exceeds what
 its ancestors hold plus what a grantor approved for that child, and this is
-checked again each time the child starts a run or loads a toolset. Reach is
+checked again each time the child starts a run or loads a tool component. Reach is
 a component's grants limited to the interfaces it actually imports, read from
 the binary before it runs and shown to whoever approves it. Anything beyond
 a caller's ceiling waits on a grantor: policy, an auditor, or a person. The
@@ -24,9 +24,9 @@ blocks prompt injection.
 
 | Interface | The guest may | Gate |
 | --- | --- | --- |
-| `toolset-types` | (types only: grants, toolset sources, states) | `agent-tool-loading` |
-| `tool-discovery` | ask which toolsets are available | `agent-tool-loading` |
-| `tool-loading` | load toolsets into itself and set them aside | `agent-tool-loading` |
+| `tool-component-types` | (types only: grants, tool component sources, states) | `agent-tool-loading` |
+| `tool-discovery` | ask which tool components are available | `agent-tool-loading` |
+| `tool-loading` | load tool components into itself and set them aside | `agent-tool-loading` |
 | `spawn-types` | (types only: child state, runs, budgets) | `agent-spawn` |
 | `lineage` | read its own place in the tree and its remaining budget | `agent-spawn` |
 | `children` | see the sessions below it | `agent-spawn` |
@@ -92,7 +92,7 @@ forge. An even earlier draft had a handle whose drop ended the child, which
 cannot outlive one parent run; this one is a reference, not an owner.
 
 **Illegal states are unrepresentable, and each function has its own error.**
-`agent-source` and `toolset-source` are variants (a catalog name or a
+`agent-source` and `tool-component-source` are variants (a catalog name or a
 description), so no field must be left empty and a catalog entry cannot be
 edited by the caller. `output-shape` replaces a schema option plus a
 `structured-only` flag. `child-state` replaces three fields with eight
@@ -111,7 +111,7 @@ Comment volume fell by about 60 percent.
 **Cut.** Placement hints (now operator policy), the trace-parent argument
 (the implementer knows the calling run's trace), the caller-chosen alias
 prefix (operator configuration), `load`'s wait argument (`load` now resolves
-when the toolset is callable, will be next run, or waits on a grantor; a
+when the tool component is callable, will be next run, or waits on a grantor; a
 caller that wants a shorter wait drops the call and the load goes on), labels (the
 name identifies a child), numeric defaults in type comments (a table in
 CONFORMANCE.md), and the request digest's canonical form (an implementer
@@ -125,14 +125,14 @@ budget, budgets cover the subtree, and remaining budgets are coarse across
 subtrees. A lost machine fails the run instead of hanging, with leases and
 fencing whose limits are stated plainly. A load serves the run in progress or
 says `next-run`. `set-aside` keeps the approval, and the tool list has a budget per
-model. Toolsets are dispatched, never linked. `structured-only` output is
+model. Tool components are dispatched, never linked. `structured-only` output is
 built by the implementer.
 
 **One session per workload.** These imports take no session handle, so the
 implementer attributes each call by workload and component, which is
 unambiguous only when a workload serves one session for its whole life.
-Toolsets are components of the workload, so a shared workload would also
-share toolsets and removals across sessions. The cost is density: sessions of
+Tool components are components of the workload, so a shared workload would also
+share tool components and removals across sessions. The cost is density: sessions of
 one agent cannot share warm instances. The alternative, a session context on
 every call including `tools.call`, keeps sharing possible but widens every
 interface and every tool.

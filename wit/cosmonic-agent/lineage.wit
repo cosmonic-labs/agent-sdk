@@ -5,7 +5,7 @@ package cosmonic:agent@0.4.4;
 @unstable(feature = agent-spawn)
 interface lineage {
     @unstable(feature = agent-spawn)
-    use toolset-types.{store-error};
+    use tool-component-types.{store-error};
     @unstable(feature = agent-spawn)
     use spawn-types.{remaining-budget};
 

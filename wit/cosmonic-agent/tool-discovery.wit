@@ -1,19 +1,19 @@
 package cosmonic:agent@0.4.4;
 
-/// The caller may ask which toolsets are available to it. Unstable behind
-/// `agent-tool-loading`.
+/// The caller may ask which tool components are available to it. Unstable
+/// behind `agent-tool-loading`.
 ///
 /// The implementer keeps the catalog and answers for this caller only,
 /// leaving out offers policy would never grant. Asking starts and loads
 /// nothing. The host's `find_tools` tool is an adapter over `list-offers`.
 /// Tool names and descriptions are written by
-/// toolset authors: treat them as untrusted input to a model.
+/// tool component authors: treat them as untrusted input to a model.
 @unstable(feature = agent-tool-loading)
 interface tool-discovery {
     @unstable(feature = agent-tool-loading)
     use tool-types.{tool-def};
     @unstable(feature = agent-tool-loading)
-    use toolset-types.{toolset-state};
+    use tool-component-types.{tool-component-state};
 
     /// How an offer relates to the caller's ceiling (what it may add without
     /// asking). Describes reach; policy may still ask within the ceiling.
@@ -29,8 +29,8 @@ interface tool-discovery {
 
     /// One catalog entry the caller may load or hand to a child.
     @unstable(feature = agent-tool-loading)
-    record toolset-offer {
-        /// The catalog name, as `toolset-source.catalog` takes it.
+    record offer {
+        /// The catalog name, as `tool-component-source.catalog` takes it.
         name: string,
         /// What it does, from the catalog.
         summary: string,
@@ -43,14 +43,14 @@ interface tool-discovery {
         /// Fit against the caller's ceiling.
         fit: ceiling-fit,
         /// Its state in the caller's session, if the caller holds it.
-        state: option<toolset-state>,
+        state: option<tool-component-state>,
     }
 
     /// What `list-offers` found.
     @unstable(feature = agent-tool-loading)
     record offers {
         /// Best match first.
-        offers: list<toolset-offer>,
+        offers: list<offer>,
         /// True when matches were left out; narrow the query to see them.
         truncated: bool,
     }

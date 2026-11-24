@@ -48,7 +48,7 @@ interface spawn {
     @unstable(feature = agent-spawn)
     use run-types.{run-outcome};
     @unstable(feature = agent-spawn)
-    use toolset-types.{component-ref, grants, toolset-source, store-error};
+    use tool-component-types.{component-ref, grants, tool-component-source, store-error};
     @unstable(feature = agent-spawn)
     use spawn-types.{child-info, child-run, child-run-error};
 
@@ -60,10 +60,10 @@ interface spawn {
         /// A model alias the caller was granted.
         model-alias: string,
         /// What the agent component may touch: within the caller's own
-        /// grants. Reach the caller lacks goes in a toolset.
+        /// grants. Reach the caller lacks goes in a tool component.
         grants: grants,
-        /// Its toolsets, in order.
-        toolsets: list<toolset-source>,
+        /// Its tool components, in order.
+        tool-components: list<tool-component-source>,
     }
 
     /// Which agent a child runs.
@@ -116,9 +116,9 @@ interface spawn {
         /// Spawn and drive children of its own, and see them (`children`).
         /// A requested power the caller lacks is `invalid`.
         spawn,
-        /// Ask which toolsets are available.
+        /// Ask which tool components are available.
         tool-discovery,
-        /// Load toolsets into itself.
+        /// Load tool components into itself.
         tool-loading,
     }
 

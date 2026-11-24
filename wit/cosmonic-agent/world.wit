@@ -35,10 +35,10 @@ world embeddings-provider {
     export embeddings;
 }
 
-/// A sandboxed agent acquires models through workload-scoped aliases.
-/// Model administration, credentials, and network permissions belong to the host.
-/// Notifications require an explicit cosmonic:notifications import and provider
-/// permission.
+/// A sandboxed agent acquires models through workload-scoped aliases. Model
+/// administration, credentials, and network permissions belong to the host.
+/// Notifications require an explicit cosmonic:notifications import and
+/// provider permission.
 @since(version = 0.3.0)
 world agent {
     import inference-types;
@@ -96,13 +96,13 @@ world compact-client {
 }
 
 
-/// Ask which toolsets are available.
+/// Ask which tool components are available.
 @unstable(feature = agent-tool-loading)
 world tool-discovery-client {
     import tool-discovery;
 }
 
-/// Change one's own toolsets while running.
+/// Change one's own tool components while running.
 @unstable(feature = agent-tool-loading)
 world tool-loading-client {
     import tool-loading;
@@ -145,7 +145,7 @@ world tool-discovery-provider {
 }
 
 /// An implementer of tool loading. It also serves the caller's `tools`, where
-/// loaded toolsets are offered.
+/// loaded tool components are offered.
 @unstable(feature = agent-tool-loading)
 world tool-loading-provider {
     export tool-loading;

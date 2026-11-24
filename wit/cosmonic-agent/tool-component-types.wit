@@ -1,7 +1,7 @@
 package cosmonic:agent@0.4.4;
 
-/// Types for describing a component's reach and the toolsets an agent may
-/// load or hand to a child. No functions: importing it grants nothing.
+/// Types for describing a component's reach and the tool components an agent
+/// may load or hand to a child. No functions: importing it grants nothing.
 /// Unstable behind `agent-tool-loading`.
 ///
 /// Reach is what a component can actually touch: its grants, limited to the
@@ -11,12 +11,12 @@ package cosmonic:agent@0.4.4;
 /// capability its grants and its world do not cover, and shows the import
 /// list to whoever approves it.
 ///
-/// A toolset is one component with its own grants that offers tools: a tool
-/// provider (exports `cosmonic:agent/tools`) or a typed tool (exports its own
-/// interfaces). The caller reaches it only through the implementer's
+/// A tool component is one component with its own grants that offers tools: a
+/// tool provider (exports `cosmonic:agent/tools`) or a typed tool (exports
+/// its own interfaces). The caller reaches it only through the implementer's
 /// dispatch, never by linking, and inherits none of its grants.
 @unstable(feature = agent-tool-loading)
-interface toolset-types {
+interface tool-component-types {
     /// A component image pinned by content digest, so a moving tag cannot
     /// change what was approved.
     @unstable(feature = agent-tool-loading)
@@ -38,8 +38,8 @@ interface toolset-types {
         read-only: bool,
     }
 
-    /// An interface granted to one component, with its configuration (such
-    /// as a bucket or topic). Never a `cosmonic:agent` interface: those powers
+    /// An interface granted to one component, with its configuration (such as
+    /// a bucket or topic). Never a `cosmonic:agent` interface: those powers
     /// reach a component only through its world or a parent's grant of
     /// powers.
     @unstable(feature = agent-tool-loading)
@@ -67,11 +67,12 @@ interface toolset-types {
         credentials: list<string>,
     }
 
-    /// A toolset the caller describes itself.
+    /// A tool component the caller describes itself.
     @unstable(feature = agent-tool-loading)
-    record toolset-spec {
+    record tool-component-spec {
         /// A DNS label of at most 32 characters, unique among one agent's
-        /// toolsets. Display only; never used for routing or authorization.
+        /// tool components. Display only; never used for routing or
+        /// authorization.
         name: string,
         /// A tool provider or a typed tool.
         component: component-ref,
@@ -81,15 +82,15 @@ interface toolset-types {
         functions: option<list<string>>,
     }
 
-    /// Where a toolset comes from.
+    /// Where a tool component comes from.
     @unstable(feature = agent-tool-loading)
-    variant toolset-source {
+    variant tool-component-source {
         /// An entry of the implementer's catalog, by name, as
         /// `tool-discovery` lists it. The implementer supplies its component
         /// and grants.
         catalog(string),
-        /// A toolset the caller describes.
-        custom(toolset-spec),
+        /// A tool component the caller describes.
+        custom(tool-component-spec),
         /// A source not captured above.
         other(option<string>),
     }
@@ -104,9 +105,9 @@ interface toolset-types {
         summary: string,
     }
 
-    /// Where a toolset stands in the caller's session.
+    /// Where a tool component stands in the caller's session.
     @unstable(feature = agent-tool-loading)
-    variant toolset-state {
+    variant tool-component-state {
         /// Waiting on a grantor. Nothing is bound.
         awaiting-approval(pending-approval),
         /// Refused by a grantor, or the request was withdrawn or expired.

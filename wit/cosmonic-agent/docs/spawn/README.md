@@ -17,13 +17,13 @@ powers, each its own import, so its world says exactly what it may do:
 
 | Interface | The agent may |
 | --- | --- |
-| `tool-discovery` | ask which toolsets are available |
-| `tool-loading` | load toolsets into itself and set them aside |
+| `tool-discovery` | ask which tool components are available |
+| `tool-loading` | load tool components into itself and set them aside |
 | `lineage` | read its place in a spawn tree and its remaining budget (every spawned child may) |
 | `children` | see the sessions below it |
 | `spawn` | start child agent sessions and drive them |
 
-A **toolset** is one component with its own grants that offers tools. Its
+A **tool component** is one component with its own grants that offers tools. Its
 **reach** is its grants limited to the interfaces it imports, read from the
 binary before it runs. A **child** is an agent session of its own, in its own
 workload, inheriting nothing.
@@ -62,36 +62,36 @@ let found = tool_discovery::list_offers(Some("archive".into())).await?;
 let offer = found.offers.first().ok_or(NoTool)?;
 // offer.imports lists what the component can call: here, the filesystem only.
 
-let done = tool_loading::load(ToolsetSource::Catalog(offer.name.clone())).await?;
-match done.toolset.state {
-    ToolsetState::Offered => {
+let done = tool_loading::load(ToolComponentSource::Catalog(offer.name.clone())).await?;
+match done.tool_component.state {
+    ToolComponentState::Offered => {
         let tools = tools::list().await?; // list again: the new tools are there
         // ...carry on with this run's next model call
     }
-    ToolsetState::NextRun => { /* finish this run; the tools arrive on the next */ }
-    ToolsetState::AwaitingApproval(p) => { /* finish the run asking the person: p.summary */ }
-    _ => {} // `ready` and others are returned only for a toolset already held
+    ToolComponentState::NextRun => { /* finish this run; the tools arrive on the next */ }
+    ToolComponentState::AwaitingApproval(p) => { /* finish the run asking the person: p.summary */ }
+    _ => {} // `ready` and others are returned only for a tool component already held
 }
 // A rollout that fails or runs out of time is an error (`unavailable`).
 ```
 
-`load` resolves once the toolset is callable, will be on the next run, or
+`load` resolves once the tool component is callable, will be on the next run, or
 waits on a grantor, so there is nothing to poll. Within the caller's ceiling,
-a catalog toolset loads without asking and serves the run in progress. Beyond it, `load` returns `awaiting-approval` without
-waiting. A person's approval lasts for the session: setting the toolset aside
+a catalog tool component loads without asking and serves the run in progress. Beyond it, `load` returns `awaiting-approval` without
+waiting. A person's approval lasts for the session: setting the tool component aside
 and loading it again later needs no prompt, until the person removes it.
 
 ## Scenario 2: stay within the model's function budget
 
 ```rust
-let set = tool_loading::list_toolsets().await?;
+let set = tool_loading::list_loaded().await?;
 // set.offered_functions = 29, set.max_offered_functions = Some(32)
 
-let done = tool_loading::load(ToolsetSource::Catalog("git".into())).await?;
-// done.set_aside = ["archive"]: the least recently called toolset this agent
+let done = tool_loading::load(ToolComponentSource::Catalog("git".into())).await?;
+// done.set_aside = ["archive"]: the least recently called tool component this agent
 // loaded, set aside to make room. Its component and approval stay.
 
-tool_loading::load(ToolsetSource::Catalog("archive".into())).await?; // back at once
+tool_loading::load(ToolComponentSource::Catalog("archive".into())).await?; // back at once
 tool_loading::set_aside("git".into()).await?;                       // ready, still approved
 ```
 
@@ -106,7 +106,7 @@ let request = SpawnRequest {
         component: pinned("ghcr.io/acme/agents/reviewer:1.2.0", "sha256:9f…"),
         model_alias: "frontier".into(),
         grants: Grants::none(),
-        toolsets: vec![ToolsetSource::Catalog("repo-fs-readonly".into())],
+        tool_components: vec![ToolComponentSource::Catalog("repo-fs-readonly".into())],
     }),
     instructions: "Review the PR and list risks.".into(),
     output: OutputShape::ReplyAndStructured(schema_for::<Review>()),
@@ -191,7 +191,7 @@ manipulated child can do and say; it does not stop it being manipulated.
 
 | File | Contents |
 | --- | --- |
-| [`toolset-types.wit`](../../toolset-types.wit) | Grants, toolset sources and states |
+| [`tool-component-types.wit`](../../tool-component-types.wit) | Grants, tool component sources and states |
 | [`tool-discovery.wit`](../../tool-discovery.wit) | `tool-discovery` |
 | [`tool-loading.wit`](../../tool-loading.wit) | `tool-loading` |
 | [`spawn-types.wit`](../../spawn-types.wit) | Child state, runs, budgets |
