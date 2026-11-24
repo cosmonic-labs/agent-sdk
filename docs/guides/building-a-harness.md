@@ -1,18 +1,18 @@
 # Build your own agent harness
 
-An agent harness is the loop at the center of an agent: it sends the conversation to a model, runs the tools the model asks for, records what happened and repeats until it has a reply. This guide builds one on `cosmonic:agent@0.4.2`, or ports an existing one (a Codex-like or Pi-like loop) onto it. The examples come from [`components/minimal-agent`](../components/minimal-agent), a reference harness in about 2,000 lines of Rust.
+An agent harness is the loop at the center of an agent: it sends the conversation to a model, runs the tools the model asks for, records what happened and repeats until it has a reply. This guide builds one on `cosmonic:agent@0.4.2`, or ports an existing one (a Codex-like or Pi-like loop) onto it. The examples come from [`components/minimal-agent`](../../components/minimal-agent), a reference harness in about 2,000 lines of Rust.
 
-What you write is only the loop. The host makes the model calls, holds the keys, runs the tools and keeps the session. Your component starts with no network, no files and no credentials. [PORTABILITY.md](PORTABILITY.md) explains which of the rules below hold on every host.
+What you write is only the loop. The host makes the model calls, holds the keys, runs the tools and keeps the session. Your component starts with no network, no files and no credentials. [Portability](portability.md) explains which of the rules below hold on every host.
 
 ## 1. Choose a world
 
-A world is the list of what your component imports and exports. Pick one from [`world.wit`](../wit/cosmonic-agent/world.wit):
+A world is the list of what your component imports and exports. Pick one from [`world.wit`](../../wit/cosmonic-agent/world.wit):
 
 - **`runnable-agent`**: the `agent` imports plus the `run` export. Start here. A host drives your harness through `run`, so it needs no HTTP handler or protocol of its own.
 - **`compactable-agent`**: `runnable-agent` plus `compact`, so a driver can ask for a summary between runs. Add it once you compact (step 6).
 - **`agent`** alone: the imports with no export. Use it only if you serve another entry point yourself.
 
-`run`, `run-types` and `compact` are unstable, behind the `agent-run` feature, so their shape may still change. Spelling the world out, as minimal-agent's [`wit/world.wit`](../components/minimal-agent/wit/world.wit) does, keeps the list a reviewer reads in one place:
+`run`, `run-types` and `compact` are unstable, behind the `agent-run` feature, so their shape may still change. Spelling the world out, as minimal-agent's [`wit/world.wit`](../../components/minimal-agent/wit/world.wit) does, keeps the list a reviewer reads in one place:
 
 ```wit
 world minimal-agent {
@@ -26,11 +26,11 @@ world minimal-agent {
 }
 ```
 
-Fetch the package with `wash wit fetch` (or `wkg`), pointing `WKG_CONFIG_FILE` at [`wit/wkg-registries.toml`](../wit/wkg-registries.toml). Commit the resulting `wkg.lock` so the dependency is pinned by digest.
+Fetch the package with `wash wit fetch` (or `wkg`), pointing `WKG_CONFIG_FILE` at [`wit/wkg-registries.toml`](../../wit/wkg-registries.toml). Commit the resulting `wkg.lock` so the dependency is pinned by digest.
 
 ## 2. Implement `run`
 
-`run` must return quickly: once it has committed the person's message, it hands back a stream of events and a future for the outcome, and keeps working in the background. From minimal-agent's [`src/run.rs`](../components/minimal-agent/src/run.rs):
+`run` must return quickly: once it has committed the person's message, it hands back a stream of events and a future for the outcome, and keeps working in the background. From minimal-agent's [`src/run.rs`](../../components/minimal-agent/src/run.rs):
 
 ```rust
 // Abridged.
@@ -74,7 +74,7 @@ let model = models::open("default".to_string()).await?;
 
 `models.describe(alias)` reports what the host knows, including `context-length`, which you need for compaction.
 
-`chat` takes the messages as a stream that you write while the call is pending, then a future that says the conversation is complete. From [`src/model.rs`](../components/minimal-agent/src/model.rs):
+`chat` takes the messages as a stream that you write while the call is pending, then a future that says the conversation is complete. From [`src/model.rs`](../../components/minimal-agent/src/model.rs):
 
 ```rust
 let (mut msg_tx, msg_rx) = wit_stream::new();
@@ -97,7 +97,7 @@ Record every model call in the journal: `agent.op.v1` (`target: "model"`, a fres
 
 ### List, offer, relay
 
-List the tools at the start of each run and offer them to the model. `tools.list` returns `tool-types.tool-def`; `chat-options.tools` takes the `inference-types.tool-def` the model sees, which has no annotations or version. From [`src/tools.rs`](../components/minimal-agent/src/tools.rs):
+List the tools at the start of each run and offer them to the model. `tools.list` returns `tool-types.tool-def`; `chat-options.tools` takes the `inference-types.tool-def` the model sees, which has no annotations or version. From [`src/tools.rs`](../../components/minimal-agent/src/tools.rs):
 
 ```rust
 for t in tools::list().await? {
@@ -118,7 +118,7 @@ When the model replies with tool calls, pass each `tool-call` to `tools.call` ex
 
 ### Typed tools and where definitions come from
 
-For typed tools, you never write tool definitions. A typed tool is a component that exports an ordinary WIT interface, such as [`components/units-tool`](../components/units-tool). The host reads that interface and builds a `tool-def` per eligible function (interfaces outside `wasi:*` and `cosmonic:agent/*`, and no resources, streams or futures in the signature): the function name in snake case, its doc comment as the description, and, when its only parameter is a record, the record's fields as the arguments with their comments as argument descriptions. Because a built component keeps types but not comments, the descriptions come from the tool's published WIT package, built with `wasm-tools component wit wit --wasm -o units-wit.wasm`. The full rules are in the [design note](../wit/cosmonic-agent/README.md#what-makes-a-component-a-tool), and [Write a typed tool](https://cosmonic.com/docs/agent-sdk/write-a-typed-tool/) walks through one.
+For typed tools, you never write tool definitions. A typed tool is a component that exports an ordinary WIT interface, such as [`components/units-tool`](../../components/units-tool). The host reads that interface and builds a `tool-def` per eligible function (interfaces outside `wasi:*` and `cosmonic:agent/*`, and no resources, streams or futures in the signature): the function name in snake case, its doc comment as the description, and, when its only parameter is a record, the record's fields as the arguments with their comments as argument descriptions. Because a built component keeps types but not comments, the descriptions come from the tool's published WIT package, built with `wasm-tools component wit wit --wasm -o units-wit.wasm`. The full rules are in the [design note](../../wit/cosmonic-agent/README.md#what-makes-a-component-a-tool), and [Write a typed tool](https://cosmonic.com/docs/agent-sdk/write-a-typed-tool/) walks through one.
 
 To your harness, a typed tool and a tool provider look the same: a `tool-def` in, a `tool-response` out. That is the point. You relay; the host translates.
 
@@ -130,7 +130,7 @@ Journal each tool call around its dispatch: `agent.op.v1` (`target: "tool"`, `op
 | --- | --- | --- |
 | `ok`, `is-error: false` | `succeeded` | The output |
 | `ok`, `is-error: true` | `failed` | The output, as a normal result it can react to |
-| `not-dispatched(...)` | `cancelled` in [`session.wit`](../wit/cosmonic-agent/session.wit)'s conventions | Why it didn't run; it may try again |
+| `not-dispatched(...)` | `cancelled` in [`session.wit`](../../wit/cosmonic-agent/session.wit)'s conventions | Why it didn't run; it may try again |
 | `outcome-unknown(...)` | `unresolved` | See step 5 |
 
 minimal-agent 0.3.2 records `not-dispatched` as `failed`. The session conventions reserve `failed` for a call that returned and use `cancelled` for one that was not dispatched, so prefer `cancelled`.
@@ -139,7 +139,7 @@ minimal-agent 0.3.2 records `not-dispatched` as `failed`. The session convention
 
 `outcome-unknown` means the call may have taken effect: the connection dropped after dispatch, the call was cancelled while running, or its deadline passed (`timed-out`). The email may have been sent; the file may have been written.
 
-The session rules in [`session.wit`](../wit/cosmonic-agent/session.wit) are strict about this:
+The session rules in [`session.wit`](../../wit/cosmonic-agent/session.wit) are strict about this:
 
 - Never advance state past an unresolved op.
 - A tool call may repeat with the same id and arguments only when workload configuration authorizes repeat detection. Tool annotations cannot authorize it.
@@ -149,9 +149,9 @@ minimal-agent therefore records the call as `unresolved`, sends its result to th
 
 One exception, and its trade-off: when `outcome-unknown(timed-out)` comes from a tool whose `read-only` annotation is `true`, minimal-agent closes the op as `failed`, gives the model the timeout text, and carries on. The annotation is the provider's unchecked claim, so a tool wrongly marked read only could have written something the run then moves past. A missing annotation counts as not read only. If you want no trade-off, fail on every unknown outcome.
 
-Timeouts carry no text in 0.4 ([#4](https://github.com/cosmonic-labs/agent-sdk/issues/4) proposes a payload), so the harness words them. `tool_timed_out` in [`src/describe.rs`](../components/minimal-agent/src/describe.rs) is wording you can reuse: don't repeat the same call, ask for less in one call (a narrower query, a smaller folder, fewer items, one page at a time).
+Timeouts carry no text in 0.4 ([#4](https://github.com/cosmonic-labs/agent-sdk/issues/4) proposes a payload), so the harness words them. `tool_timed_out` in [`src/describe.rs`](../../components/minimal-agent/src/describe.rs) is wording you can reuse: don't repeat the same call, ask for less in one call (a narrower query, a smaller folder, fewer items, one page at a time).
 
-**After a restart**, read the journal from the entry after the state's `through` (from the start when there is no state) and close any op with no result. From [`src/journal.rs`](../components/minimal-agent/src/journal.rs): a model op is closed as `cancelled` (a model call may simply be made again); a tool op is closed as `unresolved`, with an `error` step naming it, and never made again.
+**After a restart**, read the journal from the entry after the state's `through` (from the start when there is no state) and close any op with no result. From [`src/journal.rs`](../../components/minimal-agent/src/journal.rs): a model op is closed as `cancelled` (a model call may simply be made again); a tool op is closed as `unresolved`, with an `error` step naming it, and never made again.
 
 **Run limits** apply to tool calls too. When `max-duration` passes while minimal-agent is working through a reply's tool calls, it makes no further ones; each remaining call gets an error result ("Not called: the run's time limit passed") so every call the model made has an answer.
 
@@ -165,7 +165,7 @@ Long conversations outgrow the model's context window. Compaction asks the model
 - **Never commit a refused or filtered summary.** Close its op as failed and keep the old state.
 - **The summary is model output.** Put it back as an assistant message behind a fixed preamble, never as system or person text.
 
-For `compact`, accept by committing `agent.compact.v1` under `compact:<id>` before the model call, and end every accepted compaction with at most one `agent.compact-result.v1` (none means it was cut off, which a driver treats as failed). `focus` is the person's text: give it to the summarizer as their request, never as instructions. [`compact.wit`](../wit/cosmonic-agent/compact.wit) has the full rules.
+For `compact`, accept by committing `agent.compact.v1` under `compact:<id>` before the model call, and end every accepted compaction with at most one `agent.compact-result.v1` (none means it was cut off, which a driver treats as failed). `focus` is the person's text: give it to the summarizer as their request, never as instructions. [`compact.wit`](../../wit/cosmonic-agent/compact.wit) has the full rules.
 
 minimal-agent does not summarize. When the model's context is full it drops the oldest half of the stored conversation and retries once, within `max-steps`. That is enough for a reference harness but loses context a summary would keep.
 
@@ -202,7 +202,7 @@ A JavaScript loop can run on QuickJS, a small JavaScript engine, built into a WA
 ## 8. Test it locally
 
 - **Unit tests** for the parts of a run that need no host: `cargo test` in minimal-agent, or plain Node tests for rules you keep free of host imports.
-- **A scripted host.** [`components/minimal-agent/test-host`](../components/minimal-agent/test-host) is a small [Wasmtime](https://wasmtime.dev) host that plays the model, the session store and a few tools, and starts every run on a fresh instance, so anything kept in memory is gone, as it can be on a real host. It needs no model credentials:
+- **A scripted host.** [`components/minimal-agent/test-host`](../../components/minimal-agent/test-host) is a small [Wasmtime](https://wasmtime.dev) host that plays the model, the session store and a few tools, and starts every run on a fresh instance, so anything kept in memory is gone, as it can be on a real host. It needs no model credentials:
 
   ```shell
   cd components/minimal-agent/test-host
@@ -216,7 +216,7 @@ A JavaScript loop can run on QuickJS, a small JavaScript engine, built into a WA
 
 Any host that serves the `cosmonic:agent` 0.4 interfaces your harness imports and drives `run` can run your harness, unchanged.
 
-- **Cosmonic Desktop.** Push the component to Desktop's built-in registry, then add it on the Agents page. [minimal-agent's README](../components/minimal-agent/README.md#run-it-in-cosmonic-desktop) has the steps. Desktop checks the component's imports and exports, writes the workload for each session and binds `run` itself.
+- **Cosmonic Desktop.** Push the component to Desktop's built-in registry, then add it on the Agents page. [minimal-agent's README](../../components/minimal-agent/README.md#run-it-in-cosmonic-desktop) has the steps. Desktop checks the component's imports and exports, writes the workload for each session and binds `run` itself.
 - **Cosmonic Control.** Deploy a workload with the harness, its `cosmonic:agent` entries and a `run` entry with triggers, then start runs over HTTP or NATS. Control's agent support is experimental. [Run an agent on Control](https://cosmonic.com/docs/agent-sdk/run-on-control/) walks through it.
 
 ## Notable decisions in the reference harnesses

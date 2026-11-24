@@ -17,7 +17,7 @@ The short version: your component's imports and exports are the contract. How ru
 
 ### Packages and worlds
 
-`cosmonic:agent` is a WIT package (WebAssembly Interface Types, the interface language components are built against). The current release is `cosmonic:agent@0.4.2`, defined in [`wit/cosmonic-agent`](../wit/cosmonic-agent) and published to `ghcr.io/cosmonic-labs/cosmonic/agent`. A world is the full list of what a component imports and exports. The ones a harness author uses are in [`world.wit`](../wit/cosmonic-agent/world.wit):
+`cosmonic:agent` is a WIT package (WebAssembly Interface Types, the interface language components are built against). The current release is `cosmonic:agent@0.4.2`, defined in [`wit/cosmonic-agent`](../../wit/cosmonic-agent) and published to `ghcr.io/cosmonic-labs/cosmonic/agent`. A world is the full list of what a component imports and exports. The ones a harness author uses are in [`world.wit`](../../wit/cosmonic-agent/world.wit):
 
 | World | Stability | Imports | Exports | For |
 | --- | --- | --- | --- | --- |
@@ -32,7 +32,7 @@ The package also defines provider worlds (`inference-provider`, `inference-clien
 
 ### A run
 
-`run` ([`run.wit`](../wit/cosmonic-agent/run.wit), types in [`run-types.wit`](../wit/cosmonic-agent/run-types.wit)) is one unit of work: the person's message in, the agent's loop of model and tool calls, a reply out. Chat interfaces call it a turn.
+`run` ([`run.wit`](../../wit/cosmonic-agent/run.wit), types in [`run-types.wit`](../../wit/cosmonic-agent/run-types.wit)) is one unit of work: the person's message in, the agent's loop of model and tool calls, a reply out. Chat interfaces call it a turn.
 
 ```wit
 run: async func(
@@ -52,11 +52,11 @@ These rules hold on every host:
 - **No in-memory state between runs.** The next run may land on a fresh instance. Everything needed to continue is in the session.
 - **Approvals are the host's.** A harness never receives or answers an approval. A held tool call simply waits, then returns a result or `not-dispatched(denied)`. When nobody can answer a question, the run ends with `finish` `input-required`.
 
-`compact` ([`compact.wit`](../wit/cosmonic-agent/compact.wit)) follows the same lock and cancellation rules. It summarizes older context between runs, at the driver's request.
+`compact` ([`compact.wit`](../../wit/cosmonic-agent/compact.wit)) follows the same lock and cancellation rules. It summarizes older context between runs, at the driver's request.
 
 ### Tool calls
 
-`tools` ([`tools.wit`](../wit/cosmonic-agent/tools.wit), records in [`tool-types.wit`](../wit/cosmonic-agent/tool-types.wit)) has two functions: `list`, which returns `tool-def`s, and `call`, which takes the model's `tool-call` as it came and returns a `tool-response`. The same interface is imported by a harness and exported by a tool provider.
+`tools` ([`tools.wit`](../../wit/cosmonic-agent/tools.wit), records in [`tool-types.wit`](../../wit/cosmonic-agent/tool-types.wit)) has two functions: `list`, which returns `tool-def`s, and `call`, which takes the model's `tool-call` as it came and returns a `tool-response`. The same interface is imported by a harness and exported by a tool provider.
 
 - A tool's input is a `tool-input`: `json-schema`, `grammar` (text a Lark or regex grammar constrains) or `text`. A call's arguments are a `tool-arguments`: `json` for a JSON Schema tool, `text` for the other two, never parsed as JSON.
 - A completed failure is `tool-response.is-error`, returned to the model as a normal result.
@@ -66,11 +66,11 @@ These rules hold on every host:
 - `tool-annotations` (`read-only`, `destructive`, `idempotent`, `open-world`) are the provider's claims for display. They authorize nothing.
 - `find_tools` and `load_tools` are reserved tool names for a host's own discovery tools.
 
-A **typed tool** exports its own interface and nothing from `cosmonic:agent`. The host turns its functions into `tool-def`s and translates JSON to typed calls. The harness never sees the difference: it receives `tool-def`s and relays `tool-call`s either way. How a host builds those definitions (names in snake case, record fields as arguments, doc comments as descriptions) is described in the [design note](../wit/cosmonic-agent/README.md#what-makes-a-component-a-tool). It is written as how hosts translate, not as WIT types, and a host may present a different name to the model, so a harness must not hard-code tool names it did not list.
+A **typed tool** exports its own interface and nothing from `cosmonic:agent`. The host turns its functions into `tool-def`s and translates JSON to typed calls. The harness never sees the difference: it receives `tool-def`s and relays `tool-call`s either way. How a host builds those definitions (names in snake case, record fields as arguments, doc comments as descriptions) is described in the [design note](../../wit/cosmonic-agent/README.md#what-makes-a-component-a-tool). It is written as how hosts translate, not as WIT types, and a host may present a different name to the model, so a harness must not hard-code tool names it did not list.
 
 ### The session journal
 
-`session` ([`session.wit`](../wit/cosmonic-agent/session.wit)) is an append-only journal plus opaque working state that the host keeps for the harness. A commit appends entries and optionally replaces state atomically, on conditions (`require-state`, `require-end`). A commit whose conditions no longer hold writes nothing and returns the current snapshot, so a writer never overwrites another; reconciling is the writer's job, or it stops (minimal-agent ends the run `superseded`). A `commit-id` makes a retried commit safe.
+`session` ([`session.wit`](../../wit/cosmonic-agent/session.wit)) is an append-only journal plus opaque working state that the host keeps for the harness. A commit appends entries and optionally replaces state atomically, on conditions (`require-state`, `require-end`). A commit whose conditions no longer hold writes nothing and returns the current snapshot, so a writer never overwrites another; reconciling is the writer's job, or it stops (minimal-agent ends the run `superseded`). A `commit-id` makes a retried commit safe.
 
 All `agent.*` entry kinds are reserved, and each entry's data is JSON. A host or a person's tool can redraw a conversation from these alone:
 
@@ -108,7 +108,7 @@ Some language runtimes bring extra imports. Rust's standard library adds `wasi:c
 
 ### Versioning and compatibility
 
-From the [design note](../wit/cosmonic-agent/README.md#versioning):
+From the [design note](../../wit/cosmonic-agent/README.md#versioning):
 
 - **Breaking changes bump the minor version** (0.4 to 0.5). Adding a case to a variant, a field to a record, or a function to an interface a guest exports (`tools`, `run`) breaks compiled consumers.
 - **Additive changes bump the patch version** (0.4.0 to 0.4.1) and carry `@since` on the new items. New interfaces, and new functions on interfaces the host serves, are additive.
@@ -129,7 +129,7 @@ Everything below is a host's choice. Two hosts serving the same `cosmonic:agent`
 
 The contract says a driver calls `run`. Who that driver is, and what reaches it, is up to the host:
 
-- **A chat interface.** Cosmonic Desktop drives `run` from its Agents page. It adds the binding to the agent's workload itself and refuses a manifest that names `run` ([minimal-agent's README](../components/minimal-agent/README.md#run-it-in-cosmonic-desktop)).
+- **A chat interface.** Cosmonic Desktop drives `run` from its Agents page. It adds the binding to the agent's workload itself and refuses a manifest that names `run` ([minimal-agent's README](../../components/minimal-agent/README.md#run-it-in-cosmonic-desktop)).
 - **HTTP.** A host can accept requests in some public format and translate them into `run` calls. Cosmonic Control accepts requests in the OpenAI Responses API format at `/v1/responses`, streams server-sent events, and maps `input` onto the `user-message` and fields such as `instructions` and `reasoning.effort` onto `run-options` ([Run an agent on Control](https://cosmonic.com/docs/agent-sdk/run-on-control/)).
 - **Messaging.** Control's agent support is experimental. It also starts runs from NATS requests on a per-workload subject, with the same JSON body.
 - **An adapter component.** A component on the `run-client` world can import `run` and serve another protocol itself.
@@ -150,7 +150,7 @@ Where the journal is stored, how it is encrypted and when it is deleted are host
 
 ## One manifest, many hosts
 
-A wasmCloud workload manifest (`runtime.wasmcloud.dev/v1alpha1` `Workload` or `WorkloadDeployment`) says which components run together and what each is granted. For an agent it lists the harness component, any tool components, and one `hostInterfaces` entry per group of `cosmonic:agent` interfaces, each granted to named components. [`components/minimal-agent/manifests/workload.yaml`](../components/minimal-agent/manifests/workload.yaml) is the shape:
+A wasmCloud workload manifest (`runtime.wasmcloud.dev/v1alpha1` `Workload` or `WorkloadDeployment`) says which components run together and what each is granted. For an agent it lists the harness component, any tool components, and one `hostInterfaces` entry per group of `cosmonic:agent` interfaces, each granted to named components. [`components/minimal-agent/manifests/workload.yaml`](../../components/minimal-agent/manifests/workload.yaml) is the shape:
 
 ```yaml
 hostInterfaces:
