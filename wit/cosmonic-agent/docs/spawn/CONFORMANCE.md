@@ -17,6 +17,20 @@ One program may be both.
 A test double, or a policy layer in front of a conforming implementer,
 may skip the mechanics but must not contradict what a caller observes.
 
+## At a glance
+
+| If you implement | Read | The hardest requirements |
+| --- | --- | --- |
+| The host | 1, 2 | Bind each workload to exactly one session for its whole life, put the session id in its bind configuration, and give every root a finite budget. |
+| Any of the interfaces | 1, 3, 4, 12 | Read reach from the pinned binary before running anything, never let a child exceed an ancestor, and re-check every approval against its snapshot when it is used. |
+| `tool-discovery` | 5 | Answer from the same catalog, ceiling and policy the loader admits against, and show each offer's import list. |
+| `tool-loading` | 6, 10.9 | Serve the run in progress or answer `next-run`, set aside only `agent-loaded` tool components, and keep aliases fixed for the session. |
+| `spawn` | 7, 8, 9, 10 | Accept a child and its first run in one atomic step, never reuse a name, stop a subtree behind a barrier, and, across machines, fence every run with a lease. |
+| `child-sessions` | 11, 7.8, 7.15 | Return the same records as `spawn`, with nothing a child chose below the caller's direct children, and cap open watches. |
+| `lineage` | 10.5, 11 | Report the caller's own figures exactly and its ancestors' coarsely. |
+
+Section 13 lists the cases a conforming implementation passes.
+
 ## 1. Profiles
 
 ### 1.1 Single machine and across machines
@@ -65,7 +79,7 @@ A root session not driven through `run` takes its context from whatever drives i
 Policy layers sit in front of the implementer, installed by the host,
 and pass the original caller through.
 A guest component placed between a caller and the implementer would become the caller,
-so there is no guest-side policy world (see RATIONALE 5.1).
+so there is no guest-side policy world (see [RATIONALE 4.1](RATIONALE.md#41-virtualization)).
 
 ### 2.6 Who decides
 
@@ -173,16 +187,23 @@ An entry's reach never counts as the caller's own.
 
 ### 3.14 Containment
 
-- **Volumes.** A volume fits a caller's mount of the same storage; names are never compared.
-  A read-only request fits a read-only or read-write mount; a read-write request fits only a read-write one.
-- **Allowed hosts,** after normalization (lowercase, A-labels, one trailing dot stripped, default ports dropped):
-  - `*` contains everything.
-  - A bare `h` contains `h`, and `scheme://h` at the default port for `http`, `https`, `ws` and `wss`.
-  - `h:p` contains `h:p` and `scheme://h:p`.
-  - `scheme://h[:p]` contains only itself.
-  - `*.d` contains hosts ending in `.d` at any depth, never `d`.
-- **Model aliases.** An alias fits one the caller was granted.
-- **Anything else.** A grant whose reach cannot be compared does not fit.
+**Volumes.** A volume fits a caller's mount of the same storage; names are never compared.
+A read-only request fits a read-only or read-write mount; a read-write request fits only a read-write one.
+
+**Allowed hosts,** compared after normalization
+(lowercase, A-labels, one trailing dot stripped, default ports dropped):
+
+| The caller's entry | Contains |
+| --- | --- |
+| `*` | everything |
+| A bare `h` | `h`, and `scheme://h` at the default port for `http`, `https`, `ws` and `wss` |
+| `h:p` | `h:p` and `scheme://h:p` |
+| `scheme://h[:p]` | only itself |
+| `*.d` | hosts ending in `.d` at any depth, never `d` |
+
+**Model aliases.** An alias fits one the caller was granted.
+
+**Anything else.** A grant whose reach cannot be compared does not fit.
 
 ### 3.15 Location-dependent hosts
 
@@ -338,6 +359,40 @@ Tool results are bounded as `tool-types.tool-response` describes.
 
 ## 7. `spawn`: children
 
+A child moves through these states (`child-state`; `other` is for a state this version does not name):
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: spawn that needs a grantor
+    [*] --> live: spawn admitted at once
+    pending --> live: granted, and re-checks pass (7.3)
+    pending --> ended: refused, withdrawn,<br>expired, or end (7.4)
+    live --> stopped: budget spent, revoked,<br>or could not start
+    stopped --> live: budget raised (exhausted only)
+    live --> ended: end, max-duration, parent ends,<br>or spawner's identity ends (7.13)
+    stopped --> ended: the same triggers
+```
+
+The last run a caller started in a child moves through these (`run-state`),
+with contentless progress (`run-progress`) while it is in progress:
+
+```mermaid
+stateDiagram-v2
+    state "in-progress" as in_progress {
+        [*] --> working
+        [*] --> blocked: admission or placement-delay
+        working --> blocked: tool-approval or outcome-release
+        blocked --> working: released
+        working --> cancelling: cancel or end
+        blocked --> cancelling: cancel or end
+    }
+    [*] --> in_progress: send, or spawn's first run, accepted
+    in_progress --> done: ended with an outcome
+    in_progress --> failed: cancelled, output-rejected,<br>not-admitted, withheld,<br>host-lost, or failed
+```
+
+`counts` progress frames report usage at any point and change no state.
+
 ### 7.1 Spawning beyond the parent's ceiling
 
 A child's tool component beyond the parent's ceiling goes to a grantor
@@ -366,11 +421,15 @@ A run deferred while pending is re-checked the same way before it starts.
 
 ### 7.4 Ending a pending request
 
-A refusal, the operator's approval lifetime running out (recommended 24 hours), or `end` while pending
-ends the child (`ended(some(denied))` or `ended(some(withdrawn))`),
-frees its place, keeps its name, withdraws the prompt,
+| Cause | The pending child |
+| --- | --- |
+| A grantor refuses | ends as `ended(some(denied))` |
+| The operator's approval lifetime runs out (recommended 24 hours) | ends as `ended(some(withdrawn))` |
+| `end` while pending | ends as `ended(some(withdrawn))` |
+| Removal of an entry, or any narrowing of an ancestor, that it rests on | is withdrawn too |
+
+In every case the implementer frees the child's place, keeps its name, withdraws the prompt,
 and fails its waiting runs with `not-admitted`.
-Removal of an entry, or any narrowing of an ancestor, that a pending child rests on withdraws it too.
 
 ### 7.5 A spawn's approved tool components
 
@@ -398,10 +457,11 @@ so a retry is always recognized and a handle can never reach a different child.
 
 ### 7.8 Retention
 
-- Keep at least the 16 most recent outcomes per child; `wait` on an older run answers `failed(expired)`.
-- Ended children stay listed for a retention window (recommended the 100 most recent per tree).
-- `get-child` finds an ended child by name for the session's life;
-  `wait`, `cancel` and `end` on it are ok.
+| What | Kept for |
+| --- | --- |
+| A child's run outcomes | at least the 16 most recent per child; `wait` on an older run answers `failed(expired)` |
+| Ended children in listings | a retention window (recommended the 100 most recent per tree) |
+| An ended child, through `get-child` by name | the session's life; `wait`, `cancel` and `end` on it are ok |
 
 ### 7.9 Joint acceptance
 
@@ -542,9 +602,14 @@ Direct egress through a component's own grants cannot be fenced.
 
 `cancel`, `end` and a person's stop first mark the whole subtree as cancelling.
 After the mark and until the stop completes, no run acceptance in the subtree succeeds:
-`spawn` and `send` from inside (`stopping`, `stopped`),
-`send` from outside (`busy`),
-and runs a person or trigger would start.
+
+| Attempt during the stop | Answer |
+| --- | --- |
+| `spawn` from inside the subtree | `stopping` |
+| `send` from inside the subtree | `stopped` |
+| `send` from outside the subtree | `busy` |
+| A run a person or trigger would start | not accepted |
+
 A store with per-key compare-and-swap meets this with one per-tree record
 that every acceptance already updates for its reservation.
 
