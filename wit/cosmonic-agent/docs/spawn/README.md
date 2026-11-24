@@ -1,19 +1,35 @@
 # Spawn and tool loading
 
-**Status: unstable.** Part of `cosmonic:agent` 0.4.4. Tool discovery and
-loading are behind the `agent-tool-loading` feature. Lineage, children and
-spawn are behind `agent-spawn`, which also needs `agent-tool-loading`,
-`agent-run` and `session-status`. For wit-bindgen, list the features you need
-(`features: ["agent-tool-loading", "agent-spawn", "agent-run",
-"session-status"]`); a Wasmtime host sets the same options on the
-`LinkOptions` its generated `add_to_linker` takes. Why things are the way
-they are is in [RATIONALE.md](RATIONALE.md); what an implementer must do is
-in [CONFORMANCE.md](CONFORMANCE.md).
+**Status: unstable.** Part of `cosmonic:agent` 0.4.4.
+Tool discovery and loading are behind the `agent-tool-loading` feature.
+Lineage, child sessions and spawn are behind `agent-spawn`,
+which also needs `agent-tool-loading`, `agent-run` and `session-status`.
+For wit-bindgen, list the features you need
+(`features: ["agent-tool-loading", "agent-spawn", "agent-run", "session-status"]`);
+a Wasmtime host sets the same options on the `LinkOptions`
+its generated `add_to_linker` takes.
+Why things are the way they are is in [RATIONALE.md](RATIONALE.md);
+what a host and an implementer must do is in [CONFORMANCE.md](CONFORMANCE.md).
 
-An agent with a job often needs help it did not start with: a tool it finds
-it needs halfway through a task, or a second agent to review one file or to
-read content it should not trust. These interfaces give an agent separate
-powers, each its own import, so its world says exactly what it may do:
+An agent with a job often needs help it did not start with:
+a tool it finds it needs halfway through a task,
+or a second agent to review one file or to read content it should not trust.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| Tool | One function the model can call, such as `read_file`. |
+| Tool component | One component, with its own grants, that offers tools: a tool provider (exports `cosmonic:agent/tools`) or a typed tool (exports its own interfaces). An agent loads, sets aside or hands to a child a whole tool component, never a single tool. |
+| Session | The conversation that persists across runs. Each has a session id. |
+| Run | One call of `run` on a session: from one incoming message to an outcome, possibly with many model calls and tool calls in between. Each has an id its driver chooses: the `run-id` in `run-options`, or for a child, the run name its parent passes to `spawn` or `send` (`review` and `r1` below). |
+| Child | A session another session spawned: an agent session of its own, in its own workload, inheriting nothing. Its parent gives it a name, unique under that parent, and it has its own session id. |
+| Spawn tree | The tree of sessions under one root session. Budgets and limits cover a session and everything below it. |
+| Reach | What a component can actually touch: its grants, limited to the interfaces it imports, read from the binary before it runs. |
+
+## Interfaces
+
+Each power is its own import, so a component's world says exactly what it may do.
 
 | Interface | The agent may |
 | --- | --- |
@@ -23,10 +39,17 @@ powers, each its own import, so its world says exactly what it may do:
 | `child-sessions` | see the sessions below it |
 | `spawn` | start child agent sessions and drive them |
 
-A **tool component** is one component with its own grants that offers tools. Its
-**reach** is its grants limited to the interfaces it imports, read from the
-binary before it runs. A **child** is an agent session of its own, in its own
-workload, inheriting nothing.
+## Files
+
+| File | Contents |
+| --- | --- |
+| [`tool-component-types.wit`](../../tool-component-types.wit) | Grants, tool component sources and states |
+| [`tool-discovery.wit`](../../tool-discovery.wit) | `tool-discovery` |
+| [`tool-loading.wit`](../../tool-loading.wit) | `tool-loading` |
+| [`spawn-types.wit`](../../spawn-types.wit) | Child state, runs, budgets |
+| [`lineage.wit`](../../lineage.wit) | `lineage` |
+| [`child-sessions.wit`](../../child-sessions.wit) | `child-sessions` |
+| [`spawn.wit`](../../spawn.wit) | `spawn` and the `child-session` resource |
 
 ## Imports
 
@@ -63,7 +86,8 @@ let found = tool_discovery::list_offers(Some("archive".into())).await?;
 let offer = found.offers.first().ok_or(NoTool)?;
 // offer.imports lists what the component can call: here, the filesystem only.
 
-let done = tool_loading::load(ToolComponentSource::Catalog(CatalogEntry { name: offer.name.clone() })).await?;
+let source = ToolComponentSource::Catalog(CatalogEntry { name: offer.name.clone() });
+let done = tool_loading::load(source).await?;
 match done.tool_component.state {
     ToolComponentState::Offered => {
         let tools = tools::list().await?; // list again: the new tools are there
@@ -76,11 +100,14 @@ match done.tool_component.state {
 // A rollout that fails or runs out of time is an error (`unavailable`).
 ```
 
-`load` resolves once the tool component is callable, will be on the next run, or
-waits on a grantor, so there is nothing to poll. Within the caller's ceiling,
-a catalog tool component loads without asking and serves the run in progress. Beyond it, `load` returns `awaiting-approval` without
-waiting. A person's approval lasts for the session: setting the tool component aside
-and loading it again later needs no prompt, until the person removes it.
+`load` resolves once the tool component is callable, will be on the next run,
+or waits on a grantor, so there is nothing to poll.
+Within the caller's ceiling,
+a catalog tool component loads without asking and serves the run in progress.
+Beyond it, `load` returns `awaiting-approval` without waiting.
+A person's approval lasts for the session:
+setting the tool component aside and loading it again later needs no prompt,
+until the person removes it.
 
 ## Scenario 2: stay within the model's function budget
 
@@ -88,7 +115,7 @@ and loading it again later needs no prompt, until the person removes it.
 fn catalog(name: &str) -> CatalogEntry { CatalogEntry { name: name.into() } }
 
 let set = tool_loading::list_loaded().await?;
-// set.offered_functions = 29, set.max_offered_functions = Some(32)
+// set.offered_functions = 125, set.max_offered_functions = Some(128)
 
 let done = tool_loading::load(ToolComponentSource::Catalog(catalog("git"))).await?;
 // done.set_aside = ["archive"]: the least recently called tool component this agent
@@ -97,6 +124,13 @@ let done = tool_loading::load(ToolComponentSource::Catalog(catalog("git"))).awai
 tool_loading::load(ToolComponentSource::Catalog(catalog("archive"))).await?; // back at once
 tool_loading::set_aside("git".into()).await?;                       // ready, still approved
 ```
+
+The function budget comes from the model binding,
+and the implementer sets it;
+the WIT fixes no number, and 128 here is only an example.
+When a load would go over it,
+the implementer sets aside a tool component the agent loaded,
+never one the workload declared or a person added.
 
 ## Scenario 3: delegate a review to children
 
@@ -125,6 +159,11 @@ let (auth, billing) = futures::join!(
     spawn::spawn("reviewer-pr-42-billing", request, first("Review the billing changes.")),
 );
 let (auth, billing) = (auth?, billing?);
+
+let info = auth.get_info().await?;
+// info.name = Some("reviewer-pr-42-auth"), info.session_id = "ses-8c1f…",
+// info.last_run = Some(("review", RunState::InProgress))
+
 let (a, b) = futures::join!(auth.wait("review"), billing.wait("review"));
 let (auth_review, billing_review): (Review, Review) = (a?.structured()?, b?.structured()?);
 futures::try_join!(ChildSession::end(auth), ChildSession::end(billing))?;
@@ -132,6 +171,8 @@ futures::try_join!(ChildSession::end(auth), ChildSession::end(billing))?;
 
 A child takes one run at a time, so work that should run in parallel goes to
 separate children.
+Each child has the name its parent gave it and a session id the implementer assigns;
+each run has the name its parent gave it.
 Names are `[a-z0-9-]`.
 The name is the child's address and its idempotency key:
 spawning `reviewer-pr-42-auth` again returns the same child,
@@ -155,6 +196,8 @@ for topic in ["pricing", "competitors", "regulation"] {
 
 // Run 2, maybe on another machine: where does each stand?
 for info in child_sessions::list_children(ChildQuery { descendants: false }).await? {
+    // info.name = Some("research-pricing"), info.session_id = "ses-41d2…",
+    // info.last_run = Some(("r1", RunState::Done))
     if let Some((run, RunState::Done)) = &info.last_run {
         let child = spawn::get_child(info.name.as_deref().unwrap()).await?;
         let notes = child.wait(run).await?;
@@ -163,9 +206,10 @@ for info in child_sessions::list_children(ChildQuery { descendants: false }).awa
 }
 ```
 
-`watch-children` streams the same records within a run. A child may run on
-another machine; if that machine is lost mid-run, its `last-run` becomes
-`failed(host-lost)` rather than hanging, and a later `send` starts a new run.
+`watch-children` streams the same records within a run.
+A child may run on another machine;
+if that machine is lost mid-run, its `last-run` becomes `failed(host-lost)`
+rather than hanging, and a later `send` starts a new run.
 `cancel` and `end` reach everything below the child.
 
 ## Scenario 5: read untrusted content in quarantine
@@ -183,21 +227,10 @@ let child = spawn::spawn("triage-msg-881", reader,
 let triage: Triage = child.wait("triage").await?.structured()?;
 ```
 
-With `structured-only`, the parent receives only the validated structured
-value. The reader's component imports nothing beyond `chat`, which the
-approver can see, and its prompts reach only its model's provider (use a
-model binding without provider-run tools). An import list shows what a
-component can call directly, not where data flows. This narrows what a
-manipulated child can do and say; it does not stop it being manipulated.
-
-## Files
-
-| File | Contents |
-| --- | --- |
-| [`tool-component-types.wit`](../../tool-component-types.wit) | Grants, tool component sources and states |
-| [`tool-discovery.wit`](../../tool-discovery.wit) | `tool-discovery` |
-| [`tool-loading.wit`](../../tool-loading.wit) | `tool-loading` |
-| [`spawn-types.wit`](../../spawn-types.wit) | Child state, runs, budgets |
-| [`lineage.wit`](../../lineage.wit) | `lineage` |
-| [`child-sessions.wit`](../../child-sessions.wit) | `child-sessions` |
-| [`spawn.wit`](../../spawn.wit) | `spawn` and the `child-session` resource |
+With `structured-only`, the parent receives only the validated structured value.
+The reader's component imports nothing beyond `chat`, which the approver can see,
+and its prompts reach only its model's provider
+(use a model binding without provider-run tools).
+An import list shows what a component can call directly, not where data flows.
+This narrows what a manipulated child can do and say;
+it does not stop it being manipulated.
