@@ -107,8 +107,10 @@ pub(crate) async fn call_tool(
         Ok(r) if r.is_error => (r.output, true, "failed"),
         Ok(r) => (r.output, false, "succeeded"),
         // Not made: the model gets the reason, so it can try again. The
-        // session conventions record a call that was not dispatched as
-        // cancelled; failed is for a call that returned.
+        // session conventions (`agent.op-result.v1` in `session`) have
+        // recorded a call that was not dispatched as cancelled since
+        // cosmonic:agent 0.3.0, and `not-dispatched` (0.4.0) is how an agent
+        // knows; failed is for a call that returned.
         Err(e @ CallError::NotDispatched(_)) => {
             (vec![ToolOutput::Text(e.describe())], true, "cancelled")
         }
