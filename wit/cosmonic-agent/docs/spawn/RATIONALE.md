@@ -182,7 +182,7 @@ The cap on what a model sees lives in the host's `find_tools` adapter (CONFORMAN
 
 - **Callers differ.** A model chooses from one answer in one step, so it needs a cap.
   Agent code that filters or ranks offers itself should not be cut off at a number chosen for a model.
-- **One shape for both.** The adapter reads the first few offers and says when more matched;
+- **One shape for both.** The adapter reads one offer past its cap to tell the model that more matched;
   code reads on. Neither needs a page token or a `truncated` flag.
 - **A large or remote catalog can be produced lazily.**
   The implementer computes only what the caller reads.

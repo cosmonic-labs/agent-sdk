@@ -100,9 +100,11 @@ The names are reserved: no other tool may take them.
 They are an adapter over the interfaces (6.1).
 
 `find_tools` holds the cap on what the model sees, since the model chooses from one answer in one step.
-It reads offers from the `list-offers` stream up to a cap the host sets, then drops the stream.
-When one more offer was waiting, its answer tells the model that more matched
+For a cap of N the host sets, it reads up to N + 1 offers from the `list-offers` stream
+and shows the model the first N.
+If an offer arrives past the N-th, it drops the stream and tells the model that more matched
 and that a narrower query shows them.
+If the stream ends first, it waits on the future to tell a complete answer from a failure.
 `list-offers` itself has no cap.
 
 ### 2.9 Every root is finite
@@ -326,7 +328,7 @@ A stream that ends with the future resolving `ok` carried every match.
 ### 6.1 One mechanism, two entry points
 
 The host's `find_tools` and `load_tools` (2.8) are an adapter over `tool-discovery` and `tool-loading`.
-Calling `find_tools` is `list-offers` read up to the adapter's cap (2.8).
+Calling `find_tools` is `list-offers` read up to the adapter's cap, plus one offer to tell whether more matched (2.8).
 Calling `load_tools` is `tool-loading.load` made on the agent's behalf,
 with the same catalog, admission, session approval, function budget and same-run behaviour.
 
