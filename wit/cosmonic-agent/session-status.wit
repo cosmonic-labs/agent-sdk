@@ -49,7 +49,7 @@ interface session-status {
 
     /// A session's state, when it began, and the run it concerns.
     @unstable(feature = session-status)
-    record status {
+    record session-status {
         state: session-state,
         /// When the session entered this state, in milliseconds since the
         /// Unix epoch. For `needs-input`, when the oldest held item was
@@ -73,11 +73,11 @@ interface session-status {
 
     /// The session's status now.
     @unstable(feature = session-status)
-    get: async func() -> result<status, status-error>;
+    get: async func() -> result<session-status, status-error>;
 
     /// The current status, then each change in order. A slow reader may miss
     /// a short-lived state but never sees an older status after a newer one.
     /// Drop the stream to stop watching; it ends when the session does.
     @unstable(feature = session-status)
-    watch: async func() -> result<stream<status>, status-error>;
+    watch: async func() -> result<stream<session-status>, status-error>;
 }
