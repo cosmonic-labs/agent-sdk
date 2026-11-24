@@ -82,13 +82,20 @@ interface tool-component-types {
         functions: option<list<string>>,
     }
 
+    /// An entry of the implementer's catalog, chosen by name.
+    @unstable(feature = agent-tool-loading)
+    record catalog-entry {
+        /// The entry's name, as `tool-discovery` lists it for tool
+        /// components.
+        name: string,
+    }
+
     /// Where a tool component comes from.
     @unstable(feature = agent-tool-loading)
     variant tool-component-source {
-        /// An entry of the implementer's catalog, by name, as
-        /// `tool-discovery` lists it. The implementer supplies its component
-        /// and grants.
-        catalog(string),
+        /// An entry of the implementer's catalog, as `tool-discovery` lists
+        /// it. The implementer supplies its component and grants.
+        catalog(catalog-entry),
         /// A tool component the caller describes.
         custom(tool-component-spec),
         /// A source not captured above.

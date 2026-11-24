@@ -30,7 +30,7 @@ interface tool-discovery {
     /// One catalog entry the caller may load or hand to a child.
     @unstable(feature = agent-tool-loading)
     record offer {
-        /// The catalog name, as `tool-component-source.catalog` takes it.
+        /// The catalog name, as `catalog-entry` takes it.
         name: string,
         /// What it does, from the catalog.
         summary: string,

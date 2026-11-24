@@ -63,7 +63,7 @@ let found = tool_discovery::list_offers(Some("archive".into())).await?;
 let offer = found.offers.first().ok_or(NoTool)?;
 // offer.imports lists what the component can call: here, the filesystem only.
 
-let done = tool_loading::load(ToolComponentSource::Catalog(offer.name.clone())).await?;
+let done = tool_loading::load(ToolComponentSource::Catalog(CatalogEntry { name: offer.name.clone() })).await?;
 match done.tool_component.state {
     ToolComponentState::Offered => {
         let tools = tools::list().await?; // list again: the new tools are there
@@ -85,14 +85,16 @@ and loading it again later needs no prompt, until the person removes it.
 ## Scenario 2: stay within the model's function budget
 
 ```rust
+fn catalog(name: &str) -> CatalogEntry { CatalogEntry { name: name.into() } }
+
 let set = tool_loading::list_loaded().await?;
 // set.offered_functions = 29, set.max_offered_functions = Some(32)
 
-let done = tool_loading::load(ToolComponentSource::Catalog("git".into())).await?;
+let done = tool_loading::load(ToolComponentSource::Catalog(catalog("git"))).await?;
 // done.set_aside = ["archive"]: the least recently called tool component this agent
 // loaded, set aside to make room. Its component and approval stay.
 
-tool_loading::load(ToolComponentSource::Catalog("archive".into())).await?; // back at once
+tool_loading::load(ToolComponentSource::Catalog(catalog("archive"))).await?; // back at once
 tool_loading::set_aside("git".into()).await?;                       // ready, still approved
 ```
 
@@ -107,7 +109,7 @@ let request = SpawnRequest {
         component: pinned("ghcr.io/acme/agents/reviewer:1.2.0", "sha256:9f…"),
         model_alias: "frontier".into(),
         grants: Grants::none(),
-        tool_components: vec![ToolComponentSource::Catalog("repo-fs-readonly".into())],
+        tool_components: vec![ToolComponentSource::Catalog(catalog("repo-fs-readonly"))],
     }),
     instructions: "Review the PR and list risks.".into(),
     output: OutputShape::ReplyAndStructured(schema_for::<Review>()),
@@ -170,7 +172,7 @@ another machine; if that machine is lost mid-run, its `last-run` becomes
 
 ```rust
 let reader = SpawnRequest {
-    agent: AgentSource::Catalog("quarantine-reader".into()), // imports only chat
+    agent: AgentSource::Catalog(catalog("quarantine-reader")), // imports only chat
     output: OutputShape::StructuredOnly(schema_for::<Triage>()), // no free strings
     max_output_bytes: 256,
     budget: Budget { max_runs: Some(1), max_steps: Some(1), ..Default::default() },
