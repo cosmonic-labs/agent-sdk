@@ -198,16 +198,17 @@ Everything else applies to both.
   deleted or recreated). Each of these stops the child's subtree as Stopping
   describes.
 - **Outputs.** Validate every outcome against its output shape and
-  `max-bytes`, whatever the shape; `output-rejected` never quotes the
+  `max-output-bytes`, whatever the shape; `output-rejected` never quotes the
   rejected output. With `structured-only`, return only the validated
   structured value and build `finish`, `model` and counts from the
   implementer's own records; the schema is not checked for free strings.
   Copy stored attachments across the boundary and re-issue them in the
-  receiving session; they count toward `max-bytes`. Enforce `max-runs` and
-  `max-steps` by the implementer's own count, never the child's.
+  receiving session; they count toward `max-output-bytes`. Enforce
+  `max-runs` and `max-steps` by the implementer's own count, never the
+  child's.
 - **Nothing a child chose reaches the grandparent.** For sessions below the
-  caller's direct children, return no name, no `status.run`, and a pending
-  state with the approval id only.
+  caller's direct children, return no name, no `session-status.run`, and a
+  pending state with the approval id only.
 - **Size caps.** Cap instructions, schemas and messages (operator settings),
   answering `invalid`.
 - **Handles.** Keep one backing object per caller and name, recording the

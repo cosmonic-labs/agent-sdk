@@ -95,7 +95,7 @@ tool_loading::load(ToolsetSource::Catalog("archive".into())).await?; // back at 
 tool_loading::set_aside("git".into()).await?;                       // ready, still approved
 ```
 
-## Scenario 3: delegate a review to a child
+## Scenario 3: delegate a review to children
 
 ```rust
 #[derive(Deserialize, JsonSchema)]
@@ -110,26 +110,35 @@ let request = SpawnRequest {
     }),
     instructions: "Review the PR and list risks.".into(),
     output: OutputShape::ReplyAndStructured(schema_for::<Review>()),
-    max_bytes: 16_384,
+    max_output_bytes: 16_384, // caps each run's encoded outcome
     budget: Budget { max_runs: Some(3), max_steps: Some(12), ..Default::default() },
     powers: AgentPowers::empty(),
 };
+let first = |msg: &str| Some(FirstRun { run: "review".into(), message: user(msg) });
 
-let reviewer = spawn::spawn("reviewer-pr-42", request,
-    Some(FirstRun { run: "auth".into(), message: user("Start with the auth changes.") })).await?;
-let review: Review = reviewer.wait("auth").await?.structured()?;
-reviewer.send("billing", user("Now the billing changes.")).await?;
-let more: Review = reviewer.wait("billing").await?.structured()?;
-Child::end(reviewer).await?;
+// Two reviewers start and work at once; neither waits on the other.
+let (auth, billing) = futures::join!(
+    spawn::spawn("reviewer-pr-42-auth", request.clone(), first("Review the auth changes.")),
+    spawn::spawn("reviewer-pr-42-billing", request, first("Review the billing changes.")),
+);
+let (auth, billing) = (auth?, billing?);
+let (a, b) = futures::join!(auth.wait("review"), billing.wait("review"));
+let (auth_review, billing_review): (Review, Review) = (a?.structured()?, b?.structured()?);
+futures::try_join!(ChildSession::end(auth), ChildSession::end(billing))?;
 ```
 
-Names are `[a-z0-9-]`. The name is the child's address and its idempotency
-key: spawning
-`reviewer-pr-42` again returns the same child, and sending run `auth` again
-returns the same run. If the request needs a grantor, the child exists in
-state `pending` and its first run waits as `blocked(admission)` until the
-grant. The parent sees contentless progress and the final outcome, never the
-reviewer's tool calls or conversation.
+A child takes one run at a time, so work that should run in parallel goes to
+separate children.
+Names are `[a-z0-9-]`.
+The name is the child's address and its idempotency key:
+spawning `reviewer-pr-42-auth` again returns the same child,
+and sending run `review` to it again returns the same run.
+If the request needs a grantor, the child exists in state `pending`
+and its first run waits as `blocked(admission)` until the grant.
+`max-output-bytes` bounds what comes back from each run:
+an outcome larger than that fails `output-rejected`.
+The parent sees contentless progress and the final outcome,
+never a reviewer's tool calls or conversation.
 
 ## Scenario 4: collect children's results in a later run
 
@@ -162,7 +171,7 @@ another machine; if that machine is lost mid-run, its `last-run` becomes
 let reader = SpawnRequest {
     agent: AgentSource::Catalog("quarantine-reader".into()), // imports only chat
     output: OutputShape::StructuredOnly(schema_for::<Triage>()), // no free strings
-    max_bytes: 256,
+    max_output_bytes: 256,
     budget: Budget { max_runs: Some(1), max_steps: Some(1), ..Default::default() },
     ..base
 };
@@ -188,5 +197,5 @@ manipulated child can do and say; it does not stop it being manipulated.
 | [`spawn-types.wit`](../../spawn-types.wit) | Child state, runs, budgets |
 | [`lineage.wit`](../../lineage.wit) | `lineage` |
 | [`children.wit`](../../children.wit) | `children` |
-| [`spawn.wit`](../../spawn.wit) | `spawn` and the `child` resource |
+| [`spawn.wit`](../../spawn.wit) | `spawn` and the `child-session` resource |
 | [`world.wit`](../../world.wit) | The worlds above |

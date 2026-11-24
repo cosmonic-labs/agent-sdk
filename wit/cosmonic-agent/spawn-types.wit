@@ -3,8 +3,7 @@ package cosmonic:agent@0.4.4;
 /// Types shared by `lineage`, `children` and `spawn`. No functions:
 /// importing it grants nothing. Unstable behind `agent-spawn`, which also
 /// needs `agent-tool-loading`, `agent-run` and `session-status`, whose types
-/// these use. What an implementer must enforce is in
-/// `docs/spawn/CONFORMANCE.md`.
+/// these use.
 ///
 /// Sessions spawned from one root session form a tree. A child's reach
 /// never exceeds what its ancestors hold plus what a grantor approved for
@@ -28,13 +27,13 @@ interface spawn-types {
     @unstable(feature = agent-spawn)
     use run-types.{run-outcome, run-counts};
     @unstable(feature = agent-spawn)
-    use session-status.{status};
+    use session-status.{session-status};
     @unstable(feature = agent-spawn)
     use toolset-types.{pending-approval};
 
     /// A budget that can leave a session unable to take another run.
     @unstable(feature = agent-spawn)
-    variant budget-item {
+    variant session-budget-item {
         /// The session's `max-runs`.
         max-runs,
         /// Tokens, the session's or an ancestor's.
@@ -56,7 +55,7 @@ interface spawn-types {
         /// Its components could not start.
         start-failed(option<string>),
         /// A budget is spent, until an operator or person raises it.
-        exhausted(budget-item),
+        exhausted(session-budget-item),
         /// It no longer fits its ancestors' current reach or policy.
         revoked(option<string>),
         /// A reason not captured above.
@@ -71,8 +70,8 @@ interface spawn-types {
         /// empty.
         pending(pending-approval),
         /// Admitted, with its session status. Below the caller's direct
-        /// children, `status.run` is none.
-        live(status),
+        /// children, its `run` is none.
+        live(session-status),
         /// Admitted, but takes no more runs, for this reason.
         stopped(child-failure),
         /// Ended; the reason, when it was not an orderly end. A refused or
@@ -123,7 +122,7 @@ interface spawn-types {
 
     /// Spend the implementer metered for a session and its whole subtree.
     @unstable(feature = agent-spawn)
-    record usage-total {
+    record session-usage-total {
         /// Prompt plus completion tokens.
         tokens: u64,
         /// Runs accepted across the subtree.
@@ -139,7 +138,7 @@ interface spawn-types {
         /// only, since deeper names were written by a child.
         name: option<string>,
         /// Its session id, for drawing the tree.
-        session: string,
+        session-id: string,
         /// Its parent's session id.
         parent: string,
         /// 1 for a child of a root session.
@@ -152,7 +151,7 @@ interface spawn-types {
         /// An operator-named host group or zone it last ran in, for display.
         location: option<string>,
         /// What it and its subtree have spent.
-        usage: usage-total,
+        usage: session-usage-total,
     }
 
     /// What the caller has left. Its own figures are exact. Ancestor bounds
@@ -177,7 +176,7 @@ interface spawn-types {
 
     /// Why a run is paused.
     @unstable(feature = agent-spawn)
-    variant blocked-reason {
+    variant run-blocked-reason {
         /// The child is waiting on a grantor before its first run.
         admission,
         /// A tool call or load waits on a person or auditor.
@@ -196,7 +195,7 @@ interface spawn-types {
         /// Working.
         working,
         /// Paused.
-        blocked(blocked-reason),
+        blocked(run-blocked-reason),
         /// Cancellation was requested and the child has not stopped yet.
         cancelling,
         /// Cumulative counts for this run, metered by the implementer.
@@ -206,7 +205,7 @@ interface spawn-types {
     }
 
     /// A child's run: progress, then the outcome. Dropping either half only
-    /// stops listening; the run goes on, and `child.wait` collects it later.
+    /// stops listening; the run goes on, and `child-session.wait` collects it later.
     @unstable(feature = agent-spawn)
     type child-run = tuple<stream<progress>, future<result<run-outcome, child-run-error>>>;
 }

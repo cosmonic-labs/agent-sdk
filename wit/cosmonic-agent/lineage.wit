@@ -13,12 +13,13 @@ interface lineage {
     @unstable(feature = agent-spawn)
     record lineage {
         /// Its session id.
-        session: string,
+        session-id: string,
         /// Its parent's session id; none for a root.
-        parent: option<string>,
+        parent-session-id: option<string>,
         /// 0 for a root.
-        depth: u32,
-        /// What it has left.
+        session-depth: u32,
+        /// The tokens, time and runs it has left under its own budget, and
+        /// the tokens and time its tightest ancestor has left.
         remaining: remaining-budget,
     }
 

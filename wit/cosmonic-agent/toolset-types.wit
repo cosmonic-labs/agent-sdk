@@ -2,8 +2,7 @@ package cosmonic:agent@0.4.4;
 
 /// Types for describing a component's reach and the toolsets an agent may
 /// load or hand to a child. No functions: importing it grants nothing.
-/// Unstable behind `agent-tool-loading`. What an implementer must enforce is
-/// in `docs/spawn/CONFORMANCE.md`.
+/// Unstable behind `agent-tool-loading`.
 ///
 /// Reach is what a component can actually touch: its grants, limited to the
 /// interfaces it imports. A grant for an interface the component does not

@@ -82,7 +82,7 @@ and gap flag are gone.
 name, scoped to the spawning component and session, is the child's durable
 address and its idempotency key: spawning a name that exists returns that
 child (or `name-taken` if the request differs), and run names do the same
-for `send`. A `child` resource is a reference for acting on it; dropping it
+for `send`. A `child-session` resource is a reference for acting on it; dropping it
 releases the reference only, `end` consumes it, and `get-child` finds the
 child again from any later run or machine. Records (`child-info`) serve
 listing, so reads are batched rather than one call per field. Earlier drafts

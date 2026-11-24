@@ -120,20 +120,27 @@ A host translates typed tools like this:
 
 ### Discovery and loading
 
-An agent can find and add tools during a session. Most harnesses need do
-nothing: the host offers two tools of its own, `find_tools` and `load_tools`,
-the model calls them, and new tools appear in the next `tools.list` (so list
-again before each model call). A harness that manages tools in code
-(preloading, telling offered from ready, setting aside, waiting until a tool
-is callable in the same run) imports `tool-discovery` and `tool-loading`
-(unstable behind `agent-tool-loading`). Both are one mechanism: the host's
-tools are an adapter over the interfaces, with the same catalog, approvals
-and function budget. `lineage`, `children` and `spawn` (unstable behind `agent-spawn`) let an
-agent start named child agent sessions, possibly on other machines, see the
-tree below it, and read its remaining budget; a child's reach never exceeds
-its ancestors'. See [docs/spawn](docs/spawn/README.md), its
-[rationale](docs/spawn/RATIONALE.md) and
-[conformance](docs/spawn/CONFORMANCE.md) requirements.
+An agent can find and add tools during a session.
+Most harnesses need do nothing:
+the host offers two tools of its own, `find_tools` and `load_tools`,
+the model calls them,
+and new tools appear in the next `tools.list`
+(so list again before each model call).
+
+A harness that manages tools in code imports `tool-discovery` and `tool-loading`
+(unstable behind `agent-tool-loading`).
+That covers preloading, telling offered from ready, setting aside,
+and waiting until a tool is callable in the same run.
+Both are one mechanism:
+the host's tools are an adapter over the interfaces,
+with the same catalog, approvals and function budget.
+
+`lineage`, `children` and `spawn` (unstable behind `agent-spawn`)
+let an agent start named child agent sessions, possibly on other machines,
+see the tree below it, and read its remaining budget.
+A child's reach never exceeds its ancestors'.
+See [docs/spawn](docs/spawn/README.md), its [rationale](docs/spawn/RATIONALE.md)
+and [conformance](docs/spawn/CONFORMANCE.md) requirements.
 
 ## Session status
 

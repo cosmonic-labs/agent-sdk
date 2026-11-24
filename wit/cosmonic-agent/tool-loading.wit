@@ -90,7 +90,7 @@ interface tool-loading {
         other(option<string>),
     }
 
-    /// Why a load added nothing.
+    /// Why a load failed
     @unstable(feature = agent-tool-loading)
     variant load-error {
         /// Loading is not enabled for this caller. Permanent.

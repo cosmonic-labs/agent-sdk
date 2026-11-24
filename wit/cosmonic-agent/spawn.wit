@@ -8,10 +8,10 @@ package cosmonic:agent@0.4.4;
 /// `runnable-agent`, in its own workload, with its own conversation),
 /// inheriting nothing. It may run on another machine and outlive the
 /// caller's run: the caller names it, and the name, scoped to the caller's
-/// own component and session, is its durable address. A `child` handle is a
-/// reference for acting on it; dropping the handle releases the reference
-/// and the child lives on, and `get-child` finds it again from any later
-/// run.
+/// own component and session, is its durable address. A `child-session`
+/// handle is a reference for acting on it; dropping the handle releases the
+/// reference and the child lives on, and `get-child` finds it again from any
+/// later run.
 ///
 /// Names are idempotency keys and are never reused: a child's name within
 /// the caller's session, and a run's name within its child, stay taken after
@@ -133,7 +133,7 @@ interface spawn {
         /// What comes back.
         output: output-shape,
         /// Ceiling on one run's encoded outcome, in bytes.
-        max-bytes: u32,
+        max-output-bytes: u32,
         /// What it may spend.
         budget: budget,
         /// Powers it receives.
@@ -241,7 +241,7 @@ interface spawn {
     /// A reference to one of the caller's own children. Dropping it releases
     /// the reference only.
     @unstable(feature = agent-spawn)
-    resource child {
+    resource child-session {
         /// The name the caller gave it.
         @unstable(feature = agent-spawn)
         get-name: async func() -> string;
@@ -270,7 +270,7 @@ interface spawn {
         /// even if this call fails; ending again (through `get-child`) is
         /// harmless and reports when it is done.
         @unstable(feature = agent-spawn)
-        end: static async func(this: child) -> result<_, store-error>;
+        end: static async func(this: child-session) -> result<_, store-error>;
     }
 
     /// Create the caller's child named `name` and its first run, together or
@@ -282,9 +282,9 @@ interface spawn {
         name: string,
         request: spawn-request,
         first: option<first-run>,
-    ) -> result<child, spawn-error>;
+    ) -> result<child-session, spawn-error>;
 
     /// The caller's child named `name`, ended or not.
     @unstable(feature = agent-spawn)
-    get-child: async func(name: string) -> result<child, lookup-error>;
+    get-child: async func(name: string) -> result<child-session, lookup-error>;
 }
