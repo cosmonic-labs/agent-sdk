@@ -47,7 +47,7 @@ Everything else applies to both.
   list from the pinned binary before running anything. Refuse (`invalid`) a
   component that imports a capability its baseline and grants do not cover.
   The baseline is the role's world: `agent` for an agent component (plus
-  the client worlds of the powers it was given), and for a tool component only
+  the imports of the powers it was given), and for a tool component only
   function-less type interfaces. A grant for an interface the component does
   not import is dropped before the ceiling check and before asking anyone,
   and leaves the admitted snapshot, so it is never applied. An import the

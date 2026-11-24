@@ -150,8 +150,7 @@ coarse ancestor figures are the cheaper fix for now.
   calling workload, component and session), and a guest component placed in
   front of the implementer would become the caller and its grants the
   ceiling, so policy layers are installed by the host rather than composed
-  as guests. Provider worlds still exist, so a test double can implement each
-  interface. Comments speak of the implementer and the caller, not the host.
+  as guests. A test double can still export any of these interfaces. Comments speak of the implementer and the caller, not the host.
 - **Shared types interfaces** are named `<topic>-types`, as elsewhere in the
   package, since one package cannot hold several interfaces named `types`.
 - **`spawn` is a verb.** It follows `run` in this package and `wasi:cli/run`.

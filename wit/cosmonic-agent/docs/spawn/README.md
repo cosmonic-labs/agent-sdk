@@ -28,30 +28,31 @@ A **tool component** is one component with its own grants that offers tools. Its
 binary before it runs. A **child** is an agent session of its own, in its own
 workload, inheriting nothing.
 
-## Worlds
+## Imports
 
-| World | Imports | Exports |
+These interfaces come with no worlds of their own:
+a component imports the ones it needs into its own world,
+so the import list shows exactly which powers it holds.
+
+| Component | Usually imports | Exports |
 | --- | --- | --- |
-| `tool-discovery-client` | `tool-discovery` | |
-| `tool-loading-client` | `tool-loading` | |
-| `lineage-client` | `lineage` | |
-| `children-client` | `children` | |
-| `spawn-client` | `spawn` | |
-| `spawning-agent` | `runnable-agent` and all of the above | `run` |
-| `tool-discovery-provider` | | `tool-discovery` |
-| `tool-loading-provider` | | `tool-loading`, `tools` |
-| `spawn-provider` | | `lineage`, `children`, `spawn` |
+| An agent that finds and loads its own tools | `tool-discovery`, `tool-loading` | `run` |
+| An agent that delegates to children | `spawn`, `children`, `lineage` | `run` |
+| A spawned child | `lineage`, and the powers its parent gave it | `run` |
+| A component that watches a subtree without driving it | `children` | |
+| An implementer or a test double | | the interfaces it serves, and `tools` with `tool-loading` |
 
-An agent composes the powers it needs:
+An agent builds on `runnable-agent` and adds the powers it needs:
 
 ```wit
 package acme:coder@1.0.0;
 
 world coder {
     include cosmonic:agent/runnable-agent@0.4.4;
-    include cosmonic:agent/tool-loading-client@0.4.4;
-    include cosmonic:agent/lineage-client@0.4.4;
-    include cosmonic:agent/spawn-client@0.4.4;
+
+    import cosmonic:agent/tool-loading@0.4.4;
+    import cosmonic:agent/lineage@0.4.4;
+    import cosmonic:agent/spawn@0.4.4;
 }
 ```
 
@@ -198,4 +199,3 @@ manipulated child can do and say; it does not stop it being manipulated.
 | [`lineage.wit`](../../lineage.wit) | `lineage` |
 | [`children.wit`](../../children.wit) | `children` |
 | [`spawn.wit`](../../spawn.wit) | `spawn` and the `child-session` resource |
-| [`world.wit`](../../world.wit) | The worlds above |
