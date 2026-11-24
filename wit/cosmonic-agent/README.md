@@ -127,36 +127,53 @@ a tool added mid-run arrives on the agent's next run. Nothing in the WIT
 changes for discovery: it is ordinary tool calls, and new tools appear in the
 next `tools.list`.
 
-## Session states
+## Session status
 
-`session-status` (0.4.3, unstable behind the `session-status` feature) names where a session stands, so every host reports
-it the same way: a desktop app's session list, a cluster's session API, and
-a component that drives an agent.
+`session-status` (0.4.3, unstable behind the `session-status` feature, which
+also needs `agent-run`) reports where a session stands, so every host reports
+it the same way: a desktop app's session list, a cluster's session API, and a
+component that drives an agent. It reports three facts, each independent of
+the others, so every combination is valid:
+
+| Fact | What it says |
+| --- | --- |
+| `activity` | What is in progress now: `idle`, `running` with the run's id, or `compacting` when the driver asked for a compaction. A run waiting on a person is still `running`. |
+| `needs-input` | Set while the host holds something for a person: a tool call or outbound request waiting to be allowed, a tool waiting to be added, a change waiting for review. It can be set with or without a run in progress. |
+| `last-run` | The most recent run that ended, and how: `replied` with its `finish`, `failed`, `interrupted` (the host stopped or restarted before the run recorded a result), or `cancelled`. It stays set while the next run is in progress. |
+
+### The state to show
+
+A badge or a session list shows one state. A caller derives it from the three
+facts by taking the first row that applies:
 
 | State | When |
 | --- | --- |
-| `needs-input` | The host holds something for a person: a tool call or outbound request waiting to be allowed, a tool waiting to be added, a change waiting for review. |
-| `working` | A run or a compaction is in progress, and nothing is held for a person. |
-| `failed` | Nothing is in progress, and the last run ended with an error other than cancellation, or was cut off. |
-| `done` | Nothing is in progress, and the last run ended with a reply. |
-| `idle` | Nothing is in progress, and no run has ended since the session began or was cleared, or the last run was cancelled. |
+| needs input | `needs-input` is set. |
+| working | `activity` is not `idle`. |
+| failed | `last-run` ended `failed` or `interrupted`. |
+| done | `last-run` ended `replied`. |
+| idle | Otherwise: no run has ended since the session began or was cleared, the last run was cancelled, or it ended in a way this version does not name. |
 
-The host owns the state and derives it from its own facts: the run it is
-driving, the approvals it holds at its gates, and the outcome it received.
-An agent can't set it, and a model can't either. `needs-input` comes from the
-host's approval state, never from a reply that asks a question: a run that
-finishes `input-required` is `done`, and the person's answer starts the next
-run.
+The host owns all three facts and derives them from its own: the run or
+compaction it is driving, the approvals it holds at its gates, and the outcome
+it received or the result the journal records. An agent can't set `activity` or `needs-input`, and a model can't
+either. The one value the agent reports is the `finish` inside `replied`: a
+caller routes on it, to tell a finished run from one stopped at a limit or one
+that asked a question, and never allows anything on it. `needs-input` comes
+from the host's gates, never from a reply that asks a question: a run that
+finishes `input-required` ends `replied`, and the person's answer starts the
+next run.
 
-The set of states will grow. Until a minor release names a new state, a
-host reports it as `other` with its name, and a caller treats it as unknown.
+The activities and the run endings will grow. Until a minor release names a
+new one, a host reports it as `other` with its name, and a caller treats it as
+unknown. An unknown value on one fact leaves the other two readable.
 
-A component reads the state with `get` and follows it with `watch`. It
+A component reads the status with `get` and follows it with `watch`. It
 needs only the `session-status` import, so watching a session never grants
 driving it. Like `session` and `run`, it never names a session:
 the host binds the one it reports. It stays unstable until more
 than one host adopts it, so its shape can still change, for example to let
-`needs-input` say what is held.
+a hold say what is held.
 
 ## Versioning
 
@@ -170,5 +187,5 @@ hosts and agents adopt it.
   `@since` for the new items. New interfaces, and new functions on interfaces
   the host serves, are additive.
 - Published artifacts never change. Interfaces that may still move are behind
-  `@unstable` features (`agent-run` today).
+  `@unstable` features (`agent-run` and `session-status` today).
 - Versions never contain "draft".

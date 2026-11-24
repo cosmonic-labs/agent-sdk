@@ -1,73 +1,139 @@
 package cosmonic:agent@0.4.3;
 
-/// Where a session stands, as its host reports it.
+/// Where a session stands, as its host reports it: three facts that hold
+/// independently, so every combination is valid and none hides another.
 ///
-/// The host owns the state and derives it only from facts it can vouch for:
-/// whether a run or a compaction is in progress, whether its own gates hold
-/// something for a person, and how the last run ended. Nothing an agent
-/// writes or a model says sets it. A run that finishes `input-required` is
-/// `done`, not `needs-input`; the person's answer starts the next run.
+/// - `activity`: what is in progress now.
+/// - `needs-input`: whether the host holds something for a person.
+/// - `last-run`: how the most recent run that ended did so.
+///
+/// The host owns all three and derives them from facts it can vouch for:
+/// the run or compaction it is driving, what its own gates hold, and how
+/// the last run ended, by the outcome it received or, after a restart, the
+/// result recorded in the journal. Nothing an agent writes or a
+/// model says sets `activity` or `needs-input`. The one agent-reported
+/// value is the `finish` inside `run-end.replied`, which a caller may route
+/// on and must never allow anything on. A run that finishes
+/// `input-required` does not set `needs-input`; the person's answer starts
+/// the next run.
+///
+/// One state to show. A caller that wants a single value for a badge or a
+/// list takes the first that applies:
+///
+/// 1. needs input, when `needs-input` is set;
+/// 2. working, when `activity` is not `idle`;
+/// 3. failed, when `last-run` ended `failed` or `interrupted`;
+/// 4. done, when `last-run` ended `replied`;
+/// 5. idle, otherwise, including after a cancelled run or an ending this
+///    version does not name.
+///
+/// A value it does not know on one fact leaves the other two readable.
 ///
 /// As with `session` and `run`, the host binds the session and the caller
 /// never names one. A host gives this import to a component that drives or
 /// watches an agent, such as an adapter serving a status endpoint, bound to
 /// that agent's session.
 ///
-/// Adding a case to `session-state` is a breaking change, so a host reports
-/// a state this version does not name as `other` with its name until a minor
-/// release adds it. A caller treats a state it does not know as unknown: it
-/// may show the name but acts on nothing.
+/// Adding a case to a variant here is a breaking change, so a host reports
+/// an activity or a run ending this version does not name as `other` with
+/// its kebab-case name until a minor release adds it. A caller may show the
+/// name but acts on nothing.
 ///
-/// Unstable: the shape may change before it is marked `@since`.
+/// Unstable behind `session-status`, which also needs `agent-run`, whose
+/// `finish` it uses. The shape may change before it is marked `@since`.
 @unstable(feature = session-status)
 interface session-status {
-    /// One session's state. Exactly one holds at a time: the first case, in
-    /// the order listed, that applies. A run waiting on a person is
-    /// `needs-input`, not `working`.
     @unstable(feature = session-status)
-    variant session-state {
-        /// The host holds something at one of its gates for a person, such as
-        /// a tool call or outbound request awaiting approval, a tool awaiting
-        /// addition, or a change awaiting review. Applies whether or not a run
-        /// is in progress.
-        needs-input,
-        /// A run or a compaction is in progress.
-        working,
-        /// The last run ended with an error other than `cancelled`, or was cut
-        /// off because the host stopped or restarted. A cancelled run leaves
-        /// the session `idle`.
-        failed,
-        /// The last run ended with a reply, whatever its finish (`done`,
-        /// `input-required`, a limit, `refusal` or `content-filter`).
-        done,
-        /// No run has ended since the session began or was cleared, or the
-        /// last run was cancelled.
+    use run-types.{finish};
+
+    /// What is in progress in the session now. Says nothing about whether a
+    /// person is needed or how earlier runs ended.
+    @unstable(feature = session-status)
+    variant activity {
+        /// Nothing is in progress: no run and no compaction.
         idle,
-        /// A state this version does not name, given by its kebab-case name.
+        /// A run is in progress, with the `run-id` its driver gave it, or
+        /// `none` when the host withholds the id from this caller. A run that
+        /// waits on a person is still `running`, and so is a cancelled run
+        /// that has not yet stopped, as `run` stays `busy` until it has.
+        running(option<string>),
+        /// A compaction the driver asked for through `compact` is in
+        /// progress. One the agent starts during a run is part of `running`.
+        compacting,
+        /// An activity this version does not name, by its kebab-case name.
         other(string),
     }
 
-    /// A session's state, when it began, and the run it concerns.
+    /// Something the host holds at one of its gates for a person, such as a
+    /// tool call or outbound request awaiting approval, a tool awaiting
+    /// addition, or a change awaiting review.
     @unstable(feature = session-status)
-    record session-status {
-        state: session-state,
-        /// When the session entered this state, in milliseconds since the
-        /// Unix epoch. For `needs-input`, when the oldest held item was
-        /// raised. `none` when the host does not know, such as a session that
-        /// has never run.
+    record hold {
+        /// When the oldest item still held was raised, in milliseconds
+        /// since the Unix epoch. `none` when the host does not know.
         since-ms: option<u64>,
-        /// The `run-id` its driver gave the run this state concerns: the run
-        /// in progress for `working` and `needs-input`, the last run for
-        /// `done` and `failed`. `none` otherwise, including during a
-        /// compaction, which may reuse a run's id.
-        run: option<string>,
     }
 
-    /// Why the host could not report the state.
+    /// How a run ended.
+    @unstable(feature = session-status)
+    variant run-end {
+        /// With a `run-outcome`, carrying the finish the agent reported for
+        /// it. Agent-reported: a caller routes on it and never allows
+        /// anything on it, and treats the text in `finish.other` as the
+        /// agent's own. A cancelled run whose outcome was already recorded
+        /// ends here too.
+        replied(finish),
+        /// With a `run-error` other than `cancelled`.
+        failed,
+        /// Cut off because the host stopped or restarted before the run
+        /// recorded a result. A run whose result is in the journal ended as
+        /// that result says.
+        interrupted,
+        /// With `run-error.cancelled`.
+        cancelled,
+        /// An ending this version does not name, by its kebab-case name.
+        other(string),
+    }
+
+    /// A run that has ended.
+    @unstable(feature = session-status)
+    record ended-run {
+        /// The `run-id` its driver gave it. `none` when the host withholds
+        /// the id from this caller.
+        run: option<string>,
+        /// How it ended.
+        end: run-end,
+        /// When it ended, in milliseconds since the Unix epoch. `none` when
+        /// the host does not know.
+        ended-ms: option<u64>,
+    }
+
+    /// A session's status: three independent facts.
+    @unstable(feature = session-status)
+    record session-status {
+        /// What is in progress now.
+        activity: activity,
+        /// When `activity` took its current value, in milliseconds since
+        /// the Unix epoch. `none` when the host does not know, such as a
+        /// session that has never run.
+        activity-since-ms: option<u64>,
+        /// Set while the host holds something for a person, whether or not
+        /// a run is in progress. Time held during a run counts toward that
+        /// run's `run-options.max-duration`.
+        needs-input: option<hold>,
+        /// The most recent run that ended. Stays set while a later run is
+        /// in progress, and changes only when a run ends or the session is
+        /// cleared, which resets it to `none`. `none` when no run has ended
+        /// since the session began or was cleared.
+        last-run: option<ended-run>,
+    }
+
+    /// Why the host could not report the status.
     @unstable(feature = session-status)
     variant status-error {
         /// The host could not serve the call; the detail is for logs.
         unavailable(string),
+        /// A failure not captured above. Diagnostic detail; never parse it.
         other(string),
     }
 
@@ -75,9 +141,10 @@ interface session-status {
     @unstable(feature = session-status)
     get: async func() -> result<session-status, status-error>;
 
-    /// The current status, then each change in order. A slow reader may miss
-    /// a short-lived state but never sees an older status after a newer one.
-    /// Drop the stream to stop watching; it ends when the session does.
+    /// The current status, then each change to any of its facts, in order.
+    /// A slow reader may miss a short-lived value but never sees an older
+    /// status after a newer one. Drop the stream to stop watching; it ends
+    /// when the session does.
     @unstable(feature = session-status)
     watch: async func() -> result<stream<session-status>, status-error>;
 }
