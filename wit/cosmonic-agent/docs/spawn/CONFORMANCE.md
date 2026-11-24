@@ -343,8 +343,8 @@ For implementers that place sessions across machines.
 - **Function budget.** From the model binding (`max-offered-functions`),
   which the manifest may only lower; the smallest among the caller's model
   aliases. Set aside the least recently called tool component the caller loaded
-  (never called first, then oldest), never a pinned one or one loaded or
-  called within the residency window. Unbind only at the component cap, only
+  (never called first, then oldest), only one with origin `agent-loaded`,
+  and never one loaded or called within the residency window. Unbind only at the component cap, only
   set-aside tool components with no call in flight.
 - **Aliases** are fixed for the session and never reused for another
   tool component's tool. A call to a set-aside tool component's alias answers

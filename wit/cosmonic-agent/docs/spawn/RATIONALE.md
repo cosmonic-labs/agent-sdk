@@ -74,7 +74,7 @@ rule.
 **State on the child, not a notice queue.** A child runs one run at a time,
 started only by its parent or a person, so what a parent needs at the start
 of its next run is the current state of each child's last run, not a stream
-of events delivered once. `child-info.last-run` carries it; `watch-children`
+of events delivered once. `session-info.last-run` carries it; `watch-children`
 covers the in-run case. The read-and-acknowledge protocol, sequence numbers
 and gap flag are gone.
 
@@ -84,7 +84,7 @@ address and its idempotency key: spawning a name that exists returns that
 child (or `name-taken` if the request differs), and run names do the same
 for `send`. A `child-session` resource is a reference for acting on it; dropping it
 releases the reference only, `end` consumes it, and `get-child` finds the
-child again from any later run or machine. Records (`child-info`) serve
+child again from any later run or machine. Records (`session-info`) serve
 listing, so reads are batched rather than one call per field. Earlier drafts
 used host-minted ids with separate idempotency keys and "an id authorizes
 nothing" rules; a name the caller chose plus a handle leaves nothing to

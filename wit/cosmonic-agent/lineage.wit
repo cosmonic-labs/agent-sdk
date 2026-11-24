@@ -7,7 +7,7 @@ interface lineage {
     @unstable(feature = agent-spawn)
     use tool-component-types.{store-error};
     @unstable(feature = agent-spawn)
-    use spawn-types.{remaining-budget};
+    use spawn-types.{remaining-spawn-budget};
 
     /// The caller's place in the tree.
     @unstable(feature = agent-spawn)
@@ -20,7 +20,7 @@ interface lineage {
         session-depth: u32,
         /// The tokens, time and runs it has left under its own budget, and
         /// the tokens and time its tightest ancestor has left.
-        remaining: remaining-budget,
+        remaining: remaining-spawn-budget,
     }
 
     /// The caller's place and budget now.

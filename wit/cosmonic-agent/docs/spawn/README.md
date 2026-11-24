@@ -114,7 +114,7 @@ let request = SpawnRequest {
     instructions: "Review the PR and list risks.".into(),
     output: OutputShape::ReplyAndStructured(schema_for::<Review>()),
     max_output_bytes: 16_384, // caps each run's encoded outcome
-    budget: Budget { max_runs: Some(3), max_steps: Some(12), ..Default::default() },
+    budget: SpawnBudget { max_runs: Some(3), max_steps: Some(12), ..Default::default() },
     powers: AgentPowers::empty(),
 };
 let first = |msg: &str| Some(FirstRun { run: "review".into(), message: user(msg) });
@@ -175,7 +175,7 @@ let reader = SpawnRequest {
     agent: AgentSource::Catalog(catalog("quarantine-reader")), // imports only chat
     output: OutputShape::StructuredOnly(schema_for::<Triage>()), // no free strings
     max_output_bytes: 256,
-    budget: Budget { max_runs: Some(1), max_steps: Some(1), ..Default::default() },
+    budget: SpawnBudget { max_runs: Some(1), max_steps: Some(1), ..Default::default() },
     ..base
 };
 let child = spawn::spawn("triage-msg-881", reader,

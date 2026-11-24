@@ -23,8 +23,9 @@ package cosmonic:agent@0.4.4;
 ///
 /// Budget. The model's function budget (how many functions it is offered at
 /// once) comes from the model binding. When a load would exceed it, the
-/// implementer sets aside the least recently called tool component this
-/// caller loaded, never a pinned one, and says which.
+/// implementer sets aside the least recently called tool component the
+/// agent loaded, and says which. It never sets aside on its own a tool
+/// component the workload declared or a person added.
 @unstable(feature = agent-tool-loading)
 interface tool-loading {
     @unstable(feature = agent-tool-loading)
@@ -33,13 +34,17 @@ interface tool-loading {
     /// Who put a tool component in the session.
     @unstable(feature = agent-tool-loading)
     variant origin {
-        /// The workload's declaration. Pinned.
-        declared,
-        /// A person. Pinned.
-        person,
-        /// The caller or its model. May be set aside.
-        loaded,
-        /// An origin not captured above. Treat as pinned.
+        /// The workload declared it. The implementer never sets it aside on
+        /// its own to make room.
+        workload-declared,
+        /// A person added it. The implementer never sets it aside on its own
+        /// to make room.
+        person-added,
+        /// The caller or its model loaded it. Only these are set aside
+        /// automatically.
+        agent-loaded,
+        /// An origin not captured above. Treat it like `workload-declared`:
+        /// never set it aside automatically.
         other(option<string>),
     }
 
@@ -118,8 +123,9 @@ interface tool-loading {
         disabled,
         /// The caller holds no tool component of that name.
         unknown,
-        /// It is pinned (declared, or added by a person).
-        pinned,
+        /// The workload declared it or a person added it; only tool
+        /// components the agent loaded can be set aside.
+        not-agent-loaded,
         /// It is still loading.
         not-offered,
         /// Could not be served now.

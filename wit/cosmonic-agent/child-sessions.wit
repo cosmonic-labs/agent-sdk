@@ -8,7 +8,7 @@ package cosmonic:agent@0.4.4;
 @unstable(feature = agent-spawn)
 interface child-sessions {
     @unstable(feature = agent-spawn)
-    use spawn-types.{child-info};
+    use spawn-types.{session-info};
 
     /// Which sessions a listing covers.
     @unstable(feature = agent-spawn)
@@ -22,12 +22,12 @@ interface child-sessions {
     @unstable(feature = agent-spawn)
     variant child-event {
         /// A session as it stands when the watch starts. These come first.
-        existing(child-info),
+        existing(session-info),
         /// The snapshot is complete.
         synced,
         /// A session appeared or changed. Usage-only changes are coalesced
         /// to at most one per session per second.
-        changed(child-info),
+        changed(session-info),
         /// A session left the listing, by session id.
         removed(string),
         /// An event not captured above. Safe to ignore.
@@ -52,7 +52,7 @@ interface child-sessions {
     /// whole subtree, each session after its parent. Ended children stay
     /// listed for a while.
     @unstable(feature = agent-spawn)
-    list-children: async func(query: child-query) -> result<list<child-info>, child-sessions-error>;
+    list-children: async func(query: child-query) -> result<list<session-info>, child-sessions-error>;
 
     /// The same listing, then each change. A slow reader may miss an
     /// intermediate change but always gets each session's latest record.

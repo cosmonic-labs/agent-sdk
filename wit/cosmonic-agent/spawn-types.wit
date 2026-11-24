@@ -133,7 +133,7 @@ interface spawn-types {
 
     /// One session in the caller's subtree.
     @unstable(feature = agent-spawn)
-    record child-info {
+    record session-info {
         /// The name the caller gave it; set for the caller's direct children
         /// only, since deeper names were written by a child.
         name: option<string>,
@@ -159,7 +159,7 @@ interface spawn-types {
     /// refreshed at most once a minute) so they do not reveal what other
     /// subtrees spend.
     @unstable(feature = agent-spawn)
-    record remaining-budget {
+    record remaining-spawn-budget {
         /// Tokens left under its own budget; none if it sets no limit.
         tokens: option<u64>,
         /// Time left under its own limit, on that limit's clock (since
@@ -191,7 +191,7 @@ interface spawn-types {
 
     /// Contentless progress, coalesced by the implementer.
     @unstable(feature = agent-spawn)
-    variant progress {
+    variant run-progress {
         /// Working.
         working,
         /// Paused.
@@ -204,9 +204,14 @@ interface spawn-types {
         other(option<string>),
     }
 
-    /// A child's run: progress, then the outcome. Dropping either half only
-    /// stops listening; the run goes on, and `child-session.wait` collects it
+    /// A child's run: progress, then the outcome. Dropping either only stops
+    /// listening; the run goes on, and `child-session.wait` collects it
     /// later.
     @unstable(feature = agent-spawn)
-    type child-run = tuple<stream<progress>, future<result<run-outcome, child-run-error>>>;
+    record child-run {
+        /// Contentless progress until the run ends.
+        progress: stream<run-progress>,
+        /// The outcome, once the run ends.
+        outcome: future<result<run-outcome, child-run-error>>,
+    }
 }

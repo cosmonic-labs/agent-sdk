@@ -50,7 +50,7 @@ interface spawn {
     @unstable(feature = agent-spawn)
     use tool-component-types.{catalog-entry, component-ref, grants, tool-component-source, store-error};
     @unstable(feature = agent-spawn)
-    use spawn-types.{child-info, child-run, child-run-error};
+    use spawn-types.{session-info, child-run, child-run-error};
 
     /// An agent described by the caller.
     @unstable(feature = agent-spawn)
@@ -93,10 +93,16 @@ interface spawn {
         other(option<string>),
     }
 
-    /// What a child may spend. None takes the implementer's default. A
-    /// subtree's spend counts against every ancestor too.
+    /// What a child may spend over its whole life, across all its runs and
+    /// its subtree. None takes the implementer's default. A subtree's spend
+    /// counts against every ancestor too.
+    ///
+    /// This is the parent's cap. `run-options` is different: its limits
+    /// cover one run, and the driver of that run sets them. The implementer
+    /// drives a child's runs within this budget, so a run's `max-steps`
+    /// never exceeds the budget's.
     @unstable(feature = agent-spawn)
-    record budget {
+    record spawn-budget {
         /// Runs it may take.
         max-runs: option<u32>,
         /// Model calls per run.
@@ -136,7 +142,7 @@ interface spawn {
         /// Ceiling on one run's encoded outcome, in bytes.
         max-output-bytes: u32,
         /// What it may spend.
-        budget: budget,
+        budget: spawn-budget,
         /// Powers it receives.
         powers: agent-powers,
     }
@@ -249,7 +255,7 @@ interface spawn {
 
         /// How it stands now.
         @unstable(feature = agent-spawn)
-        get-info: async func() -> result<child-info, store-error>;
+        get-info: async func() -> result<session-info, store-error>;
 
         /// Start a run named `run`, or return that run if it exists with
         /// this message. Resolves when accepted.
