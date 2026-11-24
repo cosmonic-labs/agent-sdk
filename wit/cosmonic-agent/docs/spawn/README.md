@@ -167,8 +167,13 @@ Section numbers below refer to [CONFORMANCE.md](CONFORMANCE.md).
 Goal: discover a tool component, load it, and call its tools before the run ends.
 
 ```rust
-let found = tool_discovery::list_offers(Some("archive".into())).await?;
-let offer = found.offers.first().ok_or(NoTool)?;
+// Offers arrive on a stream, best match first.
+let (mut offers, done) = tool_discovery::list_offers(Some("archive".into())).await;
+let Some(offer) = offers.next().await else {
+    done.await?; // the stream ended empty: an error, or nothing matched
+    return Err(NoTool);
+};
+drop(offers); // the best match is enough; dropping the stream stops the listing
 // offer.imports lists what it can call: here, the filesystem only.
 
 let source = ToolComponentSource::Catalog(CatalogEntry { name: offer.name.clone() });
@@ -187,6 +192,8 @@ match done.tool_component.state {
 
 What happens:
 
+- The caller reads as many offers as it wants; nothing caps the listing but the caller.
+  An error before any offer, or midway, ends the stream and arrives on the future (5.3).
 - Within the caller's ceiling, a catalog tool component loads without asking
   and serves the run in progress (6.2, 3.16).
 - Beyond it, `load` returns `awaiting-approval` at once rather than waiting (4.2).

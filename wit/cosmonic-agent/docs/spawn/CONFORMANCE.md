@@ -23,7 +23,7 @@ may skip the mechanics but must not contradict what a caller observes.
 | --- | --- | --- |
 | The host | 1, 2 | Bind each workload to exactly one session for its whole life, put the session id in its bind configuration, and give every root a finite budget. |
 | Any of the interfaces | 1, 3, 4, 12 | Read reach from the pinned binary before running anything, keep a child within its ancestors' reach plus what a grantor approved for that child (7.1, 7.6), and re-check every approval against its snapshot when it is used. |
-| `tool-discovery` | 5 | Answer from the same catalog, ceiling and policy the loader admits against, and show each offer's import list. |
+| `tool-discovery` | 5, 2.8 | Answer from the same catalog, ceiling and policy the loader admits against, show each offer's import list, and report every failure on the future, never as a short stream. |
 | `tool-loading` | 6, 10.9 | Serve the run in progress or answer `next-run`, set aside only `agent-loaded` tool components, and keep aliases fixed for the session. |
 | `spawn` | 7, 8, 9, 10 | Accept a child and its first run in one atomic step, never reuse a name, stop a subtree behind a barrier, and, across machines, fence every run with a lease. |
 | `session-tree` | 11, 7.8, 7.15, 10.5 | List only sessions below the caller, return the same records as `spawn` with nothing a child chose below its direct children, cap open watches, and report the caller's own budget figures exactly and its ancestors' coarsely. |
@@ -98,6 +98,12 @@ the host offers the model-facing tools `find_tools` and `load_tools`,
 so a harness that never imports the interfaces still gets them.
 The names are reserved: no other tool may take them.
 They are an adapter over the interfaces (6.1).
+
+`find_tools` holds the cap on what the model sees, since the model chooses from one answer in one step.
+It reads offers from the `list-offers` stream up to a cap the host sets, then drops the stream.
+When one more offer was waiting, its answer tells the model that more matched
+and that a narrower query shows them.
+`list-offers` itself has no cap.
 
 ### 2.9 Every root is finite
 
@@ -298,11 +304,29 @@ and `find_tools` answers from `list-offers` (6.1).
 
 Each offer carries the import list read from its pinned binary (3.7).
 
+### 5.3 Streaming offers
+
+Send offers best match first, with no cap of the implementer's own,
+and produce them lazily where the catalog allows,
+so a large or remote catalog costs only what the caller reads.
+When the caller drops the stream, stop producing offers and resolve the future `ok`.
+Resolve the future only after the stream has ended or been dropped.
+
+Report every failure on the future, never as a stream that silently ends short:
+
+| Discovery fails | The caller sees |
+| --- | --- |
+| Before any offer (for example `disabled` or `denied`) | The stream ends with no offers, then the future resolves to the error. |
+| Midway | The stream ends after the offers already sent, then the future resolves to the error. Those offers stay valid, but they are not all the matches. |
+
+A stream that ends with the future resolving `ok` carried every match.
+
 ## 6. `tool-loading`
 
 ### 6.1 One mechanism, two entry points
 
 The host's `find_tools` and `load_tools` (2.8) are an adapter over `tool-discovery` and `tool-loading`.
+Calling `find_tools` is `list-offers` read up to the adapter's cap (2.8).
 Calling `load_tools` is `tool-loading.load` made on the agent's behalf,
 with the same catalog, admission, session approval, function budget and same-run behaviour.
 

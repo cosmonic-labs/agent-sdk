@@ -172,13 +172,22 @@ One function would need a variant result, which is clumsier to call.
 Both take a `child-query` record instead of a bare flag,
 so filters can be added later without breaking either.
 
-### 3.9 Discovery returns a list
+### 3.9 Discovery streams its offers
 
-`list-offers` returns a short ranked list with a hard cap,
-because it is what the model chooses from in one step.
-A stream would add an async protocol without letting the caller do anything sooner.
-If discovery ever covers a large or remote registry,
-a paged or streamed variant can be added beside it.
+`list-offers` returns a stream of offers, best match first,
+and a future that reports an error,
+the shape of `read-directory` in WASI 0.3's `wasi:filesystem`.
+The caller reads as many offers as it wants and drops the stream to stop.
+The cap on what a model sees lives in the host's `find_tools` adapter (CONFORMANCE 2.8).
+
+- **Callers differ.** A model chooses from one answer in one step, so it needs a cap.
+  Agent code that filters or ranks offers itself should not be cut off at a number chosen for a model.
+- **One shape for both.** The adapter reads the first few offers and says when more matched;
+  code reads on. Neither needs a page token or a `truncated` flag.
+- **A large or remote catalog can be produced lazily.**
+  The implementer computes only what the caller reads.
+- **Errors keep their place.** An error before any offer and an error midway both arrive on the future,
+  so a short stream is never mistaken for a complete one.
 
 ### 3.10 Implementer obligations live in a conformance document
 

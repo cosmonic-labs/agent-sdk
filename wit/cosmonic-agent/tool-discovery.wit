@@ -6,8 +6,8 @@ package cosmonic:agent@0.4.4;
 /// The implementer keeps the catalog and answers for this caller only,
 /// leaving out offers policy would never grant. Asking starts and loads
 /// nothing. The host's `find_tools` tool is an adapter over `list-offers`.
-/// Tool names and descriptions are written by
-/// tool component authors: treat them as untrusted input to a model.
+/// Tool names and descriptions are written by tool component authors: treat
+/// them as untrusted input to a model.
 @unstable(feature = agent-tool-loading)
 interface tool-discovery {
     @unstable(feature = agent-tool-loading)
@@ -46,15 +46,6 @@ interface tool-discovery {
         state: option<tool-component-state>,
     }
 
-    /// What `list-offers` found.
-    @unstable(feature = agent-tool-loading)
-    record offers {
-        /// Best match first.
-        offers: list<offer>,
-        /// True when matches were left out; narrow the query to see them.
-        truncated: bool,
-    }
-
     /// Why discovery failed.
     @unstable(feature = agent-tool-loading)
     variant discovery-error {
@@ -68,8 +59,17 @@ interface tool-discovery {
         other(option<string>),
     }
 
-    /// The catalog entries this caller may use. With `query`, only those
-    /// whose name, summary or tools match it, ignoring case.
+    /// The catalog entries this caller may use, best match first. With
+    /// `query`, only those whose name, summary or tools match it, ignoring
+    /// case.
+    ///
+    /// Read as many offers as needed and drop the stream to stop; the
+    /// listing has no cap of its own. The future resolves once the stream
+    /// has ended or been dropped, so read or drop the stream before waiting
+    /// on it. It is `ok` when every match was sent or the caller stopped
+    /// early, and an error when discovery failed. An error before any offer
+    /// ends the stream with nothing on it; an error midway ends it after the
+    /// offers already sent, which stay valid but are not all the matches.
     @unstable(feature = agent-tool-loading)
-    list-offers: async func(query: option<string>) -> result<offers, discovery-error>;
+    list-offers: async func(query: option<string>) -> tuple<stream<offer>, future<result<_, discovery-error>>>;
 }
