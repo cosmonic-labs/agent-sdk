@@ -24,8 +24,8 @@ package cosmonic:agent@0.4.4;
 /// Budget. The model's function budget (how many functions it is offered at
 /// once) comes from the model binding. When a load would exceed it, the
 /// implementer sets aside the least recently called tool component the
-/// agent loaded, and says which. It never sets aside on its own a tool
-/// component the workload declared or a person added.
+/// agent loaded, and says which. Tool components the workload declared or a
+/// person added are never set aside automatically.
 @unstable(feature = agent-tool-loading)
 interface tool-loading {
     @unstable(feature = agent-tool-loading)

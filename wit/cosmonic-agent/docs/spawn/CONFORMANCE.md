@@ -228,7 +228,7 @@ re-checked against the snapshot and current policy each time.
 ### 4.3 Withdrawing a pending load
 
 A pending load the caller sets aside is withdrawn,
-as a pending child is (7.3).
+as a pending child is (7.4).
 
 ### 4.4 Removal
 
