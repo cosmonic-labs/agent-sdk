@@ -20,7 +20,7 @@ powers, each its own import, so its world says exactly what it may do:
 | `tool-discovery` | ask which tool components are available |
 | `tool-loading` | load tool components into itself and set them aside |
 | `lineage` | read its place in a spawn tree and its remaining budget (every spawned child may) |
-| `children` | see the sessions below it |
+| `child-sessions` | see the sessions below it |
 | `spawn` | start child agent sessions and drive them |
 
 A **tool component** is one component with its own grants that offers tools. Its
@@ -37,9 +37,9 @@ so the import list shows exactly which powers it holds.
 | Component | Usually imports | Exports |
 | --- | --- | --- |
 | An agent that finds and loads its own tools | `tool-discovery`, `tool-loading` | `run` |
-| An agent that delegates to children | `spawn`, `children`, `lineage` | `run` |
+| An agent that delegates to children | `spawn`, `child-sessions`, `lineage` | `run` |
 | A spawned child | `lineage`, and the powers its parent gave it | `run` |
-| A component that watches a subtree without driving it | `children` | |
+| A component that watches a subtree without driving it | `child-sessions` | |
 | An implementer or a test double | | the interfaces it serves, and `tools` with `tool-loading` |
 
 An agent builds on `runnable-agent` and adds the powers it needs:
@@ -152,7 +152,7 @@ for topic in ["pricing", "competitors", "regulation"] {
 }
 
 // Run 2, maybe on another machine: where does each stand?
-for info in children::list_children(false).await? {
+for info in child_sessions::list_children(ChildQuery { descendants: false }).await? {
     if let Some((run, RunState::Done)) = &info.last_run {
         let child = spawn::get_child(info.name.as_deref().unwrap()).await?;
         let notes = child.wait(run).await?;
@@ -197,5 +197,5 @@ manipulated child can do and say; it does not stop it being manipulated.
 | [`tool-loading.wit`](../../tool-loading.wit) | `tool-loading` |
 | [`spawn-types.wit`](../../spawn-types.wit) | Child state, runs, budgets |
 | [`lineage.wit`](../../lineage.wit) | `lineage` |
-| [`children.wit`](../../children.wit) | `children` |
+| [`child-sessions.wit`](../../child-sessions.wit) | `child-sessions` |
 | [`spawn.wit`](../../spawn.wit) | `spawn` and the `child-session` resource |

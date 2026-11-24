@@ -135,7 +135,7 @@ Both are one mechanism:
 the host's tools are an adapter over the interfaces,
 with the same catalog, approvals and function budget.
 
-`lineage`, `children` and `spawn` (unstable behind `agent-spawn`)
+`lineage`, `child-sessions` and `spawn` (unstable behind `agent-spawn`)
 let an agent start named child agent sessions, possibly on other machines,
 see the tree below it, and read its remaining budget.
 A child's reach never exceeds its ancestors'.

@@ -6,11 +6,17 @@ package cosmonic:agent@0.4.4;
 /// Only children the caller's own component spawned are listed, and their
 /// descendants.
 @unstable(feature = agent-spawn)
-interface children {
-    @unstable(feature = agent-spawn)
-    use tool-component-types.{store-error};
+interface child-sessions {
     @unstable(feature = agent-spawn)
     use spawn-types.{child-info};
+
+    /// Which sessions a listing covers.
+    @unstable(feature = agent-spawn)
+    record child-query {
+        /// False lists the caller's direct children only; true lists its
+        /// whole subtree.
+        descendants: bool,
+    }
 
     /// A change in the caller's subtree.
     @unstable(feature = agent-spawn)
@@ -28,14 +34,28 @@ interface children {
         other(option<string>),
     }
 
+    /// Why a listing or watch failed.
+    @unstable(feature = agent-spawn)
+    variant child-sessions-error {
+        /// This power is not enabled for the caller. Permanent.
+        disabled,
+        /// Policy refused it.
+        denied(option<string>),
+        /// Not served now (the state could not be read, or a limit on open
+        /// watches was reached). Retry may succeed.
+        unavailable(string),
+        /// A failure not captured above.
+        other(option<string>),
+    }
+
     /// The caller's direct children, oldest first; with `descendants`, its
     /// whole subtree, each session after its parent. Ended children stay
     /// listed for a while.
     @unstable(feature = agent-spawn)
-    list-children: async func(descendants: bool) -> result<list<child-info>, store-error>;
+    list-children: async func(query: child-query) -> result<list<child-info>, child-sessions-error>;
 
     /// The same listing, then each change. A slow reader may miss an
     /// intermediate change but always gets each session's latest record.
     @unstable(feature = agent-spawn)
-    watch-children: async func(descendants: bool) -> result<stream<child-event>, store-error>;
+    watch-children: async func(query: child-query) -> result<stream<child-event>, child-sessions-error>;
 }

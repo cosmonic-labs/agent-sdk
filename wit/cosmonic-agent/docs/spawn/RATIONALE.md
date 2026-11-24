@@ -1,6 +1,6 @@
 # Spawn and tool loading: rationale
 
-Why `tool-discovery`, `tool-loading`, `lineage`, `children` and `spawn` look
+Why `tool-discovery`, `tool-loading`, `lineage`, `child-sessions` and `spawn` look
 the way they do, for people implementing them or reviewing the interfaces.
 The WIT comments say what a caller can rely on; [CONFORMANCE.md](CONFORMANCE.md)
 says what an implementer must do; [README.md](README.md) walks through
@@ -29,7 +29,7 @@ blocks prompt injection.
 | `tool-loading` | load tool components into itself and set them aside | `agent-tool-loading` |
 | `spawn-types` | (types only: child state, runs, budgets) | `agent-spawn` |
 | `lineage` | read its own place in the tree and its remaining budget | `agent-spawn` |
-| `children` | see the sessions below it | `agent-spawn` |
+| `child-sessions` | see the sessions below it | `agent-spawn` |
 | `spawn` | start child sessions and drive them | `agent-spawn` |
 
 Each interface grants one power, so a world's import list says what a
@@ -55,7 +55,7 @@ ask, so they are refused unless every higher ancestor holds it. Reading it
 the other way would let one approval of a child that holds `spawn` spread to
 a whole subtree nobody was asked about.
 
-**Interfaces split by grantable power.** Observing a subtree (`children`),
+**Interfaces split by grantable power.** Observing a subtree (`child-sessions`),
 reading one's own budget (`lineage`) and creating and driving children
 (`spawn`) are separate imports, so a leaf agent can read its remaining
 budget without being able to spawn, and an agent can be given `spawn`

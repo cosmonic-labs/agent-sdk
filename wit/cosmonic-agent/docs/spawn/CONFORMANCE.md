@@ -1,7 +1,7 @@
 # Spawn and tool loading: conformance
 
 What an implementer of `tool-discovery`, `tool-loading`, `lineage`,
-`children` and `spawn` must do. The WIT comments say what a caller can
+`child-sessions` and `spawn` must do. The WIT comments say what a caller can
 observe and rely on; this page says how an implementer keeps those promises.
 [RATIONALE.md](RATIONALE.md) says why. Everything is unstable.
 
@@ -183,7 +183,7 @@ Everything else applies to both.
   durable step, including their limit reservations. If either cannot be
   accepted, neither is. A retry compares both the request and the first
   run; any difference is `name-taken`.
-- **Powers.** A child that receives `spawn` also gets `children`. Every
+- **Powers.** A child that receives `spawn` also gets `child-sessions`. Every
   spawned child may import `lineage`.
 - **Authority by provenance.** For each of a child's grants and entries,
   record what it rested on: an ancestor's grant or entry, or a grantor's
@@ -440,7 +440,7 @@ Each case names the property it checks.
     unaffected and reachable by name. Pass a handle to another component: it
     addresses nothing.
 16. **No child-chosen text upward.** A child with `spawn` names its own runs
-    and children with arbitrary text: the grandparent's `list-children(true)`
+    and children with arbitrary text: the grandparent's `list-children` with `descendants`
     shows no names, no `status.run`, and pending states with ids only.
 17. **Disabled powers.** On a host that shares workloads between sessions,
     every function answers `disabled`.

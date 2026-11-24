@@ -113,8 +113,9 @@ interface spawn {
     /// Every child may read its own `lineage`.
     @unstable(feature = agent-spawn)
     flags agent-powers {
-        /// Spawn and drive children of its own, and see them (`children`).
-        /// A requested power the caller lacks is `invalid`.
+        /// Spawn and drive children of its own, and see them
+        /// (`child-sessions`). A requested power the caller lacks is
+        /// `invalid`.
         spawn,
         /// Ask which tool components are available.
         tool-discovery,

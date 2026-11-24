@@ -1,6 +1,6 @@
 package cosmonic:agent@0.4.4;
 
-/// Types shared by `lineage`, `children` and `spawn`. No functions:
+/// Types shared by `lineage`, `child-sessions` and `spawn`. No functions:
 /// importing it grants nothing. Unstable behind `agent-spawn`, which also
 /// needs `agent-tool-loading`, `agent-run` and `session-status`, whose types
 /// these use.
