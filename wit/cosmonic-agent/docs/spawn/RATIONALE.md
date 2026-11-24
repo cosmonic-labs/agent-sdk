@@ -4,8 +4,10 @@ Why `tool-discovery`, `tool-loading`, `lineage`, `child-sessions` and `spawn` lo
 for people implementing them or reviewing the interfaces.
 The WIT comments say what a caller can rely on;
 [CONFORMANCE.md](CONFORMANCE.md) says what a host and an implementer must do;
-[README.md](README.md) walks through scenarios.
+[README.md](README.md) explains the model and walks through common tasks.
 Everything is unstable and cheap to change before `@since`.
+
+Each decision below is stated in its first sentence, followed by why.
 
 ## 1. Security model
 
@@ -14,7 +16,8 @@ Everything is unstable and cheap to change before `@since`.
 A child agent's reach (what it can read and send data to)
 never exceeds what its ancestors hold plus what a grantor approved for that child.
 This is checked again each time the child starts a run or loads a tool component.
-Anything beyond a caller's ceiling waits on a grantor: policy, an auditor, or a person.
+Anything beyond a caller's ceiling (what it may add without asking)
+waits on a grantor: policy, an auditor, or a person.
 
 ### 1.2 Reach comes from the binary
 
@@ -56,48 +59,44 @@ or a leaf the right to read its budget.
 
 ### 2.3 `child-sessions` stays apart from `lineage`
 
-Every spawned child may read its own lineage: where it sits and what budget it has left.
-Seeing and watching the sessions below it is a separate power a parent may or may not hand on.
-Merging the two would make that an implementer's runtime choice
+Every spawned child may read its own lineage, but seeing the sessions below it is a separate power.
+A parent may or may not hand that power on.
+Merging the two would make it an implementer's runtime choice
 instead of something visible in the import list.
 
-### 2.4 Gates
+### 2.4 Tool loading has its own gate
 
+Tool loading has its own types and its own feature gate, and `agent-spawn` builds on it.
 Tool loading needs no leases, trees or budgets,
-so it has its own types and its own gate, and can stabilize on its own schedule.
-`agent-spawn` builds on `agent-tool-loading`, `agent-run` and `session-status`.
+so it can stabilize on its own schedule.
+`agent-spawn` also builds on `agent-run` and `session-status`, whose types it uses.
 
 ### 2.5 No worlds of their own
 
+These interfaces come with no worlds; a component imports the ones it needs into its own world.
 A world that only bundles imports saves a few lines
 but hides which interfaces a component actually imports,
 and the import list is the contract.
-A component imports the interfaces it needs into its own world;
-the README lists the usual imports for each kind of component.
+The README lists the usual imports for each kind of component.
 
 ### 2.6 Tool and tool component
 
-A tool is one function the model calls.
-A tool component is one component, with its own grants, that offers tools.
-Loading, setting aside, approval and reach all apply to a whole tool component,
-so the types name it that way.
+The types name the tool component, not the tool, as the unit that is loaded and approved.
+A tool is one function the model calls;
+a tool component is one component, with its own grants, that offers tools.
+Loading, setting aside, approval and reach all apply to a whole tool component.
 
 ## 3. Decisions
 
 ### 3.1 Waiting on a grantor is a state, not an error
 
 A spawn beyond the caller's ceiling returns the child at once in state `pending`,
-holding no instance and no reach.
-The grant admits it in place, after re-checking everything it rests on,
+holding no instance and no reach, and a load waits as `awaiting-approval`.
+The grant admits the child in place, after re-checking everything it rests on,
 and a refusal or an expired request ends it.
-A load waits as `awaiting-approval`.
-
-Earlier drafts returned an approval handle inside an error and asked the caller to resend the identical request,
-with a one-time ticket consumed by the first resend.
-That needed a canonical request digest in a guest-facing comment
-and several rules about tickets, resends and coalesced waiters.
-As state, "one approval admits one child" is structural,
-there is nothing to resend, and `approval` and `decision` are gone.
+As a state, "one approval admits one child" is structural:
+the caller has nothing to resend,
+and no ticket, request digest or resend rule needs to appear in a guest-facing comment.
 
 ### 3.2 One approval covers one child, not its descendants
 
@@ -108,50 +107,52 @@ spread to a whole subtree nobody was asked about.
 
 ### 3.3 Reach is grants intersected with imports
 
-A component can call only what it imports, and the import list is in the binary.
 The implementer refuses a component that imports something its grants do not cover,
 drops grants for interfaces it does not import before checking the ceiling or asking anyone,
 and shows the import list to the grantor and in discovery offers.
-A tool that cannot open a socket is then a property of the binary a person can be shown, not a promise.
-This also replaces two special-case refusals with one rule.
+A component can call only what it imports, and the import list is in the binary,
+so a tool that cannot open a socket is a property of the binary a person can be shown, not a promise.
+One rule also covers cases that would otherwise each need a special refusal.
 
 ### 3.4 State on the child, not a notice queue
 
+What a parent needs about a child is the current state of the last run it started there,
+carried in `session-info.last-run`; `watch-children` covers the in-run case.
 A child runs one run at a time, started only by its parent or a person,
-so what a parent needs at the start of its next run is the current state of each child's last run,
+so at the start of its next run a parent needs where each child stands,
 not a stream of events delivered once.
-`session-info.last-run` carries it; `watch-children` covers the in-run case.
-The read-and-acknowledge protocol, sequence numbers and gap flag are gone.
+State also needs no read-and-acknowledge protocol, sequence numbers or gap flag.
 
 ### 3.5 Children are named by the caller and acted on through a handle
 
-The name, scoped to the spawning component and session, is the child's durable address and its idempotency key:
-spawning a name that exists returns that child (or `name-taken` if the request differs),
+The name, scoped to the spawning component and session, is the child's durable address and its idempotency key.
+Spawning a name that exists returns that child (or `name-taken` if the request differs),
 and run names do the same for `send`.
 A `child-session` resource is a reference for acting on it:
 dropping it releases the reference only, `end` consumes it,
 and `get-child` finds the child again from any later run or machine.
 Records (`session-info`) serve listing, so reads are batched rather than one call per field.
 
-Earlier drafts used host-minted ids with separate idempotency keys and "an id authorizes nothing" rules;
-a name the caller chose plus a handle leaves nothing to forge.
-An even earlier draft had a handle whose drop ended the child, which cannot outlive one parent run;
-this one is a reference, not an owner.
+A name the caller chose plus a handle leaves nothing to forge,
+where host-minted ids would need separate idempotency keys and rules that an id authorizes nothing.
+A handle is a reference, not an owner,
+because a handle whose drop ended the child could not outlive one parent run.
 
 ### 3.6 Illegal states are unrepresentable
 
+The types are variants and named records wherever a flag or an empty field would allow nonsense.
 `agent-source` and `tool-component-source` are variants (a catalog entry or a description),
 so no field must be left empty and a catalog entry cannot be edited by the caller.
 A catalog entry is a record with a named field, so it says what the string is and can grow.
-`output-shape` replaces a schema option plus a `structured-only` flag.
-`child-state` replaces three fields with eight combinations.
+`output-shape` is one variant rather than a schema option plus a `structured-only` flag.
+`child-state` is one variant rather than three fields with eight combinations.
 `child-run` is a record, so its two halves are named.
 
 ### 3.7 Each function has its own error
 
 Errors are per function or per interface
 (`spawn-error`, `send-error`, `load-error`, `unload-error`, `child-sessions-error`),
-each naming only what can be returned.
+so each names only what can be returned.
 
 ### 3.8 Listing and watching stay two functions
 
@@ -162,8 +163,8 @@ so filters can be added later without breaking either.
 
 ### 3.9 Discovery returns a list
 
-`list-offers` returns a short ranked list with a hard cap:
-it is what the model chooses from in one step.
+`list-offers` returns a short ranked list with a hard cap,
+because it is what the model chooses from in one step.
 A stream would add an async protocol without letting the caller do anything sooner.
 If discovery ever covers a large or remote registry,
 a paged or streamed variant can be added beside it.
@@ -171,18 +172,19 @@ a paged or streamed variant can be added beside it.
 ### 3.10 Implementer obligations live in a conformance document
 
 Leases, fencing, the store's consistency, metering, the stopping barrier and the admission snapshot
-are things a caller cannot observe directly.
-Keeping them in WIT comments made generated bindings hard to read
-and asked a test double for a linearizable store.
-CONFORMANCE.md holds them with two profiles:
-a single-machine implementer meets the lease and fencing rules trivially.
-Comment volume fell by about 60 percent.
+are in CONFORMANCE.md, not in WIT comments.
+A caller cannot observe them directly.
+In WIT comments they would make generated bindings hard to read
+and ask a test double for a linearizable store.
+CONFORMANCE.md holds them with two profiles,
+so a single-machine implementer meets the lease and fencing rules trivially.
 
 ### 3.11 One session per workload
 
+A workload that is offered these imports serves exactly one session for its whole life.
 These imports take no session handle,
 so the implementer attributes each call by workload and component,
-which is unambiguous only when a workload serves one session for its whole life.
+which is unambiguous only under this rule.
 Tool components are components of the workload,
 so a shared workload would also share tool components and removals across sessions.
 The cost is density: sessions of one agent cannot share warm instances.
@@ -196,123 +198,189 @@ A child's budget is a ceiling,
 and siblings together may exceed their parent's remainder, as cgroup v2 and KeyKOS meters work.
 Splitting budgets by reservation would close the sibling-spend channel by construction
 but forbid overcommit and need refunds;
-coarse ancestor figures are the cheaper fix for now.
+coarse ancestor figures (3.15) are the cheaper fix.
 
 ### 3.13 `spawn-budget` beside `run-options`
 
+`spawn-budget` is the parent's cap over the child's whole life and its subtree, across all its runs.
 `run-options` has `max-steps` and `max-total-tokens`,
 but those limit one run and the run's driver sets them.
-`spawn-budget` is the parent's cap over the child's whole life and its subtree, across all its runs.
-`run-options` is already released, so it stays as it is;
+`run-options` is released, so it stays as it is;
 the implementer keeps each run's limits within the budget.
 
-## 4. Cut and kept
+### 3.14 A load approval lasts for the session
 
-### 4.1 Cut
+A person's approval of a tool component holds until the person removes it.
+Setting a tool component aside to make room in the function budget
+should not cost the person another prompt when it comes back,
+and only the person who approved it should be able to withdraw it.
 
-- Placement hints: now operator policy.
-- The trace-parent argument: the implementer knows the calling run's trace.
-- The caller-chosen alias prefix: operator configuration.
-- `load`'s wait argument: `load` now resolves when the tool component is callable,
-  will be next run, or waits on a grantor;
-  a caller that wants a shorter wait drops the call and the load goes on.
-- Labels: the name identifies a child.
-- Numeric defaults in type comments: a table in CONFORMANCE.md.
-- The request digest's canonical form: an implementer detail now that nothing is resent.
+### 3.15 Every root is finite, and remaining budgets are coarse across subtrees
 
-### 4.2 Kept from earlier rounds
+Every root session has a token and an active-time budget, budgets cover a session and its whole subtree,
+and ancestor remainders are reported coarsely.
+A tree that can spawn would otherwise have no bound on what it spends.
+Exact ancestor figures would let one subtree read how much its siblings spend.
 
-- A child never exceeds any ancestor, rechecked on use and by provenance.
-- A load approval lasts for the session, and only a person removes it.
-- One session per workload.
-- Stopping reaches the subtree, behind a barrier, forced after a grace period.
-- Every root has a finite budget, budgets cover the subtree, and remaining budgets are coarse across subtrees.
-- A lost machine fails the run instead of hanging, with leases and fencing whose limits are stated plainly.
-- A load serves the run in progress or says `next-run`.
-- `set-aside` keeps the approval, and the tool list has a budget per model.
-- Tool components are dispatched, never linked.
-- `structured-only` output is built by the implementer.
+### 3.16 Stopping reaches the subtree
 
-## 5. Where this departs from the WIT design guidance
+`cancel` and `end` stop every run below the child,
+behind a barrier that refuses new runs, and by force after a grace period.
+A child's children act on authority that rests on it, so they stop with it.
+The barrier keeps a new run from starting while the stop is under way,
+and force bounds a child that ignores cancellation.
 
-### 5.1 Virtualization
+### 3.17 A lost machine fails the run instead of hanging
 
-The guidance asks that any import may be served by a peer component sitting in the middle.
-Here caller identity is ambient (the calling workload, component and session),
-and a guest component placed in front of the implementer would become the caller and its grants the ceiling,
-so policy layers are installed by the host rather than composed as guests.
+A run whose machine is lost ends `failed(host-lost)`,
+and leases and fencing keep the old machine from writing after that.
+A parent can then decide what to do, rather than wait on a run that will never finish.
+The limits of fencing (effects already under way, a misbehaving clock) are stated plainly in CONFORMANCE 8.7.
+
+### 3.18 A load serves the run in progress, or says `next-run`
+
+An implementer that can add tools to a running session does so,
+and one that cannot answers `next-run`.
+An agent that finds a tool halfway through a task usually needs it in that task,
+and an honest `next-run` lets its harness end the run instead of waiting for tools that will not come.
+
+### 3.19 Set-aside keeps the approval, and the function budget is per model
+
+`set-aside` removes a tool component's tools from the model's list but keeps its component and approval,
+and the budget on offered functions comes from the model binding.
+Models choose less well among too many functions, and how many is too many depends on the model,
+so the budget belongs to the binding and making room must be cheap to undo.
+
+### 3.20 Tool components are dispatched, never linked
+
+The caller reaches a tool component only through the implementer's dispatch.
+Linking would join the tool component's reach to the agent's,
+while dispatch keeps each component's grants its own
+and lets the implementer see, meter and withdraw every call.
+
+### 3.21 The implementer builds `structured-only` output
+
+With `structured-only`, the parent receives the validated structured value
+and fields (`finish`, `model`, counts) the implementer fills from its own records.
+Nothing the child chose to write, other than the value its schema allows,
+then reaches the parent.
+
+## 4. Where this departs from the WIT design guidance
+
+### 4.1 Virtualization
+
+Policy layers are installed by the host rather than composed as guests.
+The guidance asks that any import may be served by a peer component sitting in the middle,
+but here caller identity is ambient (the calling workload, component and session),
+and a guest component placed in front of the implementer would become the caller and its grants the ceiling.
 A test double can still export any of these interfaces.
 Comments speak of the implementer and the caller, not the host.
 
-### 5.2 Shared types interfaces
+### 4.2 Shared types interfaces
 
 They are named `<topic>-types`, as elsewhere in the package,
-since one package cannot hold several interfaces named `types`.
+because one package cannot hold several interfaces named `types`.
 
-### 5.3 `spawn` is a verb
+### 4.3 `spawn` is a verb
 
 It follows `run` in this package and `wasi:cli/run`.
 
-### 5.4 Catch-alls
+### 4.4 Catch-alls
 
-The new interfaces use `other(option<string>)` as the guidance asks;
-the rest of the package uses `other(string)`, to be aligned at the next breaking version.
+These interfaces use `other(option<string>)` as the guidance asks,
+while the rest of the package uses `other(string)`;
+the two are to be aligned at the next breaking version.
 
-### 5.5 Grants by name
+### 4.5 Grants by name
 
-Volumes, secrets, credentials and models are named by string rather than labeled imports,
+Volumes, secrets, credentials and models are named by string rather than by labeled imports,
 because requests are built at run time;
 the import-list rule ties each grant back to the world.
 
-## 6. Not adopted
+## 5. Considered and not adopted
 
-### 6.1 Detached children
+### 5.1 Detached children
 
-A child's authority rests on its ancestors.
+A child's authority rests on its ancestors, so it cannot outlive them.
 
-### 6.2 Streaming a child's text to the parent
+### 5.2 Streaming a child's text to the parent
 
 It would skip the output shape and size checks.
 
-### 6.3 Conversation handoffs
+### 5.3 Conversation handoffs
 
 They change reach without the person's approval.
 
-### 6.4 Automatic restarts
+### 5.4 Automatic restarts
 
 A restarted agent repeats its effects.
 
-### 6.5 A session context on every import
+### 5.5 A session context on every import
 
 See 3.11.
 
-### 6.6 Fencing every effect at the store
+### 5.6 Fencing every effect at the store
 
 A partitioned machine cannot reach the store to check.
 
-### 6.7 Resuming a lost run elsewhere
+### 5.7 Resuming a lost run elsewhere
 
 Effects cannot safely be replayed.
 
-### 6.8 Grant handles a parent narrows and hands down
+### 5.8 Grant handles a parent narrows and hands down
 
 A parent cannot pass its imports to a child in another workload,
 and requests beyond the ceiling must describe reach the caller does not hold.
 Worth revisiting when runtimes can narrow a running instance's reach.
 
-## 7. Still open
+### 5.9 An approval returned in an error, with a resend
 
-### 7.1 Records growing after stabilization
+The caller would resend the identical request with a one-time ticket.
+That needs a canonical request digest in a guest-facing comment
+and rules about tickets, resends and coalesced waiters; a state needs none (3.1).
+
+### 5.10 Placement hints from the caller
+
+Placement is operator policy (labels, zones), never a caller input.
+
+### 5.11 A trace-parent argument
+
+The implementer already knows the calling run's trace.
+
+### 5.12 A caller-chosen alias prefix
+
+The prefix on model-facing tool aliases is operator configuration.
+
+### 5.13 A wait argument on `load`
+
+`load` resolves when the tool component is callable, will be on the next run, or waits on a grantor.
+A caller that wants a shorter wait drops the call, and the load goes on.
+
+### 5.14 Labels on children
+
+The name already identifies a child.
+
+### 5.15 Numeric defaults in type comments
+
+Defaults are an implementer's and operator's choice; CONFORMANCE.md lists recommended ones in a table.
+
+### 5.16 A canonical form for the request digest in the contract
+
+Nothing is resent, so comparing requests is an implementer detail.
+
+## 6. Still open
+
+### 6.1 Records growing after stabilization
 
 Resources grow by methods;
 records returned in bulk should stay small and grow by new functions.
 A builder resource is the escape hatch for `spawn-request`.
 
-### 7.2 Narrowing a running instance's reach
+### 6.2 Narrowing a running instance's reach
 
 It needs runtime support.
 
-### 7.3 Goals and swarms
+### 6.3 Goals and swarms
 
 A host-checked "run until done" loop needs a session-level wait and ownership rules.
 Peer messaging needs membership as a power a `structured-only` child cannot hold.
