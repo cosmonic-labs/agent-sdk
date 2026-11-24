@@ -1,9 +1,12 @@
 # cosmonic:agent
 
-The interfaces an agent component uses to call models, call tools and keep a
-durable conversation, and the export a host uses to hand it work. This page is
-the design note for the package: how the pieces fit, and what a host, an agent
-or a tool author can rely on. The `.wit` files are the contract;
+`cosmonic:agent` lets an agent be written once, as a WebAssembly component, and
+run on any host that serves it. It holds the interfaces an agent component uses
+to call models, call tools and keep a durable conversation, and the export a
+host uses to hand it work. The host decides what each of those reaches, so the
+agent never holds an endpoint or a credential. This page is the design note for
+the package: how the pieces fit, and what a host, an agent or a tool author can
+rely on. The `.wit` files are the contract;
 [`world.wit`](world.wit) lists the worlds, and
 [docs/migrating-to-0.4.md](docs/migrating-to-0.4.md) lists what changed from
 0.3.0.
@@ -22,8 +25,33 @@ An agent has two interfaces, and they stay separate.
   event trigger, a parent agent) calls that. `compactable-agent` adds
   `compact`, so a driver can ask for a summary between runs.
 
+```mermaid
+flowchart LR
+    driver["Driver<br>(chat UI, HTTP ingress,<br>trigger, parent agent)"]
+    agent["Agent component"]
+    host["Host"]
+    tools["Tools<br>(tool components)"]
+    driver -->|"calls run"| agent
+    agent -->|"models, chat,<br>tools, session"| host
+    host -->|"dispatches tool calls"| tools
+```
+
 Exporting `run` adds no power: the agent reaches exactly what its imports
 allow.
+
+## Where to go next
+
+- **Writing an agent:** target the `agent` world, or `runnable-agent` to be
+  driven through `run`. Read [Running an agent](#running-an-agent) and
+  [What an agent sees](#what-an-agent-sees). To load tools or start child
+  agents while it works, see [docs/spawn](docs/spawn/README.md).
+- **Writing a tool:** read
+  [What makes a component a tool](#what-makes-a-component-a-tool), then export
+  `tools` or a typed interface of your own.
+- **Implementing a host:** the `.wit` files are the contract. Read
+  [Running an agent](#running-an-agent), [Session states](#session-states) and
+  [Versioning](#versioning), and for the unstable discovery, loading and spawn
+  interfaces, [the conformance requirements](docs/spawn/CONFORMANCE.md).
 
 ## Running an agent
 
@@ -144,24 +172,9 @@ and [conformance](docs/spawn/CONFORMANCE.md) requirements.
 
 ## Session status
 
-`session-status` (0.4.3, unstable behind the `agent-session-status` feature,
-which needs `agent-run` as well) reports where a session stands, so every
-implementer reports it the same way: a desktop app's session list, a
-cluster's session API, and a component that drives an agent. Its types are in
-`session-status-types`, an interface with no functions, so another interface
-can carry a status without importing the functions. It reports three facts,
-each independent of the others, so every combination is valid:
-
-| Fact | What it says |
-| --- | --- |
-| `activity` | What is in progress now: `idle`, `running` with the run's id, or `compacting` when the driver asked for a compaction. A run is `running` from when the implementer accepts it, and a run waiting on a person is still `running`. |
-| `needs-input` | Set while the implementer holds something for a person, with what kind: `approval` (a tool call or outbound request waiting to be allowed), `tool-addition` (a tool waiting to be added) or `review` (a change waiting for review). It can be set with or without a run in progress. |
-| `last-run` | The most recent run that ended, and how: `replied` with its `finish`, `failed` (a run error, or the agent trapped), `interrupted` (the implementer stopped or restarted before `run` returned, other than to cancel), or `cancelled` (the implementer carried out a cancellation). It stays set while the next run is in progress. A `run` call refused with a `start-error` never started, so it leaves `last-run` alone. Only a clear by the driver or a person resets it; a clear the agent makes itself does not. |
-
-### The state to show
-
-A badge or a session list shows one state. A caller derives it from the three
-facts by taking the first row that applies:
+`session-status` (unstable behind the `session-status` feature) names where a
+session stands, so every host reports it the same way: a desktop app's session list, a cluster's session API, and
+a component that drives an agent.
 
 | State | When |
 | --- | --- |
@@ -189,36 +202,17 @@ anything on it. `needs-input` comes from the implementer's gates, never from
 a reply that asks a question: a run that finishes `input-required` ends
 `replied`, and the person's answer starts the next run.
 
-The activities, the kinds of hold and the run endings will grow. Until a
-release names a new one, the implementer reports it as `other` with its
-kebab-case name, and a caller may show the name but treats the value as
+The activities and the run endings will grow. Until a minor release names a
+new one, a host reports it as `other` with its name, and a caller treats it as
 unknown. An unknown value on one fact leaves the other two readable.
 
-Every string the implementer puts in a status or an error is its own words,
-at most 256 bytes. It never holds text an agent, a model or a tool wrote, a
-secret or credential value, or a binding, storage or infrastructure name the
-caller was not shown. The agent's `finish` is the one exception, and it is
-marked as the agent's own.
-
-### Reading and watching
-
-`get` reads the status once. `watch` follows it: it returns a stream whose
-first item is the status when the watch began, then each change in order, and
-a future that says why the stream ended. The future resolves `ok` when the
-caller dropped the stream. Otherwise it carries what a fresh `get` would
-answer at that moment: `ended` when the session ended, `denied` when the
-caller's access was withdrawn, or `unavailable` when the implementer could not
-keep the watch going. After `unavailable`, a caller that watches again starts
-from the status then, so it loses no change beyond the short-lived values a
-slow reader may miss anyway. Clearing the session is a change on the stream,
-not an end. An implementer bounds how many watches a caller holds open.
-
-The import is all a component needs to read the status, so watching a session
-never grants driving it. Times are `wasi:clocks/system-clock` instants, so
-the import (or `session-status-types` alone) also brings in `system-clock`,
-which lets the component read the wall clock. Like `session` and `run`, it
-never names a session: the implementer binds the one it reports. It stays unstable until more than one
-implementer adopts it, so its shape can still change.
+A component reads the status with `get` and follows it with `watch`. It
+needs only the `session-status` import, so watching a session never grants
+driving it. Times are `wasi:clocks/system-clock` instants, so the import also
+brings in `system-clock`, which lets the component read the wall clock. Like `session` and `run`, it never names a session:
+the host binds the one it reports. It stays unstable until more
+than one host adopts it, so its shape can still change, for example to let
+a hold say what is held.
 
 ## Versioning
 
