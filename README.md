@@ -17,8 +17,8 @@ Everything here is licensed Apache-2.0. Third-party code carried in this reposit
 
 - **Build your first agent:** the [Quickstart](https://cosmonic.com/docs/agent-sdk/build-your-first-agent/) builds `minimal-agent`, runs it in Cosmonic Desktop, changes it and gives it a tool.
 - **Write a tool:** [Write a typed tool](https://cosmonic.com/docs/agent-sdk/write-a-typed-tool/) builds a tool as an ordinary WIT interface that the host offers to a model.
-- **Build or port an agent harness:** [Build your own agent harness](docs/BUILDING-A-HARNESS.md) covers choosing a world, implementing `run`, model and tool calls, unknown outcomes, compaction, and building in Rust or JavaScript.
-- **Know what is portable:** [Portability](docs/PORTABILITY.md) separates the contract every host shares from each host's own conventions.
+- **Build or port an agent harness:** [Build your own agent harness](docs/guides/building-a-harness.md) covers choosing a world, implementing `run`, model and tool calls, unknown outcomes, compaction, and building in Rust or JavaScript.
+- **Know what is portable:** [Portability](docs/guides/portability.md) separates the contract every host shares from each host's own conventions.
 - **Learn the design:** the [Agent SDK docs](https://cosmonic.com/docs/agent-sdk/) explain how an agent runs, sessions, capabilities and tools.
 
 ## Depend on `cosmonic:agent`
