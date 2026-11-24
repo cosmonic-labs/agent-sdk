@@ -151,9 +151,10 @@ run.
 The set of states will grow. Until a minor release names a new state, a
 host reports it as `other` with its name, and a caller treats it as unknown.
 
-A component reads the state with `get` and follows it with `watch`, through
-the `status-client` world. Like `session` and `run`, it never names a
-session: the host binds the one it reports. It stays unstable until more
+A component reads the state with `get` and follows it with `watch`. It
+needs only the `session-status` import, so watching a session never grants
+driving it. Like `session` and `run`, it never names a session:
+the host binds the one it reports. It stays unstable until more
 than one host adopts it, so its shape can still change, for example to let
 `needs-input` say what is held.
 

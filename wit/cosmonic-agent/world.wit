@@ -94,12 +94,3 @@ world compact-client {
 
     import compact;
 }
-
-/// Read and watch the state of the session the host binds. Holds only
-/// `session-status`, for a component that reports where an agent's session
-/// stands, such as an adapter serving a status endpoint. Separate from
-/// `run-client`, so watching a session never grants driving it.
-@unstable(feature = session-status)
-world status-client {
-    import session-status;
-}
