@@ -62,11 +62,14 @@ flowchart LR
     grants --> reach
     imports --> reach
     grants -.->|"grant for an interface<br>it does not import"| dropped
-    imports -.->|"import nothing<br>covers"| refused
+    imports -.->|"import neither its role's world<br>nor its grants cover"| refused
 ```
 
 A grant for an interface the component does not import adds nothing, so it is dropped.
-An import that nothing covers means the component is refused.
+Imports are also covered by the component's role:
+an agent may import what the `agent` world offers and the powers its parent gave it,
+while a tool component gets only function-less type interfaces (CONFORMANCE 3.3).
+An import that neither its role nor its grants cover means the component is refused.
 A tool that cannot open a socket is then a property of the binary, not a promise.
 An agent loads, sets aside or hands to a child a whole tool component, never a single tool,
 because reach and approval belong to the component.
@@ -174,7 +177,7 @@ match done.tool_component.state {
     }
     ToolComponentState::NextRun => { /* finish this run; the tools arrive on the next */ }
     ToolComponentState::AwaitingApproval(p) => { /* finish the run asking the person: p.summary */ }
-    _ => {} // `ready` and others come back only for a tool component already held
+    _ => {} // `other`: a state this version does not name
 }
 // A rollout that fails or runs out of time is an error (`unavailable`).
 ```
@@ -212,7 +215,8 @@ What happens:
 - When a load would go over it,
   the implementer sets aside the least recently called tool component the agent loaded,
   never one the workload declared or a person added (6.6).
-- A set-aside tool component is `ready`: loading it again returns it to `offered` at once.
+- A set-aside tool component is `ready`: loading it again returns it to `offered` at once,
+  after the same checks, setting another aside if the budget needs room.
 
 ### Delegate a review to children
 

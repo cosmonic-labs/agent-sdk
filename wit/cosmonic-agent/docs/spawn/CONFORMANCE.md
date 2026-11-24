@@ -22,7 +22,7 @@ may skip the mechanics but must not contradict what a caller observes.
 | If you implement | Read | The hardest requirements |
 | --- | --- | --- |
 | The host | 1, 2 | Bind each workload to exactly one session for its whole life, put the session id in its bind configuration, and give every root a finite budget. |
-| Any of the interfaces | 1, 3, 4, 12 | Read reach from the pinned binary before running anything, never let a child exceed an ancestor, and re-check every approval against its snapshot when it is used. |
+| Any of the interfaces | 1, 3, 4, 12 | Read reach from the pinned binary before running anything, keep a child within its ancestors' reach plus what a grantor approved for that child (7.1, 7.6), and re-check every approval against its snapshot when it is used. |
 | `tool-discovery` | 5 | Answer from the same catalog, ceiling and policy the loader admits against, and show each offer's import list. |
 | `tool-loading` | 6, 10.9 | Serve the run in progress or answer `next-run`, set aside only `agent-loaded` tool components, and keep aliases fixed for the session. |
 | `spawn` | 7, 8, 9, 10 | Accept a child and its first run in one atomic step, never reuse a name, stop a subtree behind a barrier, and, across machines, fence every run with a lease. |
@@ -366,7 +366,7 @@ stateDiagram-v2
     [*] --> pending: spawn that needs a grantor
     [*] --> live: spawn admitted at once
     pending --> live: granted, and re-checks pass (7.3)
-    pending --> ended: refused, withdrawn,<br>expired, or end (7.4)
+    pending --> ended: refused, withdrawn, expired, end (7.4),<br>parent ends, or spawner's identity ends (7.13)
     live --> stopped: budget spent, revoked,<br>or could not start
     stopped --> live: budget raised (exhausted only)
     live --> ended: end, max-duration, parent ends,<br>or spawner's identity ends (7.13)
@@ -382,7 +382,7 @@ stateDiagram-v2
         [*] --> working
         [*] --> blocked: admission or placement-delay
         working --> blocked: tool-approval or outcome-release
-        blocked --> working: released
+        blocked --> working: admitted, approved or placed
         working --> cancelling: cancel or end
         blocked --> cancelling: cancel or end
     }
@@ -391,7 +391,10 @@ stateDiagram-v2
     in_progress --> failed: cancelled, output-rejected,<br>not-admitted, withheld,<br>host-lost, or failed
 ```
 
-`counts` progress frames report usage at any point and change no state.
+A run held for `outcome-release` has finished its work:
+it ends `done` when the outcome is released and `failed(withheld)` when it is not.
+`counts` progress frames report usage at any point and change no state,
+and `other` is for a state this version does not name.
 
 ### 7.1 Spawning beyond the parent's ceiling
 

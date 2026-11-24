@@ -15,7 +15,10 @@ Each decision below is stated in its first sentence, followed by why.
 
 A child agent's reach (what it can read and send data to)
 never exceeds what its ancestors hold plus what a grantor approved for that child.
-This is checked again each time the child starts a run or loads a tool component.
+This is checked again each time the child starts a run or loads a tool component,
+by provenance: each of the child's grants and tool components records what it rested on
+(an ancestor's grant or entry, or a grantor's approval of this child),
+and that authority is checked as it stands now.
 Anything beyond a caller's ceiling (what it may add without asking)
 waits on a grantor: policy, an auditor, or a person.
 
@@ -213,7 +216,7 @@ the implementer keeps each run's limits within the budget.
 A person's approval of a tool component holds until the person removes it.
 Setting a tool component aside to make room in the function budget
 should not cost the person another prompt when it comes back,
-and only the person who approved it should be able to withdraw it.
+and only a person, in the host's UI, should be able to remove it.
 
 ### 3.15 Every root is finite, and remaining budgets are coarse across subtrees
 
