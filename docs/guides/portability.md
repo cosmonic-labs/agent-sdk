@@ -99,7 +99,7 @@ The [design note](../../wit/cosmonic-agent/README.md#what-makes-a-component-a-to
 
 `session`, defined in [`session.wit`](../../wit/cosmonic-agent/session.wit), is an append-only journal plus opaque working state that the host keeps for the harness.
 
-A commit appends entries and can replace the state in the same atomic step. It can carry conditions: `require-state` (the state is still the version you read) and `require-end` (nothing was appended since you read). When a condition no longer holds, the commit writes nothing and returns the current snapshot, so one writer never overwrites another. The writer then reconciles or stops; minimal-agent ends the run `superseded`. A `commit-id` makes a retried commit safe.
+A commit appends entries and can replace the state in the same atomic step. Its conditions are `require-state` (the state is still the version you read) and `require-end` (nothing was appended since you read). A commit that writes state must carry both, and a commit that only appends entries may omit them. When a condition no longer holds, the commit writes nothing and returns the current snapshot, so one writer never overwrites another. The writer then reconciles or stops; minimal-agent ends the run `superseded`. A `commit-id` makes a retried commit safe.
 
 Every `agent.*` entry kind is reserved, and each entry's data is JSON. A host, or a tool a person uses, can redraw a conversation from these entries alone:
 
@@ -143,7 +143,7 @@ These rules extend the [design note's versioning rules](../../wit/cosmonic-agent
 
 - **Breaking changes bump the minor version** (0.4 to 0.5). Adding a case to a variant, a field to a record, or a function to an interface a guest exports (`tools`, `run`) breaks compiled consumers.
 - **Additive changes bump the patch version** (0.4.0 to 0.4.1) and carry `@since` on the new items. New interfaces, and new functions on interfaces the host serves, are additive.
-- **Patch versions link to each other.** A harness built against 0.4.2 links to a host entry that names 0.4.0 or 0.4.1, as long as the host serves every interface the harness imports, including the unstable ones.
+- **Patch versions link to each other.** A harness built against 0.4.2 links to a host entry that names 0.4.0 or 0.4.1, as long as the host serves every interface the harness imports. For unstable items, the version number is not enough: the harness and the host must agree on their signatures, including the `run` and `compact` types the harness exports.
 - **Published versions never change.**
 - **Unstable items may still change.** Items behind `@unstable(feature = ...)` are outside these promises. The one feature today is `agent-run`, which gates `run`, `run-types`, `compact` and the worlds that use them. A consumer sees these items only when it enables the feature (in Rust, `features: ["agent-run"]` in `wit_bindgen::generate!`).
 - **A release that changes only unstable items takes a patch bump,** even when the change would break a consumer of those items. Code that uses no unstable feature sees no change. Code that enables one has opted into breakage: rebuild against the new patch release and check what moved.

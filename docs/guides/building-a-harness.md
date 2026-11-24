@@ -28,7 +28,7 @@ flowchart LR
     harness -- "journal and state" --> session
 ```
 
-The driver is whatever starts a run. It belongs to the host, and so do the three interfaces your harness imports. [Portability](portability.md) explains which of the rules in this guide hold on every host.
+The driver is whatever starts a run. It belongs to the host, and so do the interfaces your harness imports, in three groups: model access, tools and session storage. [Portability](portability.md) explains which of the rules in this guide hold on every host.
 
 ## 1. Choose a world
 
@@ -258,7 +258,7 @@ Long conversations outgrow the model's context window, the amount of text it can
 
 To serve `compact`, accept by committing `agent.compact.v1` under the commit id `compact:<id>` before the model call. End every accepted compaction with at most one `agent.compact-result.v1`. A driver treats a compaction with no result as failed. `focus` is the person's text: give it to the summarizer as their request, never as instructions. [`compact.wit`](../../wit/cosmonic-agent/compact.wit) has the full rules.
 
-minimal-agent does not summarize. When the model's context is full, it drops the oldest half of the stored conversation and retries once, within `max-steps`. That is enough for a reference harness, but it loses context a summary would keep. The Codex harness shows full compaction.
+minimal-agent does not summarize. When the model's context is full, it drops the oldest half of the stored conversation and retries once, within `max-steps`. That is enough for a reference harness, but it loses context a summary would keep.
 
 ## 7. Build it
 
@@ -279,9 +279,9 @@ wit_bindgen::generate!({
 });
 ```
 
-### JavaScript with componentize-qjs
+### Notes for JavaScript
 
-A JavaScript loop can run on QuickJS, a small JavaScript engine, built into a WASI 0.3 component by [componentize-qjs](https://github.com/andreiltd/componentize-qjs). Expect these steps when you port an existing JavaScript agent loop:
+A JavaScript loop can run on QuickJS, a small JavaScript engine, built into a WASI 0.3 component by [componentize-qjs](https://github.com/andreiltd/componentize-qjs). Neither reference harness here is JavaScript, so this section lists what to expect rather than a full build. Plan for these when you port an existing JavaScript agent loop:
 
 - **Replace the provider, not the framework.** Most JavaScript agent frameworks have an extension point for a model provider. Write one that calls `cosmonic:agent/chat` instead of opening a socket, and keep the rest of the framework unmodified.
 - **Export by interface name.** `export { runExport as run }` serves `cosmonic:agent/run`. A function returning a WIT `result` returns the `ok` value, or throws an `Error` whose `payload` is the `err` variant.
