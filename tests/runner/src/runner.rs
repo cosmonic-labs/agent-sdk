@@ -14,8 +14,8 @@ use wasmtime::{Config, Engine, OptLevel, Store, StoreContextMut};
 
 use crate::host::{self, Host, Offered, Scripted, Session, ToolComponent, bindings};
 use crate::record::Record;
-use crate::spec::{Folder, Test};
-use crate::tools::{list_component, stub_def};
+use crate::spec::{Scenario, Tool};
+use crate::tools::list_component;
 use host::run_types::{RunError, RunEvent, RunOptions, RunOutcome, StartError};
 use host::types::{UserMessage, UserPart};
 
@@ -131,24 +131,15 @@ pub fn set_deadline<T>(store: &mut Store<T>, seconds: u64) {
     store.set_epoch_deadline(seconds.saturating_add(5).saturating_mul(1000 / TICK_MS));
 }
 
-fn folders(test: &Test, list: &[Folder]) -> Vec<(PathBuf, Folder)> {
-    list.iter()
-        .map(|f| (test.resolve(&f.path), f.clone()))
-        .collect()
-}
-
-/// Run `test`, with `agent` in place of the file's component when given.
-pub async fn run(test: &Test, agent: Option<&Path>) -> Result<Finished> {
+/// Drive the agent through one run. Fixture errors (such as an exhausted model
+/// script) fail the test even when the agent handles the error itself.
+pub async fn run(test: &Scenario) -> Result<Finished> {
     let engine = engine()?;
     let linker = host::linker(&engine)?;
-    let agent_path = agent
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| test.resolve(&test.agent.component));
-    let agent_component = compile(&engine, &agent_path)?;
+    let agent_component = compile(&engine, &test.agent)?;
 
     let mut next_id = 0;
     let replies: VecDeque<Scripted> = test
-        .model
         .replies
         .iter()
         .map(|r| Scripted {
@@ -167,8 +158,8 @@ pub async fn run(test: &Test, agent: Option<&Path>) -> Result<Finished> {
         engine: engine.clone(),
         linker,
         tool_linker: host::tool_linker(&engine)?,
-        alias: test.model.alias.clone(),
-        timeout: test.run.timeout,
+        alias: test.alias.clone(),
+        timeout: test.timeout,
         script_len: replies.len(),
         replies: Mutex::new(replies),
         tools: OnceLock::new(),
@@ -180,30 +171,35 @@ pub async fn run(test: &Test, agent: Option<&Path>) -> Result<Finished> {
     });
 
     let mut offered = Vec::new();
-    for t in &test.tools {
-        if let Some(path) = &t.component {
-            let path = test.resolve(path);
-            let name = path
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "tool".into());
-            let tool = Arc::new(ToolComponent {
-                name,
-                component: compile(&engine, &path)?,
-                hosts: t.hosts.clone(),
-                folders: folders(test, &t.folders),
-            });
-            for def in list_component(&host, &tool).await? {
-                offered.push(Offered {
-                    def,
-                    source: host::Source::Component(Arc::clone(&tool)),
+    for tool in &test.tools {
+        match tool {
+            Tool::Stub { def, results } => offered.push(Offered {
+                def: def.clone(),
+                source: host::Source::Stub(results.clone()),
+            }),
+            Tool::Component {
+                path,
+                hosts,
+                folders,
+            } => {
+                let name = path
+                    .file_stem()
+                    .context("tool component needs a file name")?
+                    .to_string_lossy()
+                    .into_owned();
+                let tool = Arc::new(ToolComponent {
+                    name,
+                    component: compile(&engine, path)?,
+                    hosts: hosts.clone(),
+                    folders: folders.clone(),
                 });
+                for def in list_component(&host, &tool).await? {
+                    offered.push(Offered {
+                        def,
+                        source: host::Source::Component(Arc::clone(&tool)),
+                    });
+                }
             }
-        } else {
-            offered.push(Offered {
-                def: stub_def(t),
-                source: host::Source::Stub(t.results.clone()),
-            });
         }
     }
     let mut seen = std::collections::HashSet::new();
@@ -220,35 +216,31 @@ pub async fn run(test: &Test, agent: Option<&Path>) -> Result<Finished> {
     }
     let _ = host.tools.set(offered);
 
-    let state = host.state(
-        "agent",
-        &test.grants.hosts,
-        &folders(test, &test.grants.folders),
-    )?;
+    let state = host.state("agent", &test.grants.hosts, &test.grants.folders)?;
     let mut store = Store::new(&engine, state);
-    set_deadline(&mut store, test.run.timeout);
+    set_deadline(&mut store, test.timeout);
     let agent =
         bindings::AgentUnderTest::instantiate_async(&mut store, &agent_component, &host.linker)
             .await
             .map_err(|e| anyhow::anyhow!("instantiating the agent: {e:?}"))?;
     let message = UserMessage {
-        content: vec![UserPart::Text(test.run.message.clone())],
+        content: vec![UserPart::Text(test.message.clone())],
         name: None,
     };
     let options = RunOptions {
-        run_id: test.run.id.clone(),
-        instructions: test.run.instructions.clone(),
-        schema: test.run.schema.as_ref().map(|s| s.to_string()),
-        max_steps: Some(test.run.max_steps),
+        run_id: test.run_id.clone(),
+        instructions: test.instructions.clone(),
+        schema: test.schema.as_ref().map(|s| s.to_string()),
+        max_steps: Some(test.max_steps),
         max_total_tokens: None,
-        max_duration: Some(test.run.timeout.saturating_mul(1_000_000_000)),
+        max_duration: Some(test.timeout.saturating_mul(1_000_000_000)),
         effort: None,
         trace_parent: None,
     };
     let ran = tokio::time::timeout(
         // A little past the run's own max-duration, so the agent's limit
         // fires first.
-        Duration::from_secs(test.run.timeout.saturating_add(5)),
+        Duration::from_secs(test.timeout.saturating_add(5)),
         store.run_concurrent(async |acc| -> Result<Ran> {
             let (events, outcome) = match agent
                 .cosmonic_agent_run()
@@ -273,7 +265,7 @@ pub async fn run(test: &Test, agent: Option<&Path>) -> Result<Finished> {
         }),
     )
     .await
-    .with_context(|| format!("the run did not end within {}s", test.run.timeout))???;
+    .with_context(|| format!("the run did not end within {}s", test.timeout))???;
     drop(store);
 
     let journal = host
@@ -283,6 +275,9 @@ pub async fn run(test: &Test, agent: Option<&Path>) -> Result<Finished> {
         .map(|e| e.kind.clone())
         .collect();
     let record = std::mem::take(&mut *host.record());
+    if !record.problems.is_empty() {
+        bail!("{}", record.problems.join("\n"));
+    }
     Ok(Finished {
         ran,
         record,

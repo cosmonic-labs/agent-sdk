@@ -2,7 +2,6 @@
 //! shared `Host` every store of a test points at (the scripted model, the
 //! tools, the session and the record).
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use wasmtime::Engine;
@@ -54,7 +53,7 @@ pub struct Offered {
 }
 
 pub enum Source {
-    Stub(Vec<spec::StubResult>),
+    Stub(Vec<Result<tool_types::ToolResponse, tool_types::CallError>>),
     Component(Arc<ToolComponent>),
 }
 
@@ -62,7 +61,7 @@ pub struct ToolComponent {
     pub name: String,
     pub component: Component,
     pub hosts: Vec<String>,
-    pub folders: Vec<(PathBuf, spec::Folder)>,
+    pub folders: Vec<spec::Folder>,
 }
 
 /// One scripted reply, with the ids its tool calls get.
@@ -145,18 +144,18 @@ impl Host {
         self: &Arc<Self>,
         by: &str,
         hosts: &[String],
-        folders: &[(PathBuf, spec::Folder)],
+        folders: &[spec::Folder],
     ) -> anyhow::Result<State> {
         let mut wasi = WasiCtxBuilder::new();
         wasi.inherit_stderr();
-        for (path, f) in folders {
+        for f in folders {
             let perms = if f.writable {
                 FsPerms::ReadWrite
             } else {
                 FsPerms::ReadOnly
             };
-            wasi.preopened_dir(path, &f.guest, perms)
-                .map_err(|e| anyhow::anyhow!("opening folder {}: {e}", path.display()))?;
+            wasi.preopened_dir(&f.path, &f.guest, perms)
+                .map_err(|e| anyhow::anyhow!("opening folder {}: {e}", f.path.display()))?;
         }
         // Sockets are never granted. Turning them on with a check that always
         // refuses is what lets the runner record an attempt.

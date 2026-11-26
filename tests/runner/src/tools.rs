@@ -8,56 +8,8 @@ use wasmtime::component::{Accessor, HasSelf};
 
 use crate::host::{Host, Offered, Source, ToolComponent, tool_bindings, tool_types, tools, types};
 use crate::record::{Dispatched, Refusal, Refused, Response};
-use crate::spec::{CallErrorSpec, DispatchSpec, OutcomeSpec, StubResult};
 use tool_types::{CallError, DispatchError, OutcomeError, ToolResponse};
 use types::{ToolArguments, ToolCall, ToolOutput};
-
-pub fn stub_def(t: &crate::spec::Tool) -> tool_types::ToolDef {
-    let input = match &t.input {
-        Some(serde_json::Value::String(s)) if s == "text" => types::ToolInput::Text,
-        Some(schema) => types::ToolInput::JsonSchema(schema.to_string()),
-        None => types::ToolInput::JsonSchema(r#"{"type":"object"}"#.into()),
-    };
-    tool_types::ToolDef {
-        name: t.name.clone().unwrap_or_default(),
-        title: None,
-        description: t.description.clone().unwrap_or_default(),
-        input,
-        output_schema: None,
-        annotations: tool_types::ToolAnnotations {
-            read_only: t.read_only,
-            destructive: None,
-            idempotent: None,
-            open_world: None,
-        },
-        version: None,
-    }
-}
-
-fn stub_response(r: &StubResult) -> Result<ToolResponse, CallError> {
-    match &r.error {
-        Some(CallErrorSpec::NotDispatched(d)) => Err(CallError::NotDispatched(match d.clone() {
-            DispatchSpec::UnknownTool(s) => DispatchError::UnknownTool(s),
-            DispatchSpec::InvalidArguments(s) => DispatchError::InvalidArguments(s),
-            DispatchSpec::Upstream(s) => DispatchError::Upstream(s),
-            DispatchSpec::Denied(s) => DispatchError::Denied(s),
-            DispatchSpec::Cancelled => DispatchError::Cancelled,
-            DispatchSpec::TimedOut => DispatchError::TimedOut,
-            DispatchSpec::Other(s) => DispatchError::Other(s),
-        })),
-        Some(CallErrorSpec::OutcomeUnknown(o)) => Err(CallError::OutcomeUnknown(match o.clone() {
-            OutcomeSpec::Upstream(s) => OutcomeError::Upstream(s),
-            OutcomeSpec::Cancelled => OutcomeError::Cancelled,
-            OutcomeSpec::TimedOut => OutcomeError::TimedOut,
-            OutcomeSpec::Other(s) => OutcomeError::Other(s),
-        })),
-        None => Ok(ToolResponse {
-            output: r.output.clone().map(ToolOutput::Text).into_iter().collect(),
-            structured: r.structured.as_ref().map(|v| v.to_string()),
-            is_error: r.is_error,
-        }),
-    }
-}
 
 /// A fresh instance of a tool component, with its own grants.
 async fn instance(
@@ -188,7 +140,7 @@ impl<T: Send> tools::HostWithStore<T> for HasSelf<crate::host::State> {
                     *n
                 };
                 match results.get(n - 1).or(results.last()) {
-                    Some(r) => stub_response(r),
+                    Some(r) => r.clone(),
                     None => Ok(ToolResponse {
                         output: vec![],
                         structured: None,
