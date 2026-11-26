@@ -1,0 +1,37 @@
+name: Set up Pi
+description: Install the verified Pi build dependencies and build the patched componentizer.
+runs:
+  using: composite
+  steps:
+    - name: Download and verify Pi tools
+      working-directory: ${{ runner.temp }}
+      shell: bash
+      run: python3 "$GITHUB_ACTION_PATH/download.py"
+
+    - name: Install pnpm
+      working-directory: ${{ runner.temp }}
+      shell: bash
+      run: npm install --global --ignore-scripts ./pnpm.tgz # zizmor: ignore[adhoc-packages] -- verified against the pinned sha512
+
+    - name: Check out componentize-qjs
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: andreiltd/componentize-qjs
+        ref: eee19a60b144321b2535a50cc58e05b73d9f5242
+        path: componentize-qjs
+        persist-credentials: false
+
+    - name: Apply the harness patch
+      working-directory: componentize-qjs
+      shell: bash
+      run: git apply "$GITHUB_WORKSPACE/harnesses/pi/patches/componentize-qjs.patch"
+
+    - name: Build componentize-qjs
+      working-directory: componentize-qjs
+      shell: bash
+      env:
+        WASI_SDK_PATH: ${{ runner.temp }}/wasi-sdk-33.0-x86_64-linux
+        WASM_OPT: ${{ runner.temp }}/binaryen-version_130/bin/wasm-opt
+      run: |
+        cargo build --locked --release -p componentize-qjs-cli
+        echo "$PWD/target/release" >> "$GITHUB_PATH"
