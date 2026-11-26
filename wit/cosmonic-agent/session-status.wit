@@ -42,18 +42,18 @@ package cosmonic:agent@0.4.3;
 /// Times are `wasi:clocks/system-clock` instants, so a component that
 /// imports this interface also imports `system-clock`.
 ///
-/// Unstable behind `session-status`, which also needs `agent-run`, whose
+/// Unstable behind `agent-session-status`, which also needs `agent-run`, whose
 /// `finish` it uses. The shape may change before it is marked `@since`.
-@unstable(feature = session-status)
+@unstable(feature = agent-session-status)
 interface session-status {
-    @unstable(feature = session-status)
+    @unstable(feature = agent-session-status)
     use run-types.{finish};
-    @unstable(feature = session-status)
+    @unstable(feature = agent-session-status)
     use wasi:clocks/system-clock@0.3.0.{instant};
 
     /// What is in progress in the session now. Says nothing about whether a
     /// person is needed or how earlier runs ended.
-    @unstable(feature = session-status)
+    @unstable(feature = agent-session-status)
     variant activity {
         /// Nothing is in progress: no run and no compaction.
         idle,
@@ -70,7 +70,7 @@ interface session-status {
     }
 
     /// What kind of thing the host holds for a person.
-    @unstable(feature = session-status)
+    @unstable(feature = agent-session-status)
     variant hold-kind {
         /// A tool call or outbound request waiting to be allowed.
         approval,
@@ -84,7 +84,7 @@ interface session-status {
 
     /// Something the host holds at one of its gates for a person. When it
     /// holds several, this describes the oldest.
-    @unstable(feature = session-status)
+    @unstable(feature = agent-session-status)
     record hold {
         /// What kind of thing is held.
         kind: hold-kind,
@@ -93,7 +93,7 @@ interface session-status {
     }
 
     /// How a run ended.
-    @unstable(feature = session-status)
+    @unstable(feature = agent-session-status)
     variant run-end {
         /// With a `run-outcome`, carrying the finish the agent reported for
         /// it. Agent-reported: a caller routes on it and never allows
@@ -114,7 +114,7 @@ interface session-status {
     }
 
     /// A run that has ended.
-    @unstable(feature = session-status)
+    @unstable(feature = agent-session-status)
     record ended-run {
         /// The `run-id` its driver gave it. `none` when the host withholds
         /// the id from this caller.
@@ -126,7 +126,7 @@ interface session-status {
     }
 
     /// A session's status: three independent facts.
-    @unstable(feature = session-status)
+    @unstable(feature = agent-session-status)
     record session-status {
         /// What is in progress now.
         activity: activity,
@@ -145,7 +145,7 @@ interface session-status {
     }
 
     /// Why the host could not report the status.
-    @unstable(feature = session-status)
+    @unstable(feature = agent-session-status)
     variant status-error {
         /// The host could not serve the call; the detail is for logs.
         unavailable(string),
@@ -154,13 +154,13 @@ interface session-status {
     }
 
     /// The session's status now.
-    @unstable(feature = session-status)
+    @unstable(feature = agent-session-status)
     get: async func() -> result<session-status, status-error>;
 
     /// The current status, then each change to any of its facts, in order.
     /// A slow reader may miss a short-lived value but never sees an older
     /// status after a newer one. Drop the stream to stop watching; it ends
     /// when the session does.
-    @unstable(feature = session-status)
+    @unstable(feature = agent-session-status)
     watch: async func() -> result<stream<session-status>, status-error>;
 }
