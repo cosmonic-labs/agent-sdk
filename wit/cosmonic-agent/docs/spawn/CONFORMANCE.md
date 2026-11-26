@@ -68,8 +68,11 @@ Deleting or recreating the workload ends the incarnation.
 
 ### 2.4 Run context
 
-The component that drives a session's runs passes the implementer, for each call,
-the calling run's id, fencing generation, deadline and trace context.
+The host or implementer records, when it accepts a run,
+that run's id, fencing generation, deadline and trace context,
+and attaches them to every call the run makes.
+It never takes them from a guest: no component, including one that drives runs through `run-client`,
+can name a run, a generation or a deadline for a call it makes.
 The implementer uses them for the stopping barrier, fencing, budget checks and trace propagation.
 A root session not driven through `run` takes its context from whatever drives it
 (a trigger or a person's request), with its own deadline and no parent generation.
@@ -85,8 +88,10 @@ There is no guest-side policy world (see [RATIONALE 4.1](RATIONALE.md#41-virtual
 
 ### 2.6 Who decides
 
-A grantor is a person, or policy a person wrote.
-An auditor is installed by host policy and is never a session in the requesting tree.
+A grantor is a person, policy a person wrote, or an auditor.
+An auditor is a decision service the host installs by policy to approve or refuse requests and release outcomes.
+It is never a session in the requesting tree, holds no reach of its own in that tree,
+and treats every field of a request, snapshot and outcome it reads as untrusted input.
 A spawned agent never holds approval authority.
 
 ### 2.7 Removing an approval
@@ -140,6 +145,15 @@ Refuse (`invalid`) a component that imports a capability its baseline and grants
 The baseline is the role's world:
 `agent` for an agent component, plus the imports of the powers it was given;
 for a tool component, only function-less type interfaces.
+Every other import needs a grant that covers it:
+
+| Import | Covered by |
+| --- | --- |
+| `wasi:clocks`, `wasi:random`, `wasi:cli/environment`, `wasi:cli/exit`, `wasi:cli/stdout` and `stderr`, type-only interfaces such as `session-status-types` | the baseline, for every role |
+| `wasi:filesystem` | a `volume-grant` |
+| `wasi:http` (outgoing), `wasi:sockets` of every kind, `wasi:sockets/ip-name-lookup` | `allowed-hosts`; name lookup counts as network reach, since a query can carry data |
+| `cosmonic:agent` model and tool interfaces | the agent role's world, never a grant (3.12) |
+| anything else | an `interface-grant` naming exactly that interface |
 
 ### 3.4 Unused grants are dropped
 
@@ -151,7 +165,9 @@ It leaves the admitted snapshot, so it is never applied.
 
 An import the implementer cannot classify
 (an unfamiliar interface, or a bare function import)
-counts as using every kind of grant.
+counts as using every kind of grant,
+and is refused (`invalid`) unless an `interface-grant` names it exactly.
+It is never served from the baseline.
 
 ### 3.6 Powers a request does not give
 
@@ -188,14 +204,16 @@ An implementer without a credential broker treats every credential reference as 
 ### 3.12 No agent powers by grant
 
 Refuse an `interface-grant` naming a `cosmonic:agent` interface.
-Powers reach a child only through `agent-powers`, and only if the caller holds them.
+Powers reach a child only through `spawn-request.powers` (a list of `agent-power`), and only if the caller holds them.
 
 ### 3.13 The ceiling
 
-A caller's ceiling is its own grants (by containment, 3.14)
-plus its tool component entries (by exact match):
+A caller's ceiling is its own reach (by containment, 3.14): its grants limited to what it imports (3.3, 3.4),
+so a grant the caller holds but cannot use never makes a request within its ceiling.
+It also includes its tool component entries (by exact match):
 declared tool components, a child's spawned tool components, and the session ceiling (4.2).
 An entry's reach never counts as the caller's own.
+A root's ceiling is its reach the same way: an unused grant is dropped from it too.
 
 ### 3.14 Containment
 
@@ -211,9 +229,25 @@ A read-only request fits a read-only or read-write mount; a read-write request f
 | A bare `h` | `h`, and `scheme://h` at the default port for `http`, `https`, `ws` and `wss` |
 | `h:p` | `h:p` and `scheme://h:p` |
 | `scheme://h[:p]` | only itself |
-| `*.d` | hosts ending in `.d` at any depth, never `d` |
+| `*.d` | hosts ending in `.d` at any depth, never `d`; and `*.sub.d` |
+| A wildcard | never an IP literal, and never a location-dependent name (3.15) |
+
+An entry with a scheme or port contains only that scheme and port.
+An IP literal contains only itself, and only where 3.15 allows it.
+A case the table does not settle does not fit.
 
 **Model aliases.** An alias fits one the caller was granted.
+
+**Credentials.** A credential reference fits only when it resolves to the same binding the caller holds,
+and the request's `allowed-hosts` are contained in the destinations that binding names.
+The broker applies a credential only to requests bound for the destinations its binding names,
+whatever `allowed-hosts` the component holds, so a token never goes to another host.
+Without a broker, 3.11 applies.
+
+**Secrets.** A secret fits only when it resolves to the same secret the caller holds.
+A spawned agent's own component is never given secrets:
+a request that names one on `agent-spec.grants` is `invalid`.
+Secrets go to a tool component.
 
 **Anything else.** A grant whose reach cannot be compared does not fit.
 
@@ -222,6 +256,9 @@ A read-only request fits a read-only or read-write mount; a read-write request f
 Loopback, link-local and private-range addresses, single-label names and cluster-local names
 mean different services on different machines.
 A child whose grants (or whose tool components' grants) name one runs on its parent's machine.
+A wildcard never covers one: `*` or `*.internal` reaches a location-dependent address
+only for a child pinned to its parent's machine,
+and the implementer refuses the connection everywhere else.
 Any child runs only where its snapshot resolves identically
 (the same storage, bindings and model).
 
@@ -229,16 +266,28 @@ Any child runs only where its snapshot resolves identically
 
 One decision serves `load`, `spawn` and each offer's `fit` in `tool-discovery`,
 so `fit` says exactly whether a load would wait on a grantor for this caller now.
-Take the first row that applies:
+It is taken per subject: the spawned agent's own component, each tool component, and each power.
+
+**A spawned agent's own grants** (`agent-spec.grants`) must be contained in the caller's own reach.
+Anything beyond it is `denied` and never approvable,
+since an approval would give an agent component direct reach (7.1).
+Powers follow 7.10.
+
+**A tool component,** whether a child's or one the caller loads, takes the first row that applies:
 
 | The request | Decision |
 | --- | --- |
-| Reaches beyond what every ancestor's ceiling covers (7.1, 7.12) | `denied` |
+| Policy refuses it | `denied` |
+| Reaches beyond what some ancestor above the caller covers, in its ceiling or in an approval already granted to it (7.12) | `denied` |
 | Policy asks for a grantor | wait on a grantor |
-| Within the ceiling, and every digest is in the operator's catalog or matches an entry exactly (3.13) | admit, no grantor |
-| Within the ceiling, with any other digest | wait on a grantor |
-| Beyond the ceiling | wait on a grantor |
+| Within the caller's ceiling, and every digest is in the operator's catalog as an entry this caller would be offered, or matches a ceiling entry exactly (3.13) | admit, no grantor |
+| Within the caller's ceiling, with any other digest | wait on a grantor |
+| Beyond the caller's ceiling | wait on a grantor |
 
+"Some ancestor above the caller" excludes the caller itself:
+going beyond the caller's own ceiling is what a grantor decides.
+A catalog entry hidden from this caller by policy counts as any other digest,
+so naming its digest in a `custom` spec gains nothing a discovery answer would not.
 An entry matched exactly is re-checked against its snapshot and current policy each time (4.2).
 
 ### 3.17 Tool components are dispatched, never linked
@@ -254,7 +303,15 @@ Detail strings returned to a caller are the implementer's own words, bounded (10
 Never put in them text a child or a tool wrote, secret or credential values,
 names of bindings or storage the caller was not shown,
 or addresses of the implementer's infrastructure.
-Answer failures a caller must not tell apart with the same text (3.9).
+Answer failures a caller must not tell apart with the same case and the same text.
+These pairs must look alike:
+
+| Must look alike | Answer |
+| --- | --- |
+| An image fetch that failed, whatever the reason (3.9) | `invalid`, one text |
+| An unknown catalog name, and one policy hides from this caller | `invalid`, one text |
+| An unknown model alias, volume, secret or credential reference, and one that exists but the caller does not hold | `invalid`, one text |
+
 Keep the full detail in the implementer's own logs.
 
 ## 4. Approvals
@@ -267,12 +324,21 @@ the secret behind each name, the model behind the alias,
 an agent definition's content, each interface grant's resource,
 every executable digest and import list, and every default the request left open.
 Show it to the grantor; never return it to the caller.
+Show resolved resources (the storage, the binding, the registry digest), not the caller's strings for them.
+Every caller-supplied string that does reach the grantor
+(a component name, a mount path, an interface grant's config values, a display image reference)
+is shown quoted, marked as chosen by the caller, and held to 4.8's character set and length.
 Admitting re-resolves and compares; any difference asks again.
 
 ### 4.2 Loads and the session ceiling
 
 A load beyond the ceiling waits as `awaiting-approval`;
 a later identical `load` returns that state.
+Two loads are identical when they name the same executable digests, resolve to the same reach,
+and offer the same function set: `functions` compared as a set, with `none` meaning every function.
+The snapshot records the function set and the grantor sees it.
+A load that offers more functions than an entry is not identical to it and asks again;
+one that offers fewer fits the entry.
 A grant admits it and adds it to the **session ceiling**:
 an entry keyed to the caller, the tool component and its snapshot.
 A later identical load is within the ceiling,
@@ -305,6 +371,10 @@ After a refusal or removal, matching requests
 (the same executable digests and resolved reach, whatever the names)
 answer `denied` without a prompt for the cooldown.
 A root's refusal covers the tree; a descendant's covers its subtree.
+`denied` because a request reaches beyond an ancestor (3.16) counts toward the same rate limit as prompts,
+and is audited,
+so a child cannot cheaply map which hosts or volumes its ancestors hold.
+A cooldown a descendant meets says only `denied`, never whose refusal it was.
 
 ### 4.7 Caps on pending approvals
 
@@ -316,8 +386,10 @@ so varying one host cannot flood the person.
 ### 4.8 Grantor summaries
 
 A summary uses catalog names, image references confirmed against the registry,
-and caller-chosen names as quoted identifiers limited to `[a-z0-9-_./:]`.
+and caller-chosen names as quoted identifiers limited to `[a-z0-9-_./:]` and 64 characters,
+each marked as the caller's choice.
 Never caller free text.
+A caller-chosen name never reads as the implementer's own words or as a verdict.
 A summary is shown to the requesting caller only;
 below the caller's direct children, a pending state carries the approval id alone.
 
@@ -353,7 +425,7 @@ A stream that ends with the future resolving `ok` carried every match.
 
 ### 6.1 One mechanism, two entry points
 
-The host's `find_tools` and `load_tools` (2.8) are an adapter over `tool-discovery` and `tool-loading`,
+The `find_tools` and `load_tools` tools (2.8) are an adapter over `tool-discovery` and `tool-loading`,
 each offered only where its power is held.
 Calling `find_tools` is `list-offers` read up to the adapter's cap, plus one offer to tell whether more matched (2.8).
 Calling `load_tools` is `tool-loading.load` made on the agent's behalf,
@@ -369,10 +441,13 @@ and retire the old revision when the run ends.
 An implementer that cannot do this reports `next-run`.
 Before publishing, check the tool component's entry or admission still stands.
 
-### 6.3 No polling
+### 6.3 No blocking on a person
 
 `load` resolves at `offered`, `next-run`, `awaiting-approval` or an error,
-so a caller never polls.
+so a call never blocks on a person.
+Nothing signals the caller when a grantor decides.
+A caller learns the decision by calling `load` again or reading `list-loaded`, typically in a later run;
+a repeat `load` of a request that is still waiting returns `awaiting-approval` at once.
 
 ### 6.4 Rollout deadline
 
@@ -380,6 +455,8 @@ Abandon a rollout not prepared within the deadline:
 the tool component becomes `failed`, frees its place,
 and a waiting `load` answers `unavailable`.
 A revision prepared for the next run is kept until that run starts on it.
+Rollouts are rate-limited per session, so a caller cycling `load` and `set-aside` at the component cap
+cannot churn revisions without bound; past the rate, `load` answers `unavailable`.
 
 ### 6.5 Function budget
 
@@ -436,7 +513,9 @@ and one that could serve only the next run keeps that restriction while set asid
 | `set-aside` | `load`, unbound meanwhile (6.7) | `loading` |
 | `denied` or `failed` | `load` | as a new load (a refusal's cooldown still applies) |
 | `denied` or `failed` | `set-aside` | not held |
+| `denied` | the cooldown ends | stays `denied` until `load` or `set-aside` |
 | any | the person removes its entry (2.7, 4.4) | not held; a later `load` asks again |
+| any | it no longer fits its ancestors' current reach or policy (7.11) | not held, within the revocation bound; a later `load` is decided again |
 
 `set-aside` on a `loading` tool component answers `loading`;
 on one already `set-aside` it does nothing.
@@ -450,14 +529,14 @@ stateDiagram-v2
     [*] --> pending: spawn that needs a grantor
     [*] --> live: spawn admitted at once
     pending --> live: granted, and re-checks pass (7.3)
-    pending --> ended: refused, withdrawn, expired, end (7.4),<br>parent ends, or spawner's identity ends (7.13)
-    live --> halted: an ancestor's budget spent, revoked,<br>or could not start
+    pending --> ended: refused, withdrawn, expired, end, re-check failed (7.3, 7.4),<br>parent ends, or spawner's identity ends (7.13)
+    live --> halted: its own or an ancestor's budget spent (10.10),<br>revoked, or could not start
     halted --> live: budget raised (exhausted only)
     live --> ended: end, its own max-duration, parent ends,<br>or spawner's identity ends (7.13)
     halted --> ended: the same triggers
 ```
 
-In `live`, report the child's `session-status` as its host reports it under that interface,
+In `live`, report the child's status as the implementer reports it under `session-status`,
 with no `finish` text the child chose (7.14) and no run ids below the caller's direct children (7.15).
 
 The last run a caller started in a child moves through these (`run-state`, in `session-info.sent-run`),
@@ -478,6 +557,9 @@ stateDiagram-v2
     in_progress --> failed: cancelled, output-rejected,<br>not-admitted, withheld,<br>interrupted, revoked, or failed
 ```
 
+`expired` is not an ending: a run stays `done` or `failed` as it ended,
+and `expired` is what `wait` and `watch-run` answer once its outcome is no longer kept (7.8).
+
 A run held for `outcome-release` has finished its work:
 it ends `done` when the outcome is released and `failed(withheld)` when it is not.
 Each run records one terminal transition, and the first the store records wins (7.23).
@@ -486,8 +568,15 @@ and `other` is for a state this version does not name.
 
 ### 7.1 Spawning beyond the parent's ceiling
 
+A child's own agent component gets reach only from its parent:
+`agent-spec.grants` must be contained in the parent's reach (3.13, 3.14).
+Anything beyond is `denied`, and never goes to a grantor,
+so an approval can never give an agent component direct reach.
+Reach the parent lacks goes in a tool component.
+
 A child's tool component beyond the parent's ceiling goes to a grantor
-only if the ceiling of every ancestor above the parent covers it (none, for a root parent);
+only if every ancestor above the parent covers it, in its ceiling or in an approval already granted to it
+(no ancestor needs to, for a root parent);
 otherwise `spawn` answers `denied`.
 Record that dependency for later re-checks.
 
@@ -507,7 +596,8 @@ the parent's and every ancestor's current ceiling,
 the dependencies recorded at spawn,
 limits and budgets,
 and the stopping mark.
-If any fails, the child is not admitted and its state says why.
+If any fails, the child is not admitted: it ends as `ended(some(revoked))`, with the failed check in the detail,
+its place is freed, and its waiting runs fail `not-admitted`.
 A run deferred while pending is re-checked the same way before it starts.
 
 ### 7.4 Ending a pending request
@@ -516,11 +606,12 @@ A run deferred while pending is re-checked the same way before it starts.
 | --- | --- |
 | A grantor refuses | ends as `ended(some(denied))` |
 | The operator's approval lifetime runs out (recommended 24 hours) | ends as `ended(some(withdrawn))` |
-| `end` while pending | ends as `ended(some(withdrawn))` |
-| Removal of an entry, or any narrowing of an ancestor, that it rests on | is withdrawn too |
+| `end` while pending | ends as `ended(some(withdrawn))`; its waiting runs fail `cancelled` |
+| Removal of an entry, or any narrowing of an ancestor, that it rests on | ends as `ended(some(revoked))` |
 
-In every case the implementer frees the child's place, keeps its name, withdraws the prompt,
-and fails its waiting runs with `not-admitted`.
+In every case the implementer frees the child's place, keeps its name and withdraws the prompt.
+Its waiting runs fail `not-admitted`, except after `end`, where they fail `cancelled`
+because the caller stopped them.
 
 ### 7.5 A spawn's approved tool components
 
@@ -558,8 +649,11 @@ so a retry is always recognized and a handle can never reach a different child.
 
 The caller's run id is the `run-id` the child's run is driven under,
 so the child's `session-status` shows it to a direct parent.
-Give runs started any other way (by a person, a trigger) ids with a character outside `[a-z0-9-]`,
-so they never collide with the caller's.
+A run started any other way (by a person, a trigger) keeps the id its driver gave it,
+which may itself be in `[a-z0-9-]`, such as a UUID.
+In every status this interface returns, show such an id under a prefix the implementer reserves,
+containing a character outside `[a-z0-9-]` (for example `ext:`),
+so it never collides with an id the caller chose.
 
 ### 7.8 Retention
 
@@ -599,7 +693,11 @@ and before the implementer mediates any later dispatch, model call or brokered e
 - for a child whose own grants or powers no longer fit,
   stop its run's instances as 9.2 describes, end that run `failed(revoked)`,
   and mark the child `halted(revoked)`;
-- do the same for every descendant whose recorded authority rests on the change.
+- do the same for every descendant whose recorded authority rests on the change;
+- when the spawner itself loses `spawn`, treat every child it spawned as resting on that power:
+  withdraw its pending children (`ended(some(revoked))`),
+  and stop the rest of its subtree behind the barrier (9.1) as `halted(revoked)`,
+  since the spawner can no longer `cancel` or `end` them.
 
 Reach already applied to a running instance cannot be narrowed in place, so the instance is stopped.
 Direct egress through a component's own grants between the change and the stop is the limit of this guarantee (8.7).
@@ -607,13 +705,17 @@ Direct egress through a component's own grants between the change and the stop i
 ### 7.12 A child's own loads
 
 A child's own load beyond its ceiling goes to a grantor
-only if every ancestor's ceiling covers it; otherwise `denied`.
+only if every ancestor above it covers it, in its ceiling or in an approval already granted to it;
+otherwise `denied` (3.16).
 
 ### 7.13 Lifetime
 
 A child ends on `end`, its `max-duration`, its parent session's end,
 or when the spawning component's identity ends (workload deleted or recreated).
 Each of these stops the child's subtree as section 9 describes.
+A child that ended because its parent ended, or its spawner's identity ended,
+reports `ended(some(parent-ended))`, and so does every descendant it takes with it.
+A child's existence also rests on its spawner holding `spawn` (7.11).
 
 ### 7.14 Outputs
 
@@ -624,11 +726,17 @@ Each of these stops the child's subtree as section 9 describes.
 - In every `live` status, at any depth, a `finish` the child reported as `other` carries an empty string,
   and with `structured-only` the `finish` in `last-run` comes from the implementer's own records, as in the outcome.
 
-### 7.15 Nothing a child chose reaches the grandparent
+### 7.15 No text a child chose reaches the grandparent
 
 In every record `session-tree` or `spawn` returns for a session below the caller's direct children,
 return no name, a pending state with the approval id only,
 and a `live` status whose run ids (`activity.running`, `last-run.run`) are `none`.
+Below direct children, also coarsen what a descendant could use to signal upward:
+instants rounded down to a whole minute,
+usage rounded down to a power of two tokens and runs,
+and a `finish` in `last-run` replaced by the implementer's own, as `structured-only` does (7.20).
+A descendant can still signal through how much it spends and when, at that coarser grain;
+`spawn-types` states the channel.
 
 ### 7.16 Size caps
 
@@ -687,7 +795,9 @@ A caller routes on a reported `finish` and never allows anything on it.
 - Schemas are JSON Schema 2020-12.
   Refuse at `spawn` (`invalid`) a schema that uses a keyword the implementer does not enforce,
   or refers outside itself.
-  The schema is not checked for free strings.
+  Validation is bounded (10.9); a schema whose cost the implementer cannot bound,
+  such as a `pattern` it cannot run in linear time, is `invalid`.
+  The schema is not checked for free strings: a schema with a string field passes child text through.
 - A run whose last model call the provider answered with a refusal or a safety filter
   finishes `refusal` or `content-filter` with `structured` none, under every shape.
   It is not `output-rejected`.
@@ -702,6 +812,12 @@ A caller routes on a reported `finish` and never allows anything on it.
 
 - **From child to caller.** Copy stored attachments across the boundary and reissue them in the caller's session;
   they count toward `max-output-bytes` (7.21).
+  A URL attachment in a child's outcome is never passed on as a URL,
+  since the caller's model call would fetch it under the caller's egress:
+  fetch it under the child's own reach, and reissue its content as a stored attachment,
+  or, if the child's reach does not cover it, reject the outcome (`output-rejected`).
+  Drop `opaque` reply parts, which no check can read,
+  and pass citations as text only, never as a URL anything fetches on the caller's behalf.
 - **From caller to child**, in a first run or `send`, at acceptance:
   check that each stored attachment id belongs to the caller's session (`invalid` otherwise),
   copy it into the child's session under a new id, and count it toward the message size cap (7.16).
@@ -736,10 +852,11 @@ Report them consistently:
 | `done` | `replied`, with the child's `finish` |
 | `failed(cancelled)` | `cancelled` |
 | `failed(output-rejected)` or `failed(withheld)` | `replied`: the child finished; the caller's check or a release decision kept the outcome back |
+| `failed(cancelled)` while holding its outcome for release | `replied`: `run` had already returned |
 | `failed(interrupted)` or `failed(revoked)` | `interrupted`: the implementer cut the run off before `run` returned its outcome, even if the journal holds a result the agent wrote |
-| `failed(failed)` | `failed` |
+| `failed(failed)` | `failed`: the agent returned a `run-error` (its own `output-rejected` included) or trapped |
 | `failed(not-admitted)` | unchanged: the run never started |
-| `failed(expired)` | unchanged: the outcome aged out after the run ended as it did |
+| `failed(expired)`, as `wait` answers | not an ending: the outcome aged out after the run ended as the other rows say |
 
 ## 8. Runs, leases and fencing
 
@@ -834,15 +951,17 @@ Effects already under way are not undone.
 
 A session's spend counts against it and every ancestor.
 When a token budget or a root's active-time budget is spent,
-runs below it finish `max-total-tokens` or `max-duration`,
-and the sessions below it are `halted(exhausted)` until an operator or person raises it.
+the broker refuses every further model call below it.
+A run in progress there ends however its agent handles that refusal, usually `failed`:
+the implementer never writes a `finish` for the agent.
+The sessions below it are `halted(exhausted)` until an operator or person raises the budget.
 
 ### 10.2 A child's own `max-duration`
 
 It is a lifetime, not a budget.
 It is measured from admission (never while `pending`),
 and passing it ends the child as `ended(some(exhausted(max-duration)))`.
-Its descendants end with it, as when any parent ends, and report `ended(none)`.
+Its descendants end with it, as when any parent ends, and report `ended(some(parent-ended))`.
 When an ancestor's budget is spent at the same time, ending wins over halting.
 
 ### 10.3 Metering
@@ -905,13 +1024,37 @@ Every spawn and run acceptance reserves its place atomically.
 | Revocation bound (7.11) | 60 s |
 | Detail strings returned to a caller (3.18) | 256 bytes |
 | `watch-children` streams | 4 per caller |
+| `session-status` watches | 4 per caller |
+| Open `list-offers` streams | 4 per caller |
+| Open `child-run` subscriptions | 16 per caller |
+| Instructions, schema, message (7.16) | 64 KiB, 64 KiB, 256 KiB |
+| `max-output-bytes` when unset | 256 KiB |
+| Image size, pull time, pulls (3.9) | 256 MiB, 2 minutes, 10 per minute per caller |
+| Grantor prompts (4.7) | 5 per hour per child subtree |
+| Rollouts (6.4) | 10 per hour per session |
+| Schema validation (7.21) | 100 ms of work per outcome |
+| A child's `max-runs` and `max-duration` when unset | 100 runs; 24 hours |
+| A child subtree's `max-concurrent-runs` and `max-live-children` when unset (10.11) | half of the tree's |
 
 ### 10.10 `max-runs`
 
 It counts runs accepted in the child's own session, whoever starts them (its parent, a person, a trigger).
 A retry that returns an existing run counts nothing.
 A descendant's runs count under its own `max-runs`;
-runs in progress across the tree are bounded by the concurrent-runs limit (10.9).
+runs in progress are bounded per child subtree and across the tree (10.11).
+
+When a session's own `max-runs` or `max-total-tokens` is spent,
+it becomes `halted(exhausted(max-runs))` or `halted(exhausted(max-total-tokens))`,
+and `send` to it answers `halted` until its budget is raised.
+
+### 10.11 Shares of tree-wide limits
+
+Runs in progress and live children are limited across the tree (10.9),
+so one subtree could otherwise take every place.
+Each child's `spawn-budget` carries `max-concurrent-runs` and `max-live-children` for its subtree;
+unset, each defaults to half of what the tree allows.
+Every tree-wide limit keeps one place for the root's own runs and children.
+Retention of ended children in listings (7.8) is counted per caller, not per tree.
 
 ## 11. `session-tree`
 
@@ -936,8 +1079,11 @@ a call over the cap fails at once with `unavailable`.
 Take the snapshot and the subscription together, so no change between them is lost.
 After `synced`, send changes in order; a slow reader may miss intermediate ones but always gets each session's latest record.
 When the caller drops the stream, resolve the future `ok`.
-When the watch cannot continue (the store fails, or the caller loses the power),
-end the stream and resolve the future with the reason.
+When the watch cannot continue, end the stream and resolve the future
+with what a fresh call would answer at that moment:
+`disabled` when the caller lost the power, `unavailable` when the store failed.
+`session-status.watch` follows the same rule with its own cases
+(`denied` when access to the status is withdrawn, since that interface has no power to lose).
 A new watch starts with a fresh snapshot.
 
 ## 12. Audit and traces
@@ -965,7 +1111,7 @@ Spawn a beyond-ceiling child: it is `pending`, with no instance.
 Spawn the same name and request again: the same child, still one approval.
 Grant it: `live`.
 Spawn another name with the same request: a new approval.
-Deny one: `ended(denied)`, its waiting first run fails `not-admitted`, its place is freed,
+Deny one: `ended(some(denied(_)))`, its waiting first run fails `not-admitted`, its place is freed,
 and a matching request in the cooldown answers `denied`.
 
 ### 13.2 The parent and grandchildren gain nothing
@@ -998,7 +1144,8 @@ An interface grant naming `cosmonic:agent/spawn`: `invalid`.
 
 ### 13.6 Never beyond an ancestor
 
-A child whose agent grants exceed the parent's: `denied`.
+A child whose agent grants exceed the parent's: `denied`, with no prompt, whatever policy says.
+A child whose agent grants name a secret: `invalid`.
 Narrow the parent's grants while the child runs:
 within the revocation bound its run ends `failed(revoked)`, its state is `halted(revoked)`, and the next `send` answers `halted`.
 Remove a parent's entry a child's tool component rested on: the child loses it before its next call to it.
@@ -1007,8 +1154,8 @@ Remove a parent's entry a child's tool component rested on: the child loses it b
 
 Send run `r1`, drop the reply, send `r1` again with the same message: one run.
 With another message: `name-taken`.
-With the same values but a JSON schema whose keys are reordered: `name-taken`.
 Drop the handle, call `get-child` from a fresh instance: the same child, `watch-run` on `r1` follows it, and `wait` on `r1` returns its outcome.
+Spawn a name again with the same request but a JSON schema whose keys are reordered: `name-taken`.
 Withdraw the caller's `spawn` power, then retry: `disabled`, not the existing child.
 
 ### 13.8 State, not notices
@@ -1036,8 +1183,10 @@ the journal ends the interrupted run with `unresolved` op results.
 ### 13.11 Budgets
 
 Spend in a grandchild counts against its parent and root.
-Spend a root's tokens: runs below finish `max-total-tokens` and children are `halted(exhausted)`.
-Let a child's own `max-duration` pass: it ends `ended(some(exhausted(max-duration)))` and its children end `ended(none)`.
+Spend a root's tokens: further model calls below are refused and children are `halted(exhausted(max-total-tokens))`.
+Spend a child's own `max-runs`: it is `halted(exhausted(max-runs))` and `send` answers `halted`.
+Let a child's own `max-duration` pass: it ends `ended(some(exhausted(max-duration)))` and its children end `ended(some(parent-ended))`.
+Give one child `spawn` and have its subtree start runs until refused: the root can still start a run and spawn a child.
 A sibling's `get-lineage` shows only coarse ancestor figures.
 A provider that reports no usage is charged the full reservation.
 
@@ -1091,6 +1240,7 @@ The reverse holds for loading without discovery.
 Send a child a stored attachment from the caller's session: the child receives a copy under its own id.
 Send one from another session: `invalid`.
 Send a URL the caller may reach and the child may not: the child receives the content, and no egress.
+Have a child with no egress return a URL attachment: the outcome is rejected, and nothing fetches the URL under the caller's egress.
 
 ### 13.20 Watches end with a reason
 
@@ -1102,10 +1252,22 @@ Withdraw the caller's power while a watch is open: the stream ends and the futur
 Load a tool component that can serve only the next run, set it aside, and load it again before that run:
 it is `next-run`, not `offered`.
 Unbind a set-aside one at the cap and load it again: `loading`, then `offered`, with no prompt.
+Load one approved for one function, set it aside, and load it again for every function: it asks again.
 
-## 14. Notes on particular runtimes
+### 13.22 Losing the power to spawn
 
-These show how one runtime meets the requirements above. They require nothing.
+Withdraw `spawn` from a caller with a pending child and a running one:
+the pending child ends `ended(some(revoked))`, and the running one stops and is `halted(revoked)`.
+
+### 13.23 Admission subjects
+
+Name, in a custom spec, the digest of a catalog entry policy hides from the caller: it waits on a grantor, as any other digest.
+Have policy refuse a tool component inside the ceiling: `denied`.
+
+## 14. Notes on particular runtimes (not normative)
+
+These show how one runtime meets the requirements above. They require nothing,
+and are the one place these documents name a product.
 
 ### 14.1 Session id on wash-runtime
 
