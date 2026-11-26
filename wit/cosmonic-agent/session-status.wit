@@ -39,12 +39,17 @@ package cosmonic:agent@0.4.3;
 /// its kebab-case name until a minor release adds it. A caller may show the
 /// name but acts on nothing.
 ///
+/// Times are `wasi:clocks/system-clock` instants, so a component that
+/// imports this interface also imports `system-clock`.
+///
 /// Unstable behind `session-status`, which also needs `agent-run`, whose
 /// `finish` it uses. The shape may change before it is marked `@since`.
 @unstable(feature = session-status)
 interface session-status {
     @unstable(feature = session-status)
     use run-types.{finish};
+    @unstable(feature = session-status)
+    use wasi:clocks/system-clock@0.3.0.{instant};
 
     /// What is in progress in the session now. Says nothing about whether a
     /// person is needed or how earlier runs ended.
@@ -69,9 +74,9 @@ interface session-status {
     /// addition, or a change awaiting review.
     @unstable(feature = session-status)
     record hold {
-        /// When the oldest item still held was raised, in milliseconds
-        /// since the Unix epoch. `none` when the host does not know.
-        since-ms: option<u64>,
+        /// When the oldest item still held was raised. `none` when the host
+        /// does not know.
+        since: option<instant>,
     }
 
     /// How a run ended.
@@ -103,9 +108,8 @@ interface session-status {
         run: option<string>,
         /// How it ended.
         end: run-end,
-        /// When it ended, in milliseconds since the Unix epoch. `none` when
-        /// the host does not know.
-        ended-ms: option<u64>,
+        /// When it ended. `none` when the host does not know.
+        ended-at: option<instant>,
     }
 
     /// A session's status: three independent facts.
@@ -113,10 +117,9 @@ interface session-status {
     record session-status {
         /// What is in progress now.
         activity: activity,
-        /// When `activity` took its current value, in milliseconds since
-        /// the Unix epoch. `none` when the host does not know, such as a
-        /// session that has never run.
-        activity-since-ms: option<u64>,
+        /// When `activity` took its current value. `none` when the host
+        /// does not know, such as a session that has never run.
+        activity-since: option<instant>,
         /// Set while the host holds something for a person, whether or not
         /// a run is in progress. Time held during a run counts toward that
         /// run's `run-options.max-duration`.

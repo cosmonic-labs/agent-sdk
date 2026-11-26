@@ -170,7 +170,8 @@ unknown. An unknown value on one fact leaves the other two readable.
 
 A component reads the status with `get` and follows it with `watch`. It
 needs only the `session-status` import, so watching a session never grants
-driving it. Like `session` and `run`, it never names a session:
+driving it. Times are `wasi:clocks/system-clock` instants, so the import also
+brings in `system-clock`, which lets the component read the wall clock. Like `session` and `run`, it never names a session:
 the host binds the one it reports. It stays unstable until more
 than one host adopts it, so its shape can still change, for example to let
 a hold say what is held.
