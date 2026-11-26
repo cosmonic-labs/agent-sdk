@@ -12,7 +12,7 @@
  *   record:    [op-result: the call, step: its result] + state once no op is open
  *   endRun:    [run-result: how the run ended]
  *
- * A compaction (compaction.js) summarizes the older transcript with a model
+ * A compaction (compaction.ts) summarizes the older transcript with a model
  * call, which is an op like any other, and lands its result with
  * agent.compaction.v1 and the smaller transcript as state in one commit:
  *
@@ -30,10 +30,12 @@
  * is after the state's `through`, which is what makes a restart safe.
  */
 
+import type { Step, TranscriptMessage } from './types.ts';
+import type { CompactionData } from './compaction.ts';
 import * as store from 'cosmonic:agent/session@0.4.2';
 import { getRandomBytes } from 'wasi:random/random@0.3.0';
 
-import { describeVariant } from '../../../shared/js/wit.js';
+import { describeVariant } from '../../../shared/js/wit.ts';
 import {
     COMPACTION_KIND,
     COMPACT_KIND,
@@ -44,7 +46,7 @@ import {
     compactResultData,
     compactionAccepted,
     turnStart,
-} from './compaction.js';
+} from './compaction.ts';
 import {
     CONTEXT_RESET_KIND,
     OP_KIND,
@@ -64,7 +66,7 @@ import {
     startAfter,
     stepsOf,
     unresolvedOps,
-} from './journal-rules.js';
+} from './journal-rules.ts';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -85,12 +87,12 @@ export class Duplicate extends Error {
 }
 export { Superseded };
 
-export function describe(e) {
-    const p = e?.payload;
+export function describe(e: unknown) {
+    const p = (e as { payload?: { tag: string; val?: unknown } } | null)?.payload;
     if (p && typeof p === 'object' && 'tag' in p) {
         return describeVariant(p);
     }
-    return String(e?.message || e);
+    return String(e instanceof Error ? e.message : e);
 }
 
 // Random, never a counter: counters restart with the agent, and the host keeps
@@ -107,7 +109,13 @@ export const randomId = commitId;
 // (so a retry after a lost reply cannot write twice), and with a step's
 // images dropped if they put it over the host's entry limit. `fixedId` is a
 // commit id with a meaning (a run's `run:<run-id>`), which a retry keeps.
-async function commit(entries, state, requireState, requireEnd, fixedId) {
+async function commit(
+    entries: NewEntry[],
+    state: Uint8Array | undefined,
+    requireState?: ReturnType<typeof condition>,
+    requireEnd?: JournalEnd,
+    fixedId?: string,
+) {
     let id = fixedId ?? commitId();
     let unavailable = 0;
     for (;;) {
@@ -120,7 +128,8 @@ async function commit(entries, state, requireState, requireEnd, fixedId) {
                 continue;
             }
             const i = p?.tag === 'too-large' ? p.val?.entry : undefined;
-            const withoutImages = i != null && entries[i]?.kind === STEP_KIND ? stepWithoutImages(entries[i].data) : null;
+            const withoutImages =
+                i != null && entries[i]?.kind === STEP_KIND ? stepWithoutImages(entries[i].data) : null;
             if (withoutImages) {
                 entries = entries.slice();
                 entries[i] = { kind: STEP_KIND, data: withoutImages };
@@ -132,10 +141,10 @@ async function commit(entries, state, requireState, requireEnd, fixedId) {
     }
 }
 
-const readFrom = (start) => readEntries(store, start, PAGE);
+const readFrom = (start: number) => readEntries(store, start, PAGE);
 
 // The saved transcript, or why it is unusable.
-function saved(snapshot) {
+function saved(snapshot: Snapshot): { messages: TranscriptMessage[]; unreadable?: boolean } {
     if (!snapshot.state) {
         return { messages: [] };
     }
@@ -148,18 +157,23 @@ function saved(snapshot) {
     return readableTranscript(v) ? { messages: v } : { messages: [], unreadable: true };
 }
 
-class Journal {
-    constructor(version, end, written, beforeTurn = null) {
+export class Journal {
+    before: number | null;
+    version: string | null;
+    end: JournalEnd;
+    ops = new Map<string, 'committed' | 'dispatched' | { done: string }>();
+    names = new Map<string, string>();
+    statePending = false;
+    superseded = false;
+    lastStale: Snapshot | null = null;
+    written: number;
+    compactionSeq: number | null = null;
+
+    constructor(version: string | null, end: JournalEnd, written: number, beforeTurn: number | null = null) {
         this.before = beforeTurn; // the last seq before this turn's person's step
         this.version = version; // the state's version; null is absent
         this.end = end; // where the journal ended after this writer's last commit
-        this.ops = new Map(); // op id -> "committed" | "dispatched" | { done: outcome }
-        this.names = new Map(); // op id -> tool name, for an unresolved call's error step
-        this.statePending = false;
-        this.superseded = false;
-        this.lastStale = null;
         this.written = written; // how many messages the saved state holds
-        this.compactionSeq = null; // the seq of the last agent.compaction.v1 committed
     }
 
     // The seq of the agent.compaction.v1 this writer last committed.
@@ -169,7 +183,7 @@ class Journal {
 
     // Mark a tool call as being made. Refuses a call whose op is not in the
     // journal, so no call is made that a restart could not account for.
-    dispatch(id) {
+    dispatch(id: string) {
         if (this.ops.get(id) !== 'committed') {
             return false;
         }
@@ -194,7 +208,7 @@ class Journal {
     // making it. Conditional, like a tool call's: a replaced writer stops here
     // (Superseded). If the call never returns, the next turn closes it as
     // cancelled, since a model call may repeat.
-    async beginModelOp(op, purpose) {
+    async beginModelOp(op: string, purpose: string) {
         const data = { op, target: 'model', name: 'default', purpose };
         let r;
         try {
@@ -223,7 +237,12 @@ class Journal {
     //
     // `extra` goes in the installing commit after the entry: a requested
     // compaction's agent.compact-result.v1.
-    async compacted(op, compaction, messages, extra = []) {
+    async compacted(
+        op: string,
+        compaction: CompactionData | null,
+        messages: TranscriptMessage[],
+        extra: NewEntry[] = [],
+    ) {
         const failed = () => [entry(OP_RESULT_KIND, { op, outcome: 'failed' })];
         if (!compaction) {
             await this.land(failed(), messages);
@@ -295,13 +314,13 @@ class Journal {
         return outcome === 'compacted';
     }
 
-    finish(id, outcome) {
+    finish(id: string, outcome: string) {
         if (this.ops.has(id)) {
             this.ops.set(id, { done: outcome });
         }
     }
 
-    takeResults(ids) {
+    takeResults(ids?: string[]) {
         const out = [];
         for (const id of ids ?? [...this.ops.keys()]) {
             if (!this.ops.has(id)) {
@@ -321,7 +340,17 @@ class Journal {
     // replaced writer stops here, before the calls (Superseded). Anything else
     // closes the ops it answers and goes with the transcript as state once no
     // op is left open.
-    async record({ step, ops = [], closes, messages }) {
+    async record({
+        step,
+        ops = [],
+        closes,
+        messages,
+    }: {
+        step: Step | null;
+        ops?: { id: string; data: { name: string } }[];
+        closes?: string[];
+        messages?: TranscriptMessage[];
+    }) {
         const entries = [...this.takeResults(closes), ...(step ? [entry(STEP_KIND, step)] : [])];
         if (ops.length) {
             entries.push(...ops.map((o) => entry(OP_KIND, o.data)));
@@ -352,7 +381,7 @@ class Journal {
     // Commit entries that record something that already happened. After a call
     // the commit must land: on a lost race the entries go again with no
     // conditions, and the state waits for the end of the turn.
-    async land(entries, messages) {
+    async land(entries: NewEntry[], messages?: TranscriptMessage[]) {
         if (messages && !this.superseded) {
             try {
                 const r = await commit(
@@ -398,7 +427,7 @@ class Journal {
     // with it: the summary call's op closed as failed first, when there is
     // one, in the same commit. Already true, so it lands without conditions
     // and leaves the state as it was.
-    async endCompaction(op, resultEntry) {
+    async endCompaction(op: string | null, resultEntry: NewEntry) {
         const entries = [...(op ? [entry(OP_RESULT_KIND, { op, outcome: 'failed' })] : []), resultEntry];
         try {
             const r = await commit(entries, undefined, undefined, undefined);
@@ -411,7 +440,7 @@ class Journal {
     }
 
     // Record that a run ended. Already true, so it lands without conditions.
-    async endRun(resultEntry) {
+    async endRun(resultEntry: NewEntry) {
         try {
             await this.land([resultEntry], undefined);
         } catch (e) {
@@ -425,7 +454,7 @@ class Journal {
     // When a call closes unresolved, only the entries are committed: the saved
     // transcript stays as it was before the call, so nothing after it builds
     // on a call whose effect is unknown.
-    async close(steps, messages, extra = []) {
+    async close(steps: Step[], messages: TranscriptMessage[] | undefined, extra: NewEntry[] = []) {
         const unresolved = [...this.ops.values()].some((status) => outcomeOf(status) === 'unresolved');
         if (unresolved) {
             messages = undefined;
@@ -448,7 +477,7 @@ class Journal {
     // turn's messages (from `base`, the person's message, on), under the
     // conditions of the snapshot it returned. A transcript in a format this
     // build cannot read is not overwritten; an error step says so instead.
-    async settle(messages, base) {
+    async settle(messages: TranscriptMessage[], base: number) {
         if (!this.statePending && !this.superseded && this.written !== messages.length) {
             await this.land([], messages).catch((e) => console.error(`session: ${describe(e)}`));
         }
@@ -497,14 +526,14 @@ class Journal {
 
 // The last commit of a run: agent.run-result.v1, written without conditions
 // because it records what already happened.
-export function runResult(run, outcome, { finish, error } = {}) {
+export function runResult(run: string, outcome: string, { finish, error }: { finish?: string; error?: string } = {}) {
     return entry(RUN_RESULT_KIND, { run, outcome, ...(finish ? { finish } : {}), ...(error ? { error } : {}) });
 }
 
 // The last sequence number before the person's step that openTurn committed,
 // ending the journal at `end`, read back from the journal. The turn is open
 // either way, so a failed read only means a summary records no range.
-async function beforeTurn(prior, end) {
+async function beforeTurn(prior: JournalEnd, end: JournalEnd) {
     if (end.tag !== 'at') {
         return null;
     }
@@ -530,11 +559,16 @@ async function beforeTurn(prior, end) {
 // original result rather than writing, and that result's journal end is not
 // past the end this turn read, which is how a repeated run id (Duplicate) is
 // told from a fresh commit.
-export async function openTurn(user, userStep, initial, run) {
+export async function openTurn(
+    user: TranscriptMessage,
+    userStep: Step,
+    initial: (prior: TranscriptMessage[]) => TranscriptMessage[],
+    run: string,
+) {
     let snapshot = await store.current();
     for (let i = 0; i < STALE_RETRIES; i++) {
         const { messages: prior, unreadable } = saved(snapshot);
-        const through = snapshot.state ? snapshot.state.through : { tag: 'empty' };
+        const through: JournalEnd = snapshot.state ? snapshot.state.through : { tag: 'empty' };
         const after = await readFrom(startAfter(through));
         const entries = resolutionEntries(unresolvedOps(after)).map(([kind, data]) => entry(kind, data));
         if (unreadable) {
@@ -568,7 +602,12 @@ export async function openTurn(user, userStep, initial, run) {
 }
 
 // The agent.compact-result.v1 entry for requested compaction `compact`.
-export function compactResult(compact, outcome, detail = {}, compacted = false) {
+export function compactResult(
+    compact: string,
+    outcome: string,
+    detail: { finish?: string; error?: string } = {},
+    compacted = false,
+) {
     return entry(COMPACT_RESULT_KIND, compactResultData(compact, outcome, detail, compacted));
 }
 
@@ -582,13 +621,13 @@ export function compactResult(compact, outcome, detail = {}, compacted = false) 
 // the writer, the transcript to summarize (null when there is none, or none
 // this build can read), and the last seq before the person's latest message
 // in it.
-export async function openCompaction(id, focus) {
+export async function openCompaction(id: string, focus: string | null) {
     const snapshot = await store.current();
     const all = await readFrom(0);
     if (compactionAccepted(all, id)) {
         throw new Duplicate();
     }
-    const through = snapshot.state ? snapshot.state.through : { tag: 'empty' };
+    const through: JournalEnd = snapshot.state ? snapshot.state.through : { tag: 'empty' };
     const after = startAfter(through);
     const entries = resolutionEntries(unresolvedOps(all.filter((e) => Number(e.seq) >= after))).map(([kind, data]) =>
         entry(kind, data),

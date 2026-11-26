@@ -1,30 +1,30 @@
 /*
  * Pi on QuickJS: the typed cosmonic:agent/run export, and WASI 0.3's
  * wasi:http/handler for hosts that do not call it. The agent logic is
- * main.js; this file turns a wasi:http request into what main.js expects and
+ * main.ts; this file turns a wasi:http request into what main.ts expects and
  * its streamed reply into a stream<u8> response body. A client that hangs up
  * makes a body write fail, which cancels Pi's turn.
  */
 
-import '../../../shared/js/base-web.js';
-import './timers.js';
+import '../../../shared/js/base-web.ts';
+import './timers.ts';
 import { Fields, Request as WasiRequest, Response as WasiResponse } from 'wasi:http/types@0.3.0';
 
-import { handle } from './main.js';
+import { handle } from './main.ts';
 
 // The typed cosmonic:agent/run@0.4.2 export; componentize-qjs looks an
 // interface export up by its interface name.
-export { runExport as run } from './main.js';
+export { runExport as run } from './main.ts';
 
 // The cosmonic:agent/compact@0.4.2 export: a summary the driver asks for.
-export { compactExport as compact } from './requested.js';
+export { compactExport as compact } from './requested.ts';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 // The generated type constant for a future payload. Looked up by shape rather
 // than by name because the shim qualifies names that would collide.
-function futureType(match) {
+function futureType(match: (key: string) => boolean) {
     const types = wit.Future.types ?? {};
     const k = Object.keys(types).find(match);
     if (!k) {
@@ -37,7 +37,7 @@ const BODY_RESULT = () => futureType((k) => k.includes('ERROR_CODE') && !k.inclu
 // future<result<option<trailers>, error-code>>: the response trailers.
 const TRAILERS = () => futureType((k) => k.includes('ERROR_CODE') && k.includes('OPTION'));
 
-async function readAll(stream) {
+async function readAll(stream: AsyncIterable<Uint8Array>) {
     const parts = [];
     let n = 0;
     for await (const chunk of stream) {
@@ -53,7 +53,7 @@ async function readAll(stream) {
     return out;
 }
 
-function toPiRequest(request) {
+function toPiRequest(request: WasiRequest) {
     const method = request.getMethod();
     const m = typeof method === 'string' ? method : method.tag === 'other' ? method.val : method.tag;
     const path = request.getPathWithQuery() ?? '/';
@@ -67,7 +67,10 @@ function toPiRequest(request) {
     return {
         method: m.toUpperCase(),
         url: `http://agent${path}`,
-        headers: { has: (n) => headers.has(n.toLowerCase()), get: (n) => headers.get(n.toLowerCase()) ?? null },
+        headers: {
+            has: (n: string) => headers.has(n.toLowerCase()),
+            get: (n: string) => headers.get(n.toLowerCase()) ?? null,
+        },
         json: async () => JSON.parse(await body),
         text: () => body,
         consumed: body,
@@ -75,7 +78,7 @@ function toPiRequest(request) {
 }
 
 export const handler = {
-    async handle(request) {
+    async handle(request: WasiRequest) {
         const req = toPiRequest(request);
         const res = await handle(req);
         // Always drain the request body, even for routes that ignore it.

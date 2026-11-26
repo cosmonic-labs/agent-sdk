@@ -13,7 +13,7 @@ import {
     offeredInput,
     rememberListed,
     toolArguments,
-} from '../../../shared/js/tool-input.js';
+} from '../../../shared/js/tool-input.ts';
 import {
     OP_KIND,
     OP_RESULT_KIND,
@@ -28,10 +28,10 @@ import {
     stepWithoutImages,
     toolOps,
     unresolvedOps,
-} from '../src/journal-rules.js';
+} from '../src/journal-rules.ts';
 
 const enc = new TextEncoder();
-const e = (kind, v) => ({ kind, data: enc.encode(typeof v === 'string' ? v : JSON.stringify(v)) });
+const e = (kind: string, v: unknown) => ({ kind, data: enc.encode(typeof v === 'string' ? v : JSON.stringify(v)) });
 
 test('an op with a result is resolved; one without is not, in order', () => {
     const entries = [
@@ -69,7 +69,7 @@ test('a step too large for its images loses only them', () => {
         new TextDecoder().decode(
             stepWithoutImages(
                 enc.encode(JSON.stringify({ role: 'tool', text: 'plotted', images: ['data:image/png;base64,AA'] })),
-            ),
+            )!,
         ),
     );
     assert.deepEqual(withoutImages.images, []);
@@ -120,9 +120,9 @@ test('tool arguments pass through as the model wrote them', () => {
 });
 
 test('listed tools are offered as listed, freeform included', () => {
-    const freeform = { tag: 'grammar', val: { syntax: 'lark', definition: 'start: /.+/' } };
-    const text = { tag: 'text' };
-    const schema = { tag: 'json-schema', val: '{ "type": "object" }' };
+    const freeform = { tag: 'grammar', val: { syntax: 'lark', definition: 'start: /.+/' } } as const;
+    const text = { tag: 'text' } as const;
+    const schema = { tag: 'json-schema', val: '{ "type": "object" }' } as const;
     rememberListed([
         { name: 'apply_patch', input: freeform },
         { name: 'note', input: text },
@@ -130,13 +130,17 @@ test('listed tools are offered as listed, freeform included', () => {
     ]);
     assert.deepEqual(offeredInput({ name: 'apply_patch', parameters: agentSchema(freeform) }), freeform);
     assert.deepEqual(offeredInput({ name: 'note', parameters: agentSchema(text) }), text);
-    assert.equal(agentSchema(text).required[0], FREEFORM_TEXT);
+    assert.deepEqual(agentSchema(text), {
+        type: 'object',
+        properties: { [FREEFORM_TEXT]: { type: 'string' } },
+        required: [FREEFORM_TEXT],
+    });
     assert.deepEqual(offeredInput({ name: 'search', parameters: agentSchema(schema) }), schema);
     assert.deepEqual(offeredInput({ name: 'own', parameters: { type: 'object' } }), {
         tag: 'json-schema',
         val: '{"type":"object"}',
     });
-    assert.equal(agentSchema(freeform).required[0], FREEFORM_TEXT);
+    assert.deepEqual(agentSchema(freeform), agentSchema(text));
 });
 
 test('closing an op never claims it succeeded unless it did', () => {
@@ -180,7 +184,7 @@ test('a call that was cancelled or timed out is unresolved; other errors failed'
 });
 
 test('a tools@0.4.0 call that never started is cancelled; one that may have run is unresolved', () => {
-    const notDispatched = (tag) => ({ tag: 'not-dispatched', val: { tag } });
+    const notDispatched = (tag: string) => ({ tag: 'not-dispatched', val: { tag } });
     assert.equal(outcomeForToolError(notDispatched('unknown-tool')), 'cancelled');
     assert.equal(outcomeForToolError(notDispatched('denied')), 'cancelled');
     assert.equal(outcomeForToolError({ tag: 'outcome-unknown', val: { tag: 'timed-out' } }), 'unresolved');
@@ -190,7 +194,7 @@ test('a tools@0.4.0 call that never started is cancelled; one that may have run 
 });
 
 test('an unknown outcome stops the run, except a timeout on a read-only tool', () => {
-    const unknown = (tag) => ({ tag: 'outcome-unknown', val: { tag } });
+    const unknown = (tag: string) => ({ tag: 'outcome-unknown', val: { tag } });
     assert.equal(stopsTheRun({ tag: 'not-dispatched', val: { tag: 'timed-out' } }), false);
     assert.equal(stopsTheRun(unknown('upstream'), true), true);
     assert.equal(stopsTheRun(unknown('cancelled'), true), true);

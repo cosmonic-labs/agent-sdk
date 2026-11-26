@@ -14,8 +14,9 @@ test_host := justfile_directory() / "../shared/test-host"
 # COMPONENTIZE_QJS must name the patched componentize-qjs (see README).
 build:
     {{pnpm}} install --frozen-lockfile
+    {{pnpm}} run typecheck
     {{node}} {{scripts}}/fetch-wit.mjs component deny-fs
-    {{node}} build.mjs
+    {{node}} build.ts
     {{node}} {{scripts}}/check-harness.mjs dist/pi-agent.wasm
     cp dist/pi-agent.wasm dist/pi-harness.wasm
     @ls -l dist/pi-harness.wasm
@@ -26,7 +27,7 @@ test: build test-unit test-e2e
 # The rule tests alone, which need nothing beyond Node and the installed
 # dependencies.
 test-unit:
-    {{node}} --test component/test/*.js
+    {{node}} --test component/test/*.ts
 
 # Drive the built component through the scripted test host: runs, the
 # compact export and the automatic compaction.

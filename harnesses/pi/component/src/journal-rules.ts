@@ -3,4 +3,4 @@
  * Pure helpers take journal records or messages and return normalized entries.
  */
 
-export * from '../../../shared/js/journal-rules.js';
+export * from '../../../shared/js/journal-rules.ts';

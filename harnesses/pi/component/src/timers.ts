@@ -8,9 +8,18 @@
  * everything else in the component.
  */
 
-import { waitFor } from 'wasi:clocks/monotonic-clock@0.3.0';
+import { now, waitFor } from 'wasi:clocks/monotonic-clock@0.3.0';
 
-globalThis.setTimeout = (fn, ms = 0, ...args) => {
+// Pi measures response durations with performance.now() in milliseconds.
+const clocks: {
+    performance?: { now(): number };
+    setTimeout: typeof timeout;
+    setInterval: typeof interval;
+    clearInterval(id: number): void;
+} = globalThis;
+clocks.performance ??= { now: () => now() / 1_000_000 };
+
+function timeout<T extends unknown[]>(fn: (...args: T) => void, ms = 0, ...args: T) {
     // At least 1 ms: a zero wait can complete without suspending, and then it
     // hands nothing back to the host.
     waitFor(Math.max(1, Math.floor(Number(ms) || 0)) * 1_000_000).then(
@@ -18,15 +27,16 @@ globalThis.setTimeout = (fn, ms = 0, ...args) => {
         () => fn(...args),
     );
     return 0;
-};
+}
+clocks.setTimeout = timeout;
 
 // setInterval over the same wait: each tick waits again until cleared. The
 // QuickJS runtime has no timers of its own, so without this the requested
 // compaction's heartbeat throws before its work starts.
-const intervals = new Set();
+const intervals = new Set<number>();
 let nextInterval = 1;
 
-globalThis.setInterval = (fn, ms = 0, ...args) => {
+function interval<T extends unknown[]>(fn: (...args: T) => void, ms = 0, ...args: T) {
     const id = nextInterval++;
     const wait = Math.max(1, Math.floor(Number(ms) || 0)) * 1_000_000;
     intervals.add(id);
@@ -46,8 +56,9 @@ globalThis.setInterval = (fn, ms = 0, ...args) => {
     };
     tick();
     return id;
-};
+}
+clocks.setInterval = interval;
 
-globalThis.clearInterval = (id) => {
+clocks.clearInterval = (id) => {
     intervals.delete(id);
 };

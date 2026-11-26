@@ -4,14 +4,18 @@
  * actually call, nothing more.
  */
 
-const g = globalThis;
+// The embedded runtime may already supply an API. Each fallback implements
+// the subset used by the harness and its bundled dependencies.
+function provide(name: keyof typeof globalThis, fallback: unknown) {
+    if (globalThis[name] == null) Reflect.set(globalThis, name, fallback);
+}
 
 // QuickJS has no console, and this component imports no stdio. Keep the last
 // lines in memory so they are at least inspectable from a debugger.
-const logs = [];
+const logs: string[] = [];
 const keep =
-    (lvl) =>
-    (...a) => {
+    (lvl: string) =>
+    (...a: unknown[]) => {
         logs.push(
             `${lvl}: ${a
                 .map((x) =>
@@ -31,14 +35,20 @@ const keep =
             logs.shift();
         }
     };
-g.console ??= { log: keep('log'), info: keep('info'), warn: keep('warn'), error: keep('error'), debug: keep('debug') };
+provide('console', {
+    log: keep('log'),
+    info: keep('info'),
+    warn: keep('warn'),
+    error: keep('error'),
+    debug: keep('debug'),
+});
 
-g.queueMicrotask ??= (fn) => {
+provide('queueMicrotask', (fn: () => void) => {
     Promise.resolve().then(fn);
-};
+});
 // setTimeout is defined in entry.js over the WASI clock; clearTimeout is a
 // no-op because nothing on Pi's path cancels a timer it set.
-g.clearTimeout ??= () => {};
+provide('clearTimeout', () => {});
 
 class TextEncoderPoly {
     get encoding() {
@@ -73,13 +83,18 @@ class TextDecoderPoly {
     get encoding() {
         return 'utf-8';
     }
-    decode(buf) {
+    decode(buf?: ArrayBuffer | ArrayBufferView) {
         if (!buf) {
             return '';
         }
-        const b = buf instanceof Uint8Array ? buf : new Uint8Array(buf.buffer ?? buf);
+        const b =
+            buf instanceof Uint8Array
+                ? buf
+                : ArrayBuffer.isView(buf)
+                  ? new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
+                  : new Uint8Array(buf);
         let s = '';
-        for (let i = 0; i < b.length;) {
+        for (let i = 0; i < b.length; ) {
             const c = b[i++];
             let cp;
             if (c < 0x80) {
@@ -96,25 +111,25 @@ class TextDecoderPoly {
         return s;
     }
 }
-g.TextEncoder ??= TextEncoderPoly;
-g.TextDecoder ??= TextDecoderPoly;
+provide('TextEncoder', TextEncoderPoly);
+provide('TextDecoder', TextDecoderPoly);
+
+type AbortListener = (event: { type: string; target: AbortSignalPoly }) => void;
 
 class AbortSignalPoly {
+    aborted = false;
+    reason: unknown;
+    onabort: AbortListener | null = null;
+    _l: AbortListener[] = [];
     get [Symbol.toStringTag]() {
         return 'AbortSignal';
     }
-    constructor() {
-        this.aborted = false;
-        this.reason = undefined;
-        this.onabort = null;
-        this._l = [];
-    }
-    addEventListener(t, f) {
+    addEventListener(t: string, f: AbortListener) {
         if (t === 'abort') {
             this._l.push(f);
         }
     }
-    removeEventListener(t, f) {
+    removeEventListener(t: string, f: AbortListener) {
         this._l = this._l.filter((x) => x !== f);
     }
     throwIfAborted() {
@@ -124,10 +139,8 @@ class AbortSignalPoly {
     }
 }
 class AbortControllerPoly {
-    constructor() {
-        this.signal = new AbortSignalPoly();
-    }
-    abort(reason) {
+    signal = new AbortSignalPoly();
+    abort(reason?: unknown) {
         const s = this.signal;
         if (s.aborted) {
             return;
@@ -149,13 +162,13 @@ class AbortControllerPoly {
         }
     }
 }
-g.AbortController ??= AbortControllerPoly;
-g.AbortSignal ??= AbortSignalPoly;
+provide('AbortController', AbortControllerPoly);
+provide('AbortSignal', AbortSignalPoly);
 
-g.structuredClone ??= (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+provide('structuredClone', (v: unknown) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v))));
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-g.btoa ??= (s) => {
+provide('btoa', (s: string) => {
     let out = '';
     for (let i = 0; i < s.length; i += 3) {
         const a = s.charCodeAt(i),
@@ -169,8 +182,8 @@ g.btoa ??= (s) => {
             (i + 2 < s.length ? B64[n & 63] : '=');
     }
     return out;
-};
-g.atob ??= (s) => {
+});
+provide('atob', (s: string) => {
     s = String(s).replace(/[^A-Za-z0-9+/]/g, '');
     let out = '';
     for (let i = 0; i < s.length; i += 4) {
@@ -188,10 +201,18 @@ g.atob ??= (s) => {
         }
     }
     return out;
-};
+});
 
 class URLPoly {
-    constructor(u, base) {
+    protocol!: string;
+    host!: string;
+    hostname!: string;
+    pathname!: string;
+    search!: string;
+    hash!: string;
+    origin!: string;
+    href!: string;
+    constructor(u: string, base?: string) {
         const s = String(u);
         const m = s.match(/^([a-z][a-z0-9+.-]*:)\/\/([^/?#]*)([^?#]*)(\?[^#]*)?(#.*)?$/i);
         if (!m) {
@@ -213,24 +234,30 @@ class URLPoly {
         return this.href;
     }
 }
-g.URL ??= URLPoly;
+provide('URL', URLPoly);
 
 // Just enough of ReadableStream for Pi's turn: a source whose start() pushes
 // chunks, read by the HTTP bridge as an async iterable, cancellable.
-class ReadableStreamLite {
-    constructor(src = {}) {
+interface StreamSource<T> {
+    start?(controller: { enqueue(chunk: T): void; close(): void; error(reason: unknown): void }): void | Promise<void>;
+    cancel?(reason?: unknown): void;
+}
+
+class ReadableStreamLite<T> {
+    private _src: StreamSource<T>;
+    private _q: T[] = [];
+    private _done = false;
+    private _err: unknown;
+    private _wake: (() => void) | null = null;
+    constructor(src: StreamSource<T> = {}) {
         this._src = src;
-        this._q = [];
-        this._done = false;
-        this._err = null;
-        this._wake = null;
         const wake = () => {
             const w = this._wake;
             this._wake = null;
             w?.();
         };
         const controller = {
-            enqueue: (c) => {
+            enqueue: (c: T) => {
                 if (this._done) {
                     throw new TypeError('closed');
                 }
@@ -241,7 +268,7 @@ class ReadableStreamLite {
                 this._done = true;
                 wake();
             },
-            error: (e) => {
+            error: (e: unknown) => {
                 this._err = e;
                 this._done = true;
                 wake();
@@ -254,7 +281,7 @@ class ReadableStreamLite {
     async *[Symbol.asyncIterator]() {
         for (;;) {
             if (this._q.length) {
-                yield this._q.shift();
+                yield this._q.shift()!;
                 continue;
             }
             if (this._err) {
@@ -263,12 +290,12 @@ class ReadableStreamLite {
             if (this._done) {
                 return;
             }
-            await new Promise((r) => {
+            await new Promise<void>((r) => {
                 this._wake = r;
             });
         }
     }
-    cancel(reason) {
+    cancel(reason?: unknown) {
         this._done = true;
         try {
             this._src.cancel?.(reason);
@@ -277,13 +304,16 @@ class ReadableStreamLite {
         }
     }
 }
-g.ReadableStream ??= ReadableStreamLite;
+provide('ReadableStream', ReadableStreamLite);
 
 class ResponseLite {
-    constructor(body = null, init = {}) {
+    body: string | Uint8Array | ReadableStreamLite<Uint8Array> | null;
+    status: number;
+    headers: Record<string, string>;
+    constructor(body: ResponseLite['body'] = null, init: { status?: number; headers?: Record<string, string> } = {}) {
         this.body = body;
         this.status = init.status ?? 200;
         this.headers = init.headers ?? {};
     }
 }
-g.Response ??= ResponseLite;
+provide('Response', ResponseLite);

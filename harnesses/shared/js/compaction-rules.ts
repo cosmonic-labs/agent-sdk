@@ -6,11 +6,31 @@
  * splits, renders and replaces its own messages stays with that harness.
  */
 
-import { STEP_KIND, parse } from './journal-rules.js';
+import { STEP_KIND, parse } from './journal-rules.ts';
 
 // The journal entry a compaction is recorded under, and a requested
 // compaction's acceptance ({compact, focus?}) and ending ({compact, outcome,
 // finish | error, compacted}) (cosmonic:agent/session, cosmonic:agent/compact).
+export type Trigger = 'threshold' | 'overflow' | 'requested';
+
+// The data of an agent.compaction.v1 entry.
+export interface CompactionData {
+    trigger: Trigger;
+    summary: string;
+    model: string;
+    kept: number;
+    tokensBefore?: number;
+    tokensAfter?: number;
+    through?: { start: number; end: number };
+    focus?: string;
+}
+
+// A journal entry as the rules read it: JSON bytes or text.
+interface Entry {
+    kind: string;
+    data: Uint8Array | string;
+}
+
 export const COMPACTION_KIND = 'agent.compaction.v1';
 export const COMPACT_KIND = 'agent.compact.v1';
 export const COMPACT_RESULT_KIND = 'agent.compact-result.v1';
@@ -50,7 +70,7 @@ export const FOCUS_NOTE =
 
 // Whether `estimate` tokens has reached `threshold` of a `window`-token
 // context, counting the reserve. An unknown window never triggers.
-export function overThreshold(estimate, window, threshold = THRESHOLD) {
+export function overThreshold(estimate: number, window: number | null | undefined, threshold = THRESHOLD) {
     return !!window && window > 0 && estimate + RESERVE_TOKENS >= window * threshold;
 }
 
@@ -61,7 +81,16 @@ export function overThreshold(estimate, window, threshold = THRESHOLD) {
 // last journal sequence number the summary covers; the range starts at 0
 // because a summary replaces everything before it, including any earlier
 // summary.
-export function entryData({ trigger, summary, model, throughEnd, kept, tokensBefore, tokensAfter, focus }) {
+export function entryData({
+    trigger,
+    summary,
+    model,
+    throughEnd,
+    kept,
+    tokensBefore,
+    tokensAfter,
+    focus,
+}: Omit<CompactionData, 'through' | 'focus'> & { throughEnd: number | null; focus?: string | null }): CompactionData {
     return {
         trigger,
         summary,
@@ -77,7 +106,12 @@ export function entryData({ trigger, summary, model, throughEnd, kept, tokensBef
 // The data of agent.compact-result.v1: how requested compaction `compact`
 // ended (outcome done, failed or cancelled, with `finish` or the run-error
 // case), and whether it wrote a summary.
-export function compactResultData(compact, outcome, { finish, error } = {}, compacted = false) {
+export function compactResultData(
+    compact: string,
+    outcome: string,
+    { finish, error }: { finish?: string; error?: string } = {},
+    compacted = false,
+) {
     return { compact, outcome, ...(finish ? { finish } : {}), ...(error ? { error } : {}), compacted };
 }
 
@@ -86,7 +120,7 @@ export function compactResultData(compact, outcome, { finish, error } = {}, comp
 // summary, model and focus; u64 fields are plain numbers, as componentize-qjs
 // lowers them. Null when the entry records no range, which the event cannot
 // do without.
-export function compactionInfo(data, seq) {
+export function compactionInfo(data: CompactionData, seq: number | null) {
     if (!data.through) {
         return null;
     }
@@ -102,7 +136,7 @@ export function compactionInfo(data, seq) {
 
 // Whether journal `entries` ({ kind, data } with JSON bytes or text) hold an
 // agent.compact.v1 for compaction `id`.
-export function compactionAccepted(entries, id) {
+export function compactionAccepted(entries: ReadonlyArray<Entry>, id: string) {
     return entries.some((e) => e.kind === COMPACT_KIND && parse(e.data)?.compact === id);
 }
 
@@ -110,7 +144,7 @@ export function compactionAccepted(entries, id) {
 // journal `entries` a state covers (seq <= `covered`): the end of what a
 // summary that keeps that message, and what follows it, covers. Null when
 // there is no such message or nothing before it.
-export function beforeLastPerson(entries, covered) {
+export function beforeLastPerson(entries: ReadonlyArray<Entry & { seq: number | bigint }>, covered: number) {
     const upto = entries.filter((e) => Number(e.seq) <= covered);
     const person = upto.findLast((e) => e.kind === STEP_KIND && parse(e.data)?.role === 'user');
     if (!person) {
@@ -130,7 +164,11 @@ export function beforeLastPerson(entries, covered) {
 // { person, before }: the step's seq, and the last seq before it, which is
 // the end of what a summary made in this turn can cover (an entry the same
 // commit wrote ahead of the step, else `priorEnd`; null when nothing is).
-export function turnStart(landed, commitEnd, priorEnd) {
+export function turnStart(
+    landed: ReadonlyArray<{ seq: number | bigint; kind: string }>,
+    commitEnd: number,
+    priorEnd: number | null,
+) {
     const ours = landed.filter((e) => Number(e.seq) <= commitEnd);
     const steps = ours.filter((e) => e.kind === STEP_KIND);
     if (!steps.length) {
@@ -145,7 +183,15 @@ export function turnStart(landed, commitEnd, priorEnd) {
 // the run's finish reason, or null. `counts.steps` is every model call the run
 // made: its turns, its summaries and the attempts a summary retried. A count
 // that is missing counts as none.
-export function limitReached(counts, { maxSteps = null, maxTotalTokens = null, deadline = null }, at) {
+export function limitReached(
+    counts: { steps?: number; input?: number; output?: number },
+    {
+        maxSteps = null,
+        maxTotalTokens = null,
+        deadline = null,
+    }: { maxSteps?: number | null; maxTotalTokens?: number | null; deadline?: number | null },
+    at: number,
+): 'max-total-tokens' | 'max-duration' | 'max-steps' | null {
     if (maxTotalTokens != null && (counts.input || 0) + (counts.output || 0) >= maxTotalTokens) {
         return 'max-total-tokens';
     }

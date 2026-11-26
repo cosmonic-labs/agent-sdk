@@ -4,14 +4,15 @@
  * sides of its streams rather than leaving an input writer suspended.
  */
 
-export function typeConst(kind, ...names) {
-    const types = kind.types ?? {};
+export function typeConst(kind: object, ...names: string[]): unknown {
+    const tokens = kind as Record<string, unknown> & { types?: Record<string, unknown> };
+    const types = tokens.types ?? {};
     for (const name of names) {
         if (name in types) {
             return types[name];
         }
         if (name in kind) {
-            return kind[name];
+            return tokens[name];
         }
     }
     const key = Object.keys(types).find((candidate) => names.some((name) => candidate.endsWith(`_${name}`)));
@@ -22,18 +23,21 @@ export function typeConst(kind, ...names) {
 }
 // A WIT variant as text, following nested variants (tools@0.4.2's call-error
 // wraps the reason in not-dispatched or outcome-unknown).
-export function describeVariant(payload) {
+export function describeVariant(payload: { tag: string; val?: unknown }): string {
     const value = payload.val;
     if (value == null) {
         return payload.tag;
     }
     if (typeof value === 'object' && 'tag' in value && typeof value.tag === 'string') {
-        return `${payload.tag}: ${describeVariant(value)}`;
+        return `${payload.tag}: ${describeVariant({ tag: value.tag, val: 'val' in value ? value.val : undefined })}`;
     }
-    const detail = typeof value === 'string' ? value : (value.detail ?? JSON.stringify(value));
+    const detail =
+        typeof value === 'string'
+            ? value
+            : ((typeof value === 'object' && 'detail' in value ? value.detail : undefined) ?? JSON.stringify(value));
     return `${payload.tag}: ${detail}`;
 }
-export function dispose(handle) {
+export function dispose(handle?: { [Symbol.dispose]?: () => void } | null) {
     try {
         handle?.[Symbol.dispose]?.();
     } catch {
@@ -42,7 +46,7 @@ export function dispose(handle) {
 }
 // The pinned QuickJS patch exposes cancellation on pending async imports.
 // Await cancellation settlement before releasing borrowed model/tool handles.
-export async function abortable(pending, signal) {
+export async function abortable<T>(pending: PromiseLike<T> & { cancel?: () => void }, signal?: AbortSignal) {
     const cancel = () => pending.cancel?.();
     signal?.addEventListener('abort', cancel);
     if (signal?.aborted) {
@@ -54,8 +58,19 @@ export async function abortable(pending, signal) {
         signal?.removeEventListener('abort', cancel);
     }
 }
-export async function startChat(chat, model, messages, options, signal) {
-    const { readable: input, writable: writer } = wit.Stream(typeConst(wit.Stream, 'MESSAGE'));
+export async function startChat<Model, Message, Options, Reply>(
+    chat: (
+        model: Model,
+        input: HostStream<Message>,
+        done: HostFuture<unknown>,
+        options: Options,
+    ) => Promise<Reply> & { cancel?: () => void },
+    model: Model,
+    messages: Message[],
+    options: Options,
+    signal?: AbortSignal,
+) {
+    const { readable: input, writable: writer } = wit.Stream<Message>(typeConst(wit.Stream, 'MESSAGE'));
     const { readable: done, writable: doneWriter } = wit.Future(
         typeConst(wit.Future, 'RESULT_UNIT_STRING', 'RESULT_VOID_STRING'),
     );
@@ -79,7 +94,7 @@ export async function startChat(chat, model, messages, options, signal) {
             dispose(doneWriter);
         }
     })();
-    let pending;
+    let pending: ReturnType<typeof chat> | undefined;
     const cancel = () => pending?.cancel?.();
     signal?.addEventListener('abort', cancel);
     try {

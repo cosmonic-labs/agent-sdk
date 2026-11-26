@@ -23,8 +23,12 @@
  * is kept in memory between runs: the next one reads the session.
  */
 
+import type { AgentTool, StreamFn } from '@earendil-works/pi-agent-core';
+import type { ImageContent, SystemMessage, TextContent, UserMessage } from '@earendil-works/pi-ai';
+import type { Counts, Reply, Step, TranscriptMessage } from './types.ts';
+import type { Journal } from './session.ts';
 import { runAgentLoop } from '@earendil-works/pi-agent-core';
-import { AssistantMessageEventStream, normalizeContext } from '@earendil-works/pi-ai';
+import { createAssistantMessageEventStream, normalizeContext } from '@earendil-works/pi-ai';
 import { list as listTools, call as callTool } from 'cosmonic:agent/tools@0.4.2';
 import { now } from 'wasi:clocks/monotonic-clock@0.3.0';
 
@@ -37,9 +41,9 @@ import {
     eventWriter,
     refusal,
     startError,
-} from '../../../shared/js/run-rules.js';
-import { agentSchema, rememberListed, toolArguments } from '../../../shared/js/tool-input.js';
-import { abortable, typeConst } from '../../../shared/js/wit.js';
+} from '../../../shared/js/run-rules.ts';
+import { agentSchema, rememberListed, toolArguments } from '../../../shared/js/tool-input.ts';
+import { abortable, typeConst } from '../../../shared/js/wit.ts';
 import {
     SUMMARY_SYSTEM,
     View,
@@ -54,8 +58,8 @@ import {
     pipeModelEvents,
     plan,
     transcriptText,
-} from './compaction.js';
-import { outcomeForToolError, stopsTheRun, toolOps } from './journal-rules.js';
+} from './compaction.ts';
+import { outcomeForToolError, stopsTheRun, toolOps } from './journal-rules.ts';
 import {
     MODEL,
     completeOnce,
@@ -67,9 +71,9 @@ import {
     resolved,
     setTraceParent,
     toWitMessage,
-} from './llm.js';
-import { acquire, release } from './lock.js';
-import { Busy, Duplicate, Superseded, clear, describe, openTurn, randomId, runResult, steps } from './session.js';
+} from './llm.ts';
+import { acquire, release } from './lock.ts';
+import { Busy, Duplicate, Superseded, clear, describe, openTurn, randomId, runResult, steps } from './session.ts';
 
 const SESSION_HEADER = 'x-cosmonic-agent-session';
 const SYSTEM =
@@ -78,18 +82,35 @@ const SYSTEM =
 
 const enc = new TextEncoder();
 
-function json(status, value) {
+interface TaskRequest {
+    method: string;
+    url: string;
+    headers: { has(name: string): boolean };
+    json(): Promise<unknown>;
+}
+
+function json(status: number, value: unknown) {
     return new Response(JSON.stringify(value), {
         status,
         headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
     });
 }
 
-const errorStep = (text, run) => ({ role: 'error', text, blocks: ['error'], tools: [], ...(run ? { run } : {}) });
+const errorStep = (text: string, run?: string): Step => ({
+    role: 'error',
+    text,
+    blocks: ['error'],
+    tools: [],
+    ...(run ? { run } : {}),
+});
 
 /* ---- tools (cosmonic:agent/tools@0.4.2) ---- */
 
-async function agentTools(journal) {
+async function agentTools(
+    journal: Pick<Journal, 'dispatch' | 'finish'> & {
+        unresolved(reason: string): void;
+    },
+): Promise<AgentTool[]> {
     // `list` is fallible since 0.4.0: an error is thrown with its list-error.
     const defs = await listTools();
     // Each tool's input as listed, for the model's request: Pi's own tool
@@ -132,7 +153,7 @@ async function agentTools(journal) {
                 throw new Error(describe(e));
             }
             journal.finish(callId, r.isError ? 'failed' : 'succeeded');
-            const content = r.output.map((o) => {
+            const content = r.output.map<TextContent | ImageContent>((o) => {
                 if (o.tag === 'text') {
                     return { type: 'text', text: o.val };
                 }
@@ -160,7 +181,7 @@ async function agentTools(journal) {
     }));
 }
 
-function bytesToB64(bytes) {
+function bytesToB64(bytes: Uint8Array) {
     let s = '';
     for (let i = 0; i < bytes.length; i += 0x8000) {
         s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
@@ -170,7 +191,7 @@ function bytesToB64(bytes) {
 
 /* ---- steps, in the journal's shape (agent.step.v1) ---- */
 
-function stepOf(m) {
+function stepOf(m: TranscriptMessage): Step | null {
     if (m.role === 'assistant') {
         if (m.stopReason === 'error') {
             return errorStep(m.errorMessage || 'the model call failed');
@@ -201,7 +222,7 @@ function stepOf(m) {
 }
 
 // The text parts of a Pi assistant message, joined.
-function textOf(m) {
+function textOf(m?: Reply) {
     return (m?.content ?? [])
         .filter((c) => c.type === 'text')
         .map((c) => c.text)
@@ -214,7 +235,10 @@ function textOf(m) {
 // typed export, the `error` field of agent.run-result.v1, and text for a
 // person.
 class Failure extends Error {
-    constructor(tag, message, val) {
+    readonly tag: string;
+    readonly val?: unknown;
+
+    constructor(tag: string, message: string, val?: unknown) {
         super(message);
         this.tag = tag;
         this.val = val;
@@ -228,8 +252,8 @@ class Failure extends Error {
     }
 }
 
-// A failed model call, from what the host said about it (see llm.js).
-function modelFailure(m) {
+// A failed model call, from what the host said about it (see llm.ts).
+function modelFailure(m: Reply) {
     const text = m.errorMessage || 'the model call failed';
     const host = lastHostFailure();
     if (host?.stage === 'open') {
@@ -247,7 +271,7 @@ function modelFailure(m) {
 // The driver's instructions, and the schema the reply must satisfy, as one
 // system message ahead of Pi's own for this run's model calls. Not stored:
 // the driver sends them with every run.
-function runInstructions(req) {
+function runInstructions(req: RunRequest): SystemMessage | null {
     const schema = req.schema
         ? `Your final answer must be only a JSON value that satisfies this JSON Schema, with no other text: ${req.schema}`
         : null;
@@ -258,7 +282,7 @@ function runInstructions(req) {
 // The reply as JSON, with a fenced code block around it taken off. Whether it
 // satisfies the schema is the driver's to check: Pi carries no JSON Schema
 // validator here.
-function structured(answer) {
+function structured(answer: string) {
     const trimmed = answer.trim();
     const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
     const inner = (fenced ? fenced[1] : trimmed).trim();
@@ -273,15 +297,28 @@ function structured(answer) {
 // Open a run: list the tools, then commit the person's message and
 // agent.run.v1 under the commit id `run:<run-id>`. Throws Busy, Duplicate,
 // or the session's error, having written nothing.
-async function accept(req) {
+interface RunRequest {
+    run: string;
+    text: string;
+    blocks: string[];
+    user: UserMessage;
+    instructions?: string | null;
+    schema?: string | null;
+    maxSteps?: number | null;
+    maxTotalTokens?: number | null;
+    maxDuration?: number | null;
+    traceParent?: string | null;
+}
+
+async function accept(req: RunRequest) {
     // Nothing has happened outside the session until the person's message is
     // committed, so listing tools first is safe.
-    let tools = [];
+    let tools: AgentTool[] = [];
     let toolsError = null;
-    let journalRef = null;
+    let journalRef: Journal | null = null;
     // Set by the run once it starts: what a tool call with an unknown outcome
     // does to it.
-    const hooks = {};
+    const hooks: { unresolved?(reason: string): void } = {};
     try {
         tools = await agentTools({
             dispatch: (id) => journalRef?.dispatch(id) ?? false,
@@ -291,7 +328,7 @@ async function accept(req) {
     } catch (e) {
         toolsError = `listing tools failed, so this run has none: ${describe(e)}`;
     }
-    const system = {
+    const system: SystemMessage = {
         role: 'system',
         content: SYSTEM,
         toolsAdded: tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
@@ -311,7 +348,20 @@ async function accept(req) {
 // the sink sees it, and the run's last commit comes before this returns, so a
 // driver that redraws from the journal on the outcome finds the run recorded.
 // Returns { status: 'done' | 'failed' | 'cancelled', ... }.
-async function work(acc, sink) {
+type Sink = Pick<ReturnType<typeof eventSink>, 'delta' | 'step' | 'counts' | 'compacted'>;
+type Ending =
+    | { status: 'failed'; failure: Failure; counts?: Counts }
+    | { status: 'cancelled'; counts: Counts }
+    | {
+          status: 'done';
+          finish: string;
+          transcript: TranscriptMessage[];
+          reply?: Reply;
+          structured?: string;
+          counts: Counts;
+      };
+
+async function work(acc: Awaited<ReturnType<typeof accept>>, sink: Sink): Promise<Ending> {
     const { turn, run } = acc;
     const { journal } = turn;
     setTraceParent(acc.traceParent);
@@ -322,7 +372,7 @@ async function work(acc, sink) {
     // apart.
     const stop = new AbortController();
     let gone = false;
-    const tell = async (send) => {
+    const tell = async (send: () => Promise<boolean>) => {
         if (gone) {
             return;
         }
@@ -342,27 +392,28 @@ async function work(acc, sink) {
     const context = { messages: turn.context, tools: acc.tools };
     const base = context.messages.length; // where the person's message lands
     const instructions = runInstructions(acc);
-    const convertToLlm = (ms) => {
+    const convertToLlm = (ms: TranscriptMessage[]) => {
         const llm = ms.filter((m) => ['system', 'user', 'assistant', 'toolResult'].includes(m.role));
         return instructions ? [instructions, ...llm] : llm;
     };
     // The loop's transcript, message for message (the person's message
     // included), so a compaction's view applies to it as to the loop's own.
     const progress = [...context.messages];
-    let failure = null;
+    let failure: Failure | null = null;
+    let structuredReply: string | undefined;
     // A limit in the options that ended the run, and the transcript as of the
     // reply that reached it (its tool calls, never made, left out), or as of
     // the model call a summary left no room for.
-    let limit = null;
-    let limited = null;
-    let transcript = null;
+    let limit: ReturnType<typeof limitReached> = null;
+    let limited: TranscriptMessage[] | null = null;
+    let transcript: TranscriptMessage[] | null = null;
 
-    // Compaction (compaction.js). pi-agent-core keeps its own full transcript
+    // Compaction (compaction.ts). pi-agent-core keeps its own full transcript
     // and hands it to transformContext before every model call; `view` stands
     // in a summary for its older part there and in every transcript saved.
     const window = await contextWindow();
     const view = new View();
-    let seen = null; // the loop's transcript as the last model call was built from it
+    let seen: TranscriptMessage[] | null = null; // the loop's transcript as the last model call was built from it
     let overflowRetry = true; // an overflow is answered by compacting once per run
 
     // A tool call whose outcome is unknown ends the run, failed, with the
@@ -381,7 +432,7 @@ async function work(acc, sink) {
 
     // A limit reached before a model call (after a summary, or before one)
     // ends the run there, with what it has: the call is not made.
-    const stopAt = (reason) => {
+    const stopAt = (reason: NonNullable<typeof limit>) => {
         limit = reason;
         limited = [...progress];
         stop.abort();
@@ -394,7 +445,7 @@ async function work(acc, sink) {
     // (no plan, a failed summary, or a smaller transcript too large to save).
     // Throws Superseded when another writer changed the session meanwhile:
     // compactOrStop then ends the run before its next model or tool call.
-    const compactNow = async (full, why) => {
+    const compactNow = async (full: TranscriptMessage[], why: 'threshold' | 'overflow') => {
         const viewed = view.apply(full);
         const p = plan(viewed);
         if (!p || journal.hasOpenOps()) {
@@ -452,7 +503,7 @@ async function work(acc, sink) {
     // does losing the session to another writer (Superseded): the stop
     // signal is aborted before the call, so hostStreamFn makes no model call
     // and the run ends superseded.
-    const compactOrStop = async (full, why) => {
+    const compactOrStop = async (full: TranscriptMessage[], why: 'threshold' | 'overflow') => {
         try {
             return await compactNow(full, why);
         } catch (e) {
@@ -470,7 +521,7 @@ async function work(acc, sink) {
     // lands without failing, marked the journal stale) ends superseded here:
     // the stop signal is aborted before the call, as in compactOrStop. Must
     // not throw.
-    const transformContext = async (messages) => {
+    const transformContext = async (messages: TranscriptMessage[]) => {
         seen = messages;
         if (failure || limit) {
             return view.apply(messages);
@@ -506,11 +557,13 @@ async function work(acc, sink) {
     // so nothing the reader was shown is taken back; the refusal is not
     // passed on. Whatever
     // throws on the way ends the call with an error, never a hung stream.
-    const streamFn = (model, llmContext, options) => {
-        const out = new AssistantMessageEventStream();
+    const streamFn: StreamFn = (model, llmContext, options) => {
+        const out = createAssistantMessageEventStream();
         pipeModelEvents(out, hostStreamFn(model, llmContext, options), {
-            shouldRetry: () => overflowRetry && overflowed() && seen && !limit,
+            shouldRetry: () => overflowRetry && overflowed() && seen !== null && !limit,
             retry: async (ev) => {
+                if (!seen || ev.type !== 'error') return null;
+                const full = seen;
                 overflowRetry = false;
                 // The refused call was a model call too.
                 counts.steps++;
@@ -520,7 +573,7 @@ async function work(acc, sink) {
                     counts,
                     limits: acc,
                     now,
-                    compact: () => compactOrStop(seen, 'overflow'),
+                    compact: () => compactOrStop(full, 'overflow'),
                 });
                 if (reached && !failure) {
                     // The refusal is passed on, and passed over: the run
@@ -549,7 +602,8 @@ async function work(acc, sink) {
             },
             async (ev) => {
                 if (ev.type === 'message_update' && ev.assistantMessageEvent?.type === 'text_delta') {
-                    await tell(() => sink.delta(ev.assistantMessageEvent.delta));
+                    const { delta } = ev.assistantMessageEvent;
+                    await tell(() => sink.delta(delta));
                     return;
                 }
                 if (ev.type !== 'message_end') {
@@ -572,7 +626,7 @@ async function work(acc, sink) {
                     progress.push(m);
                     return;
                 }
-                let ops = [];
+                let ops: ReturnType<typeof toolOps> = [];
                 if (m.role === 'assistant') {
                     counts.steps++;
                     counts.input += m.usage?.input || 0;
@@ -639,7 +693,7 @@ async function work(acc, sink) {
         const last = lastAssistant(transcript, view.index(base));
         if (!failure && !gone && acc.schema && !last?.declined) {
             try {
-                acc.structured = structured(textOf(last));
+                structuredReply = structured(textOf(last));
             } catch (e) {
                 failure = e;
             }
@@ -669,14 +723,14 @@ async function work(acc, sink) {
     // moment it sees either finds the run already stored.
     await journal.settle(transcript, at);
     const reply = lastAssistant(transcript, at);
-    const finish = limit ?? DECLINED_FINISH[reply?.declined] ?? 'done';
+    const finish = limit ?? (reply?.declined && DECLINED_FINISH[reply.declined]) ?? 'done';
     await journal.endRun(runResult(run, 'done', { finish }));
     return {
         status: 'done',
         finish,
         transcript,
         reply,
-        structured: reply?.declined ? undefined : acc.structured,
+        structured: reply?.declined ? undefined : structuredReply,
         counts,
     };
 }
@@ -685,7 +739,7 @@ async function work(acc, sink) {
 const DECLINED_FINISH = { refused: 'refusal', filtered: 'content-filter' };
 
 // The last assistant message this run added.
-function lastAssistant(transcript, base) {
+function lastAssistant(transcript: TranscriptMessage[], base: number): Reply | undefined {
     return transcript
         .slice(base)
         .reverse()
@@ -697,10 +751,10 @@ function lastAssistant(transcript, base) {
 // Check what the driver sent. Construction is lenient; this is where a
 // message or options the agent cannot take are refused, before anything is
 // written.
-function validate(message, options) {
+function validate(message: { content: HostPart[] }, options: RunOptions): RunRequest {
     const run = String(options?.runId ?? '');
     checkId(run, 'run', MAX_RUN_ID_BYTES);
-    const content = [];
+    const content: (TextContent | ImageContent)[] = [];
     for (const part of message?.content ?? []) {
         if (part.tag === 'text') {
             content.push({ type: 'text', text: part.val });
@@ -743,13 +797,13 @@ function validate(message, options) {
 
 // The run's events, written one at a time in order. Resolves false once the
 // driver has dropped the stream.
-function eventSink(writable) {
+function eventSink(writable: StreamWriter<unknown>) {
     const writer = eventWriter(writable);
     const { put } = writer;
-    const stepEvent = (content) => ({ tag: 'step', val: { content, seq: undefined } });
+    const stepEvent = (content: unknown) => ({ tag: 'step', val: { content, seq: undefined } });
     return {
-        delta: (text) => put({ tag: 'text-delta', val: text }),
-        step(step, m) {
+        delta: (text: string) => put({ tag: 'text-delta', val: text }),
+        step(step: Step, m: TranscriptMessage | null) {
             if (!m) {
                 return put(stepEvent({ tag: 'error', val: step.text }));
             }
@@ -759,14 +813,14 @@ function eventSink(writable) {
             const empty = !message || (message.tag === 'assistant' && message.val.content.length === 0);
             return empty ? Promise.resolve(writer.alive) : put(stepEvent(message));
         },
-        counts: (c) => put({ tag: 'counts', val: countsOf(c) }),
-        compacted: (info) => put({ tag: 'compacted', val: info }),
+        counts: (c: Counts) => put({ tag: 'counts', val: countsOf(c) }),
+        compacted: (info: NonNullable<ReturnType<typeof compactionInfo>>) => put({ tag: 'compacted', val: info }),
         close: () => writer.close(),
     };
 }
 
 // The outcome future's value for how `work` ended.
-function outcomeOf(ended) {
+function outcomeOf(ended: Ending) {
     if (ended.status === 'cancelled') {
         return { tag: 'err', val: { tag: 'cancelled' } };
     }
@@ -788,7 +842,7 @@ function outcomeOf(ended) {
 }
 
 export const runExport = {
-    async run(message, options) {
+    async run(message: { content: HostPart[] }, options: RunOptions) {
         const req = validate(message, options);
         if (!acquire()) {
             throw startError('busy');
@@ -806,7 +860,7 @@ export const runExport = {
         // The run works after `run` returns, while the driver reads the events.
         (async () => {
             const sink = eventSink(events.writable);
-            let ended;
+            let ended: Ending;
             try {
                 ended = await work(acc, sink);
             } catch (e) {
@@ -827,11 +881,11 @@ export const runExport = {
 
 /* ---- POST /task: the same run, as NDJSON lines ---- */
 
-const line = (v) => enc.encode(JSON.stringify(v) + '\n');
+const line = (v: unknown) => enc.encode(JSON.stringify(v) + '\n');
 
 // Open a run for POST /task under a fresh run id. A lost race is retried with
 // a new id, since a run id is never resent with other content.
-async function acceptTask(task) {
+async function acceptTask(task: string) {
     for (let i = 0; ; i++) {
         try {
             return await accept({
@@ -848,7 +902,7 @@ async function acceptTask(task) {
     }
 }
 
-async function runTask(req) {
+async function runTask(req: TaskRequest) {
     if (!req.headers.has(SESSION_HEADER)) {
         return json(403, { error: `missing ${SESSION_HEADER} header` });
     }
@@ -858,7 +912,7 @@ async function runTask(req) {
     } catch {
         return json(400, { error: 'expected {"task": "..."}' });
     }
-    const task = typeof body?.task === 'string' ? body.task : null;
+    const task = body && typeof body === 'object' && 'task' in body && typeof body.task === 'string' ? body.task : null;
     if (!task) {
         return json(400, { error: 'expected {"task": "..."}' });
     }
@@ -885,7 +939,7 @@ async function runTask(req) {
             gone = true;
         },
         async start(controller) {
-            const send = (v) => {
+            const send = (v: unknown) => {
                 if (gone) {
                     return false;
                 }
@@ -897,14 +951,14 @@ async function runTask(req) {
                     return false;
                 }
             };
-            const sink = {
+            const sink: Sink = {
                 delta: async (text) => send({ type: 'delta', text }),
                 step: async (step) => send({ type: 'step', ...step }),
                 counts: async () => !gone,
                 // No compaction line; the journal has agent.compaction.v1.
                 compacted: async () => !gone,
             };
-            let ended;
+            let ended: Ending;
             try {
                 ended = await work(acc, sink);
             } catch (e) {
@@ -939,7 +993,7 @@ async function runTask(req) {
 }
 
 // Serve the HTTP adapter using the same turn engine as the typed export.
-export async function handle(req) {
+export async function handle(req: TaskRequest) {
     const url = new URL(req.url);
     const route = `${req.method} ${url.pathname}`;
     try {

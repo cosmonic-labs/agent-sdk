@@ -18,19 +18,22 @@
  *   - The originals are not deleted: they stay in the session journal.
  *
  * The harness-neutral rules (entry kinds, threshold, the summarizer's
- * instructions, entry data) live in shared/js/compaction-rules.js and are
+ * instructions, entry data) live in shared/js/compaction-rules.ts and are
  * re-exported here.
  */
+
+import type { ImageContent } from '@earendil-works/pi-ai';
+import type { Reply, TranscriptMessage } from './types.ts';
 
 import {
     BYTES_PER_TOKEN,
     TOOL_RESULT_CHARS,
     limitReached,
     overThreshold,
-} from '../../../shared/js/compaction-rules.js';
-import { recordedArguments } from '../../../shared/js/tool-input.js';
+} from '../../../shared/js/compaction-rules.ts';
+import { recordedArguments } from '../../../shared/js/tool-input.ts';
 
-export * from '../../../shared/js/compaction-rules.js';
+export * from '../../../shared/js/compaction-rules.ts';
 
 // What the agent, not the model, says ahead of the summary.
 export const SUMMARY_PREAMBLE =
@@ -38,7 +41,7 @@ export const SUMMARY_PREAMBLE =
     'The next message is that summary, written by the model; the original messages are kept in the session.';
 
 // The text of one message part, for estimating and for the summarizer.
-function partText(c) {
+function partText(c: Reply['content'][number] | ImageContent) {
     if (c.type === 'text') {
         return c.text ?? '';
     }
@@ -54,7 +57,7 @@ function partText(c) {
     return '';
 }
 
-function messageText(m) {
+function messageText(m: TranscriptMessage) {
     if (typeof m.content === 'string') {
         return m.content;
     }
@@ -62,10 +65,10 @@ function messageText(m) {
 }
 
 // Whether `m` is a message a compaction wrote (the preamble or the summary).
-const isCompactionMessage = (m) => m?.compaction === true;
+const isCompactionMessage = (m: TranscriptMessage) => m?.compaction === true;
 
 // A rough token count of what the model would be given from `messages`.
-export function estimateTokens(messages) {
+export function estimateTokens(messages: TranscriptMessage[]) {
     let bytes = 0;
     for (const m of messages) {
         bytes += messageText(m).length;
@@ -77,7 +80,7 @@ export function estimateTokens(messages) {
 }
 
 // The index of the current turn's kickoff: the person's latest message.
-export function kickoff(messages) {
+export function kickoff(messages: TranscriptMessage[]) {
     for (let i = messages.length - 1; i >= 0; i--) {
         if (messages[i].role === 'user' && !isCompactionMessage(messages[i])) {
             return i;
@@ -93,7 +96,7 @@ export function kickoff(messages) {
 // are known by the `compaction` flag the agent sets on them, never by their
 // text, so a single real exchange is still summarized and a message that only
 // reads like a summary is not mistaken for one.
-export function plan(messages) {
+export function plan(messages: TranscriptMessage[]) {
     const at = kickoff(messages);
     if (at <= 0) {
         return null;
@@ -108,7 +111,7 @@ export function plan(messages) {
 
 // The older conversation as text for the summarizer, each tool result cut
 // short, and the oldest lines dropped first when the whole exceeds `maxChars`.
-export function transcriptText(older, maxChars = Infinity) {
+export function transcriptText(older: TranscriptMessage[], maxChars = Infinity) {
     const lines = older.map((m) => {
         let text = messageText(m);
         if (m.role === 'toolResult' && text.length > TOOL_RESULT_CHARS) {
@@ -129,7 +132,11 @@ export function transcriptText(older, maxChars = Infinity) {
 // preamble, the model's summary as an assistant message, then the kept
 // messages unchanged. The two new messages carry `compaction: true`, so a
 // later compaction knows them, and the summary is marked as the model's.
-export function compacted(p, summary, model) {
+export function compacted(
+    p: NonNullable<ReturnType<typeof plan>>,
+    summary: string,
+    model: string,
+): TranscriptMessage[] {
     const now = Date.now();
     return [
         ...p.system,
@@ -157,7 +164,7 @@ export function compacted(p, summary, model) {
 }
 
 // Another writer took the session over. The run stops before its next model
-// or tool call (session.js and main.js map it to a run that ends superseded).
+// or tool call (session.ts and main.ts map it to a run that ends superseded).
 export class Superseded extends Error {
     constructor() {
         super('another writer took this session over, so the turn stopped before its next model or tool call');
@@ -176,7 +183,15 @@ export class Superseded extends Error {
 //   'kept'       the host refused the size: harmless, go on uncompacted.
 //   'superseded' another writer owns the session: stop the run, with no
 //                further model or tool call.
-export async function closeCompaction({ owned, install, closeFailed }) {
+export async function closeCompaction({
+    owned,
+    install,
+    closeFailed,
+}: {
+    owned: boolean;
+    install(): Promise<'committed' | 'stale' | 'too-large'>;
+    closeFailed(): Promise<void>;
+}) {
     const outcome = owned ? await install() : 'stale';
     if (outcome === 'committed') {
         return 'compacted';
@@ -188,9 +203,12 @@ export async function closeCompaction({ owned, install, closeFailed }) {
 // Make one model call that is not a turn (a summary) and charge it to the run:
 // a step whether or not it succeeds, and the tokens it reports, which a failed
 // call carries on the error it throws (`usage`).
-export async function charged(counts, call) {
+export async function charged<T extends { usage?: { input?: number; output?: number } }>(
+    counts: { steps: number; input: number; output: number },
+    call: () => Promise<T>,
+) {
     counts.steps++;
-    const add = (usage) => {
+    const add = (usage: T['usage']) => {
         counts.input += usage?.input || 0;
         counts.output += usage?.output || 0;
     };
@@ -208,7 +226,13 @@ export async function charged(counts, call) {
 // reached, and the limits are checked again after it, before the normal model
 // call. Resolves to { limit, next }: the limit that ends the run (null to go
 // on) and what `compact` returned (null when it did not run or did nothing).
-export async function compactWithinLimits({ counts, limits, now, compact }) {
+interface Budget {
+    counts: Parameters<typeof limitReached>[0];
+    limits: Parameters<typeof limitReached>[1];
+    now(): number;
+}
+
+export async function compactWithinLimits<T>({ counts, limits, now, compact }: Budget & { compact(): Promise<T> }) {
     const before = limitReached(counts, limits, now());
     if (before) {
         return { limit: before, next: null };
@@ -223,8 +247,23 @@ export async function compactWithinLimits({ counts, limits, now, compact }) {
 // run ends there, without the call. `lost()` says whether this writer already
 // lost the session: then it throws Superseded before anything else.
 export async function beforeCall(
-    messages,
-    { view, window, canCompact, counts, limits, now, compact, lost = () => false },
+    messages: TranscriptMessage[],
+    {
+        view,
+        window,
+        canCompact,
+        counts,
+        limits,
+        now,
+        compact,
+        lost = () => false,
+    }: Budget & {
+        view: View;
+        window: number | null;
+        canCompact: boolean;
+        compact(full: TranscriptMessage[]): Promise<TranscriptMessage[] | null>;
+        lost?(): boolean;
+    },
 ) {
     // A writer that lost the session (a commit after a lost race lands
     // without failing, but marks the journal stale) makes no further call.
@@ -250,7 +289,19 @@ export async function beforeCall(
 // always ends `out`: anything thrown (building the retry, or either call's
 // events) is pushed as `fail(e)`, an error event, so the loop reading `out`
 // is never left waiting.
-export async function pipeModelEvents(out, first, { shouldRetry, retry, fail }) {
+export async function pipeModelEvents<E extends { type: string }>(
+    out: { push(event: E): void; end(): void },
+    first: AsyncIterable<E>,
+    {
+        shouldRetry,
+        retry,
+        fail,
+    }: {
+        shouldRetry(event: E): boolean;
+        retry(event: E): Promise<AsyncIterable<E> | null>;
+        fail(error: unknown): E;
+    },
+) {
     let held = null;
     let streamed = false;
     try {
@@ -290,23 +341,21 @@ export async function pipeModelEvents(out, first, { shouldRetry, retry, fail }) 
 // transcript and hands it to transformContext on every call, so the view is
 // applied each time, and to every transcript this agent saves.
 export class View {
-    constructor() {
-        this.prefix = null;
-        this.covered = 0;
-    }
+    private prefix: TranscriptMessage[] | null = null;
+    private covered = 0;
 
-    apply(messages) {
+    apply(messages: TranscriptMessage[]) {
         return this.prefix ? [...this.prefix, ...messages.slice(this.covered)] : messages;
     }
 
     // Where index `i` of the full transcript is in the viewed one.
-    index(i) {
+    index(i: number) {
         return this.prefix ? this.prefix.length + (i - this.covered) : i;
     }
 
     // Record a compaction of `viewed` (this view applied to `full`) at its
     // kickoff `at`, replacing everything before it with `prefix`.
-    replace(full, viewed, at, prefix) {
+    replace(full: TranscriptMessage[], viewed: TranscriptMessage[], at: number, prefix: TranscriptMessage[]) {
         const keptFromFull = viewed.length - at;
         this.covered = full.length - keptFromFull;
         this.prefix = prefix;

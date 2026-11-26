@@ -16,13 +16,25 @@
  *   toolResult  -> message::tool
  */
 
-import { AssistantMessageEventStream, getCurrentTools } from '@earendil-works/pi-ai';
+import type {
+    Api,
+    AssistantMessageEvent,
+    Model,
+    SimpleStreamOptions,
+    TextContent,
+    Tool,
+    ToolCall,
+    TranscriptContext,
+} from '@earendil-works/pi-ai';
+import type { Reply, TranscriptMessage } from './types.ts';
+import { dispose, typeConst } from '../../../shared/js/wit.ts';
+import { createAssistantMessageEventStream, getCurrentTools } from '@earendil-works/pi-ai';
 import { chat } from 'cosmonic:agent/chat@0.4.2';
 import { describe as describeModel, open } from 'cosmonic:agent/models@0.4.2';
 
-import { agentArguments, offeredInput, toolArguments } from '../../../shared/js/tool-input.js';
+import { agentArguments, offeredInput, toolArguments } from '../../../shared/js/tool-input.ts';
 
-export const MODEL = {
+export const MODEL: Model<Api> = {
     id: 'default',
     name: 'Host-resolved model',
     api: 'cosmonic-llm',
@@ -63,11 +75,11 @@ export function overflowed() {
 // being 'refused' or 'filtered' when the model or a provider filter declined
 // the reply; throws with the host's reason, and that call's own host failure
 // as `host`. Aborting `signal` stops the call.
-export async function completeOnce(system, user, signal) {
+export async function completeOnce(system: string, user: string | string[], signal?: AbortSignal) {
     // The run's own last failure is what reports how the run went, so this
     // call does not replace it.
     const before = hostFailure;
-    let m;
+    let m: Reply;
     let own = null;
     try {
         const stream = hostStreamFn(
@@ -75,7 +87,7 @@ export async function completeOnce(system, user, signal) {
             {
                 messages: [
                     { role: 'system', content: system, timestamp: Date.now() },
-                    ...[user].flat().map((content) => ({ role: 'user', content, timestamp: Date.now() })),
+                    ...[user].flat().map((content) => ({ role: 'user' as const, content, timestamp: Date.now() })),
                 ],
             },
             { signal },
@@ -96,13 +108,13 @@ export async function completeOnce(system, user, signal) {
     return { text, usage: m.usage, model: m.responseModel || resolvedModel || MODEL.id, declined: m.declined ?? null };
 }
 
-let resolvedModel = null;
+let resolvedModel: string | null = null;
 export const resolved = () => resolvedModel;
 
 // The W3C traceparent the current run's driver sent, passed on in each model
 // call's request-meta. One run at a time, so one value.
-let traceParent;
-export function setTraceParent(value) {
+let traceParent: string | undefined;
+export function setTraceParent(value?: string | null) {
     traceParent = value || undefined;
 }
 
@@ -111,10 +123,10 @@ export function setTraceParent(value) {
 // (model-refused, a request-error) or the generation failed after it was
 // accepted (model-failed, a generation-error). Pi's loop only sees an error
 // message, so the case is kept here, and cleared when the next call starts.
-let hostFailure = null;
+let hostFailure: { stage: string; payload?: { tag: string; val?: unknown } } | null = null;
 export const lastHostFailure = () => hostFailure;
 
-function b64ToBytes(b64) {
+function b64ToBytes(b64: string) {
     const bin = atob(b64);
     const out = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) {
@@ -123,7 +135,7 @@ function b64ToBytes(b64) {
     return out;
 }
 
-function textOf(content) {
+function textOf(content: string | TextContent[]) {
     return typeof content === 'string'
         ? content
         : content
@@ -132,12 +144,12 @@ function textOf(content) {
               .join('\n');
 }
 
-export function toWitMessage(m) {
+export function toWitMessage(m: TranscriptMessage): HostMessage | null {
     switch (m.role) {
         case 'system':
             return { tag: 'system', val: textOf(m.content) };
         case 'user': {
-            const parts = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : m.content;
+            const parts = typeof m.content === 'string' ? [{ type: 'text' as const, text: m.content }] : m.content;
             return {
                 tag: 'user',
                 val: {
@@ -162,14 +174,14 @@ export function toWitMessage(m) {
             // something the model said; an empty assistant message is refused.
             if (
                 (m.stopReason === 'error' || m.stopReason === 'aborted') &&
-                !m.content?.some((c) => c.text || c.type !== 'text')
+                !m.content?.some((c) => c.type !== 'text' || c.text)
             ) {
                 return null;
             }
             return {
                 tag: 'assistant',
                 val: {
-                    content: m.content.flatMap((c) => {
+                    content: m.content.flatMap<AssistantPart>((c) => {
                         if (c.type === 'text') {
                             return c.text
                                 ? [{ content: { tag: 'text', val: c.text }, opaque: undefined, citations: [] }]
@@ -230,7 +242,7 @@ export function toWitMessage(m) {
     }
 }
 
-function chatOptions(tools, options) {
+function chatOptions(tools: Tool[], options?: SimpleStreamOptions) {
     return {
         maxTokens: options?.maxTokens,
         temperature: options?.temperature,
@@ -262,9 +274,13 @@ function chatOptions(tools, options) {
     };
 }
 
-const STOP = { 'tool-calls': 'toolUse', 'max-tokens': 'length', 'context-length': 'length' };
+const STOP: Record<string, 'toolUse' | 'length' | undefined> = {
+    'tool-calls': 'toolUse',
+    'max-tokens': 'length',
+    'context-length': 'length',
+};
 
-function emptyMessage() {
+function emptyMessage(): Reply {
     return {
         role: 'assistant',
         content: [],
@@ -286,49 +302,21 @@ function emptyMessage() {
 
 // An error event ending a model call's stream, for a failure outside the
 // host call itself (the agent's own code around it).
-export function errorEvent(message) {
+export function errorEvent(message: string): AssistantMessageEvent {
     return { type: 'error', reason: 'error', error: { ...emptyMessage(), stopReason: 'error', errorMessage: message } };
 }
 
 /* A host error, as text a person can act on. A top-level WIT error is thrown
    as an Error whose payload is the WIT variant. */
-function describe(e) {
+function describe(e: { payload?: unknown; message?: string }) {
     const p = e?.payload;
     if (p && typeof p === 'object' && 'tag' in p) {
-        const v = p.val;
-        const detail = typeof v === 'string' ? v : v?.detail || JSON.stringify(v);
+        const v = 'val' in p ? p.val : undefined;
+        const detail =
+            typeof v === 'string' ? v : (v && typeof v === 'object' && 'detail' in v && v.detail) || JSON.stringify(v);
         return `${p.tag}: ${detail}`;
     }
     return String(e?.message || e);
-}
-
-// The generated type constant for a stream or future payload, by the name the
-// shim gives it. Looked up rather than spelled out because the shim qualifies
-// a name that would collide with another package's.
-function typeConst(kind, ...names) {
-    const types = kind.types ?? {};
-    for (const n of names) {
-        if (n in types) {
-            return types[n];
-        }
-        if (n in kind) {
-            return kind[n];
-        }
-    }
-    const k = Object.keys(types).find((key) => names.some((n) => key.endsWith(`_${n}`)));
-    if (k) {
-        return types[k];
-    }
-    throw new Error(`no ${names[0]} type in this build; have ${Object.keys(types).join(', ')}`);
-}
-
-// Drop a host handle now rather than whenever the GC gets to it.
-function dispose(handle) {
-    try {
-        handle?.[Symbol.dispose]?.();
-    } catch {
-        /* already gone, or an operation is still settling */
-    }
 }
 
 class Aborted extends Error {}
@@ -336,8 +324,8 @@ class Aborted extends Error {}
 // Start a reply. The conversation goes in as a stream<message> written while
 // `chat` is pending (streams do not buffer), then `messages-done` says it is
 // complete.
-async function startChat(model, messages, options) {
-    const { readable: msgRx, writable: msgTx } = wit.Stream(typeConst(wit.Stream, 'MESSAGE'));
+async function startChat(model: Disposable, messages: HostMessage[], options: ReturnType<typeof chatOptions>) {
+    const { readable: msgRx, writable: msgTx } = wit.Stream<HostMessage>(typeConst(wit.Stream, 'MESSAGE'));
     const { readable: doneRx, writable: doneTx } = wit.Future(
         typeConst(wit.Future, 'RESULT_UNIT_STRING', 'RESULT_VOID_STRING'),
     );
@@ -367,14 +355,18 @@ async function startChat(model, messages, options) {
     return started.value; // [stream<chunk>, future<result<completion, generation-error>>]
 }
 
-export function hostStreamFn(_model, context, options) {
-    const out = new AssistantMessageEventStream();
+export function hostStreamFn(
+    _model: Model<Api>,
+    context: Pick<TranscriptContext, 'messages'>,
+    options?: SimpleStreamOptions,
+) {
+    const out = createAssistantMessageEventStream();
     (async () => {
         const partial = emptyMessage();
         const signal = options?.signal;
-        let model = null;
-        let chunks = null;
-        let outcome = null;
+        let model: Disposable | null = null;
+        let chunks: Awaited<ReturnType<typeof chat>>[0] | null = null;
+        let outcome: Awaited<ReturnType<typeof chat>>[1] | null = null;
         // Which host call a failure came from (see lastHostFailure).
         let stage = 'open';
         hostFailure = null;
@@ -399,11 +391,11 @@ export function hostStreamFn(_model, context, options) {
             model = await open(MODEL.id);
             stage = 'chat';
             const tools = getCurrentTools(context.messages);
-            const messages = context.messages.map(toWitMessage).filter(Boolean);
+            const messages = context.messages.map(toWitMessage).filter((m) => m !== null);
             [chunks, outcome] = await startChat(model, messages, chatOptions(tools, options));
             stage = 'generation';
             out.push({ type: 'start', partial });
-            let text = null;
+            let text: TextContent | null = null;
             for (;;) {
                 if (signal?.aborted) {
                     throw new Aborted();
@@ -460,7 +452,7 @@ export function hostStreamFn(_model, context, options) {
                     // Bad JSON becomes {}, which Pi's validation reports; a
                     // freeform call's text rides as one property.
                     const args = agentArguments(c.val.arguments);
-                    const call = { type: 'toolCall', id: c.val.id, name: c.val.name, arguments: args };
+                    const call: ToolCall = { type: 'toolCall', id: c.val.id, name: c.val.name, arguments: args };
                     partial.content.push(call);
                     const i = partial.content.length - 1;
                     out.push({ type: 'toolcall_start', contentIndex: i, partial });

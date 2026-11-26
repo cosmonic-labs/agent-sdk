@@ -21,10 +21,13 @@
  * was, and a refused or filtered summary is never committed.
  */
 
+import type { Counts } from './types.ts';
+import type { Journal } from './session.ts';
+import type { EventWriter } from '../../../shared/js/run-rules.ts';
 import { now } from 'wasi:clocks/monotonic-clock@0.3.0';
 
-import { compactRequest, countsOf, eventWriter, refusal, startError } from '../../../shared/js/run-rules.js';
-import { typeConst } from '../../../shared/js/wit.js';
+import { compactRequest, countsOf, eventWriter, refusal, startError } from '../../../shared/js/run-rules.ts';
+import { typeConst } from '../../../shared/js/wit.ts';
 import {
     FOCUS_NOTE,
     SUMMARY_SYSTEM,
@@ -36,10 +39,10 @@ import {
     limitReached,
     plan,
     transcriptText,
-} from './compaction.js';
-import { MODEL, completeOnce, contextWindow, setTraceParent } from './llm.js';
-import { acquire, release } from './lock.js';
-import { Busy, Duplicate, Superseded, compactResult, describe, openCompaction, randomId } from './session.js';
+} from './compaction.ts';
+import { MODEL, completeOnce, contextWindow, setTraceParent } from './llm.ts';
+import { acquire, release } from './lock.ts';
+import { Busy, Duplicate, Superseded, compactResult, describe, openCompaction, randomId } from './session.ts';
 
 // How long the stream may stay quiet before a heartbeat is written.
 // A dropped reader shows only on a write, and a summary call streams nothing,
@@ -47,9 +50,9 @@ import { Busy, Duplicate, Superseded, compactResult, describe, openCompaction, r
 const HEARTBEAT_MS = 1000;
 
 // A compaction that ended done: no reply, no structured answer.
-function done(counts, finish, model) {
+function done(counts: Counts, finish: string, model?: string) {
     return {
-        tag: 'ok',
+        tag: 'ok' as const,
         val: {
             reply: [],
             structured: undefined,
@@ -61,11 +64,19 @@ function done(counts, finish, model) {
 }
 
 // A compaction that failed: the run-error case and its detail.
-const failed = (tag, val) => ({ tag: 'err', val: val === undefined ? { tag } : { tag, val } });
+const failed = (tag: string, val?: unknown) => ({
+    tag: 'err' as const,
+    val: val === undefined ? { tag } : { tag, val },
+});
 
 // End without a summary: agent.compact-result.v1 (after the failed result of
 // the summary call's `op`, when it was made), then the outcome.
-async function ended(journal, id, op, outcome) {
+async function ended(
+    journal: Journal,
+    id: string,
+    op: string | null,
+    outcome: ReturnType<typeof done> | ReturnType<typeof failed>,
+) {
     if (outcome.tag === 'ok') {
         const finish = outcome.val.finish.tag;
         await journal.endCompaction(op, compactResult(id, 'done', { finish }, false));
@@ -80,7 +91,7 @@ async function ended(journal, id, op, outcome) {
 }
 
 // A failed summary call, from what the host said about it.
-function summaryFailure(e) {
+function summaryFailure(e: { host?: ReturnType<typeof import('./llm.ts').lastHostFailure> }) {
     const host = e?.host;
     if (host?.stage === 'open') {
         return failed('no-model', `no model for the alias ${MODEL.id}: ${describe(e)}`);
@@ -95,10 +106,14 @@ function summaryFailure(e) {
 }
 
 // A failure to record, as the compaction's ending.
-const storeFailure = (e) =>
+const storeFailure = (e: unknown) =>
     e instanceof Superseded ? failed('superseded') : failed('not-recorded', `saving the session: ${describe(e)}`);
 
-async function work(req, opened, sink) {
+async function work(
+    req: ReturnType<typeof compactRequest>,
+    opened: Awaited<ReturnType<typeof openCompaction>>,
+    sink: EventWriter & { signal: AbortSignal },
+) {
     const { journal, messages, before } = opened;
     const { id } = req;
     const counts = { steps: 0, toolCalls: 0, input: 0, output: 0 };
@@ -150,7 +165,7 @@ async function work(req, opened, sink) {
         model: summary.model,
         throughEnd: before,
         kept: p.kept.length,
-        tokensBefore: estimateTokens(messages),
+        tokensBefore: estimateTokens(messages ?? []),
         tokensAfter: estimateTokens(next),
         focus: req.focus,
     });
@@ -173,7 +188,7 @@ async function work(req, opened, sink) {
 }
 
 export const compactExport = {
-    async compact(focus, options) {
+    async compact(focus: string | undefined, options: RunOptions) {
         // Checked before anything is written; the schema and the run's
         // instructions do not apply to a compaction and are ignored.
         const req = compactRequest(focus, options);
