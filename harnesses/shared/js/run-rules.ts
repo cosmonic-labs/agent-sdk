@@ -36,11 +36,11 @@ const enc = new TextEncoder();
 
 // A start-error, thrown as the variant itself: componentize-qjs lowers a
 // thrown plain object as the export's `err`.
-export const startError = (tag, val) => (val === undefined ? { tag } : { tag, val });
+export const startError = (tag: string, val?: string) => (val === undefined ? { tag } : { tag, val });
 
 // Refuse an id (a run's or a compaction's, as `what` says) that does not fit
 // its commit id of `max` bytes or has control characters.
-export function checkId(id, what, max) {
+export function checkId(id: string, what: string, max: number) {
     if (!id || enc.encode(id).length > max) {
         throw startError('invalid-input', `a ${what} id is 1 to ${max} bytes`);
     }
@@ -51,14 +51,14 @@ export function checkId(id, what, max) {
 }
 
 // Refuse a max-steps of zero.
-export function checkMaxSteps(options) {
+export function checkMaxSteps(options: { maxSteps?: number | null }) {
     if (options.maxSteps === 0) {
         throw startError('invalid-input', 'max-steps is at least 1');
     }
 }
 
 // Refuse a schema that is not JSON.
-export function checkSchema(schema) {
+export function checkSchema(schema: string | null | undefined) {
     if (schema != null) {
         try {
             JSON.parse(schema);
@@ -71,7 +71,16 @@ export function checkSchema(schema) {
 // Check what the driver sent for a compaction, before anything is written.
 // The schema and the run's instructions do not apply and are ignored. A
 // summary is one model call, so max-steps defaults to 1.
-export function compactRequest(focus, options) {
+export function compactRequest(
+    focus: string | null | undefined,
+    options: {
+        runId?: string;
+        maxSteps?: number;
+        maxTotalTokens?: number;
+        maxDuration?: number;
+        traceParent?: string;
+    },
+) {
     const id = String(options?.runId ?? '');
     checkId(id, 'compaction', MAX_COMPACT_ID_BYTES);
     const kept = typeof focus === 'string' && focus.trim() ? focus : null;
@@ -92,7 +101,18 @@ export function compactRequest(focus, options) {
 // The start-error for a run or compaction the session did not accept: the
 // harness's own Duplicate and Busy errors, or a store failure, which
 // `describe` puts into words.
-export function refusal(error, { Busy, Duplicate, describe }) {
+export function refusal(
+    error: unknown,
+    {
+        Busy,
+        Duplicate,
+        describe,
+    }: {
+        Busy: abstract new (...args: never[]) => unknown;
+        Duplicate: abstract new (...args: never[]) => unknown;
+        describe(error: unknown): string;
+    },
+) {
     if (error instanceof Duplicate) {
         return startError('duplicate');
     }
@@ -104,7 +124,7 @@ export function refusal(error, { Busy, Duplicate, describe }) {
 
 // Run-types usage for `counts` ({input, output}): the host reports no cache
 // or reasoning split.
-export const usageOf = (counts) => ({
+export const usageOf = (counts: { input: number; output: number }) => ({
     promptTokens: counts.input,
     cachedPromptTokens: undefined,
     cacheWriteTokens: undefined,
@@ -113,7 +133,11 @@ export const usageOf = (counts) => ({
 });
 
 // Run-types counts for `counts` ({steps, toolCalls, input, output}).
-export const countsOf = (counts) => ({ steps: counts.steps, toolCalls: counts.toolCalls, usage: usageOf(counts) });
+export const countsOf = (counts: { steps: number; toolCalls: number; input: number; output: number }) => ({
+    steps: counts.steps,
+    toolCalls: counts.toolCalls,
+    usage: usageOf(counts),
+});
 
 // A run's events, written one at a time in order. Each `put` resolves false
 // once the driver has dropped the stream; `onGone` is called when that is
@@ -121,11 +145,14 @@ export const countsOf = (counts) => ({ steps: counts.steps, toolCalls: counts.to
 // with `heartbeatMs` a `heartbeat()` writes an `other` event (which drivers
 // ignore) once the stream has been quiet that long; without it, `heartbeat()`
 // does nothing.
-export function eventWriter(writable, { onGone, heartbeatMs } = {}) {
+export function eventWriter(
+    writable: { write(values: unknown[]): Promise<number>; drop(): void },
+    { onGone, heartbeatMs }: { onGone?: () => void; heartbeatMs?: number } = {},
+) {
     let alive = true;
     let chain = Promise.resolve(true);
     let wrote = Date.now();
-    const put = (event) => {
+    const put = (event: unknown) => {
         wrote = Date.now();
         chain = chain.then(async () => {
             if (!alive) {
@@ -163,3 +190,5 @@ export function eventWriter(writable, { onGone, heartbeatMs } = {}) {
         },
     };
 }
+
+export type EventWriter = ReturnType<typeof eventWriter>;

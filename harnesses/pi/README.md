@@ -1,6 +1,6 @@
 # Pi agent harness
 
-[Pi](https://github.com/earendil-works/pi)'s agent loop (`@earendil-works/pi-agent-core` 1.5.0) as a sandboxed WebAssembly component on `cosmonic:agent@0.4.2`. An agent harness is the loop that decides what to do next: it asks the model, runs the tool calls the model makes, records what happened and repeats. Pi is built from unmodified upstream packages from npm. It runs on QuickJS (a small JavaScript engine that [componentize-qjs](https://github.com/andreiltd/componentize-qjs) builds into the component) and targets WASI 0.3. The model, the tools and the conversation history come from the host; the component carries no provider SDK, no API key and no endpoint to dial.
+[Pi](https://github.com/earendil-works/pi)'s agent loop (`@earendil-works/pi-agent-core` 1.6.0) as a sandboxed WebAssembly component on `cosmonic:agent@0.4.2`. An agent harness is the loop that decides what to do next: it asks the model, runs the tool calls the model makes, records what happened and repeats. Pi is built from unmodified upstream packages from npm. It runs on QuickJS (a small JavaScript engine that [componentize-qjs](https://github.com/andreiltd/componentize-qjs) builds into the component) and targets WASI 0.3. The model, the tools and the conversation history come from the host; the component carries no provider SDK, no API key and no endpoint to dial.
 
 ## What it imports and exports
 
@@ -8,9 +8,9 @@ The component imports these interfaces from the published `cosmonic:agent@0.4.2`
 
 | Interface | For |
 | --- | --- |
-| `inference-types`, `models`, `chat` | A model, by an alias the host resolves. Pi's stream function is replaced by one that calls the host ([`component/src/llm.js`](component/src/llm.js)), so reply text streams as it is generated and dropping the stream cancels generation. |
+| `inference-types`, `models`, `chat` | A model, by an alias the host resolves. Pi's stream function is replaced by one that calls the host ([`component/src/llm.ts`](component/src/llm.ts)), so reply text streams as it is generated and dropping the stream cancels generation. |
 | `tools` | The tools the workload grants. The host runs them; the harness never links to a tool directly. |
-| `session` | The journal (an append-only log of steps and calls) and the transcript ([`component/src/session.js`](component/src/session.js)) |
+| `session` | The journal (an append-only log of steps and calls) and the transcript ([`component/src/session.ts`](component/src/session.ts)) |
 
 It also imports the WASI 0.3 monotonic clock, for timers and the run's deadline, and `wasi:random`, for commit and run ids. Outgoing HTTP, sockets and the filesystem are absent from the compiled component, and `just build` checks that on every build.
 
@@ -32,7 +32,7 @@ A saved transcript in a format this build cannot read starts a fresh context, ma
 
 ## Context compaction
 
-Each run asks the host for the model's context window (`models.describe`). When the transcript reaches 90% of it, or the host refuses a call with `context-length-exceeded` before any reply text was streamed, Pi summarizes the messages before the person's latest one through the same model alias and carries on from the summary ([`component/src/compaction.js`](component/src/compaction.js), applied through pi-agent-core's `transformContext`). The summarizing call is journaled as an `agent.op.v1` model op, and its result lands with `agent.compaction.v1` and the smaller transcript in one commit, never with a tool call open. The summary goes back in as an assistant message behind a fixed preamble, never as system text, and every original message stays in the journal. A summary the model refuses, or a provider filter withholds, is never committed. Summaries count against `max-steps` and `max-total-tokens` like any other model call.
+Each run asks the host for the model's context window (`models.describe`). When the transcript reaches 90% of it, or the host refuses a call with `context-length-exceeded` before any reply text was streamed, Pi summarizes the messages before the person's latest one through the same model alias and carries on from the summary ([`component/src/compaction.ts`](component/src/compaction.ts), applied through pi-agent-core's `transformContext`). The summarizing call is journaled as an `agent.op.v1` model op, and its result lands with `agent.compaction.v1` and the smaller transcript in one commit, never with a tool call open. The summary goes back in as an assistant message behind a fixed preamble, never as system text, and every original message stays in the journal. A summary the model refuses, or a provider filter withholds, is never committed. Summaries count against `max-steps` and `max-total-tokens` like any other model call.
 
 The `compact` export lets a driver ask for a summary between runs, with an optional `focus` the summarizer receives as the person's own message. It shares the run lock (`busy` during a run), is idempotent by its id, and keeps the latest exchange verbatim, as the automatic compaction does.
 
@@ -45,7 +45,7 @@ The `compact` export lets a driver ask for a summary between runs, with an optio
 
   Upstream [componentize-qjs#91](https://github.com/andreiltd/componentize-qjs/pull/91) (async import cancellation and larger snapshots) and [#90](https://github.com/andreiltd/componentize-qjs/pull/90) (async export task ownership) have merged since the pinned commit, so a toolchain bump may shrink the patch. Re-test before bumping.
 - **deny-fs answers the filesystem inside the component.** The QuickJS runtime is built with wasi-libc, which links its filesystem support whether or not the harness touches a file, so the bare QuickJS component imports `wasi:filesystem`. [`deny-fs/`](deny-fs/) is a small Rust component that exports an empty filesystem: no preopened directories, and every operation refused with `access`. Composed in front of the harness ([`component/compose.wac`](component/compose.wac)), it satisfies those imports inside the component, so the published artifact imports no filesystem at all. Stubs that trap would crash the harness on a probe; an empty filesystem refuses instead. The interface version in [`deny-fs/wit/world.wit`](deny-fs/wit/world.wit) (`@0.2.12`) has to match what the QuickJS runtime imports; if a componentize-qjs update moves it, `wac compose` fails naming the import.
-- **Timers really suspend.** The QuickJS runtime has no timers of its own, and a microtask never returns control to the host; only a real suspension does. [`component/src/timers.js`](component/src/timers.js) makes `setTimeout` and `setInterval` actual `wait-for` calls of at least 1 ms, without which cancellation, heartbeats and response streaming starve.
+- **Timers really suspend.** The QuickJS runtime has no timers of its own, and a microtask never returns control to the host; only a real suspension does. [`component/src/timers.ts`](component/src/timers.ts) makes `setTimeout` and `setInterval` actual `wait-for` calls of at least 1 ms, without which cancellation, heartbeats and response streaming starve.
 - **Ids come from `wasi:random`, never `Math.random`.** The PRNG state is part of the Wizer heap snapshot every instance starts from, so `Math.random` would repeat across instances.
 - **Ops are committed before the call.** A reply's tool ops are committed conditionally on the state version and the journal end, so a writer that has been replaced stops before calling the tool, and unresolved tool calls are never repeated.
 - **An unknown tool outcome ends the run.** When the host says a call may or may not have taken effect, the run fails there: the call's op closes as `unresolved` with an error step naming it, the model is not called again, and the call is never repeated. A person checks what happened. The one exception is a timeout on a tool the provider marks read only, which the model reads like any failed call. A call the run abandons (the driver drops the run mid call) closes as `unresolved` too.
@@ -54,12 +54,12 @@ The `compact` export lets a driver ask for a summary between runs, with an optio
 
 - A `u64` is a JS number here (jco and StarlingMonkey use `BigInt`).
 - A WIT function returning `result` returns the `ok` value or throws an `Error` whose `payload` is the `err` variant (`{tag, val}`); results inside streams and futures are plain `{tag, val}` objects.
-- Stream and future payload types are looked up by the constant names the shim generates (`wit.Stream.MESSAGE`, `wit.Future.RESULT_VOID_STRING`, ...), which `component/src/llm.js` and `component/src/entry.js` do by shape, so a renamed constant fails with the list of names that exist.
+- Stream and future payload types are looked up by the constant names the shim generates (`wit.Stream.MESSAGE`, `wit.Future.RESULT_VOID_STRING`, ...), which `component/src/llm.ts` and `component/src/entry.ts` do by shape, so a renamed constant fails with the list of names that exist.
 - The QuickJS build also exports its initializer (`init`); `component/compose.wac` does not re-export it.
 
 ## Prerequisites
 
-- Node.js 22 or newer and pnpm 12 (`corepack enable` picks the version `package.json` names).
+- Node.js 22.19 or newer and pnpm 12 (`corepack enable` picks the version `package.json` names).
 - Rust with the `wasm32-wasip2` target, for `deny-fs`.
 - [`just`](https://github.com/casey/just), [`wkg`](https://github.com/bytecodealliance/wasm-pkg-tools), [`wasm-tools`](https://github.com/bytecodealliance/wasm-tools) and [`wac`](https://github.com/bytecodealliance/wac).
 - The patched componentize-qjs. To build it:
@@ -85,7 +85,7 @@ just test        # build, then the rule tests under Node and the scripted test h
 just test-unit   # the rule tests alone (Node only)
 ```
 
-The build is locked: `pnpm install --frozen-lockfile` uses [`pnpm-lock.yaml`](pnpm-lock.yaml), `deny-fs` builds `--locked`, and the WIT is pinned by `component/wkg.lock` and `deny-fs/wkg.lock`. The harness's journal, run and compaction rules that do not depend on Pi live in [`../shared/js`](../shared/js) so they run under Node's tests.
+The build runs `pnpm run typecheck` on the component, shared helpers, build script and tests before bundling. The build is locked: `pnpm install --frozen-lockfile` uses [`pnpm-lock.yaml`](pnpm-lock.yaml), `deny-fs` builds `--locked`, and the WIT is pinned by `component/wkg.lock` and `deny-fs/wkg.lock`. The harness's journal, run and compaction rules that do not depend on Pi live in [`../shared/js`](../shared/js) so they run under Node's tests.
 
 ## Run it
 

@@ -4,17 +4,20 @@
   "type": "module",
   "packageManager": "pnpm@12.9.1",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.19"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "1.5.0",
-    "@earendil-works/pi-ai": "1.5.0"
+    "@earendil-works/pi-agent-core": "1.6.0",
+    "@earendil-works/pi-ai": "1.6.0"
   },
   "devDependencies": {
-    "esbuild": "^0.28.2"
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.28.2",
+    "typescript": "7.0.2"
   },
   "scripts": {
     "build": "just build",
-    "test": "just test"
+    "test": "just test",
+    "typecheck": "tsc --noEmit"
   }
 }

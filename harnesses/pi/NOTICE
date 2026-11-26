@@ -10,7 +10,7 @@ notices that apply to it are in ../shared/notices/wasi-libc.txt.
 Pi (https://github.com/earendil-works/pi)
 ===============================================================================
 
-@earendil-works/pi-agent-core, pi-ai, pi-schema and pi-telemetry 1.5.0,
+@earendil-works/pi-agent-core, pi-ai, pi-schema and pi-telemetry 1.6.0,
 bundled unmodified from npm.
 
 MIT License

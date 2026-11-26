@@ -23,23 +23,30 @@
 export const FREEFORM_TEXT = 'x-cosmonic-freeform-text';
 
 // Each listed tool's input, by name, from the last tools.list.
-let listed = new Map();
+export type ToolInput =
+    | { tag: 'text' }
+    | { tag: 'json-schema'; val: string }
+    | { tag: 'grammar'; val: { syntax: string; definition: string } };
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+type Arguments = { tag: 'text' | 'json'; val: string };
+
+let listed = new Map<string, ToolInput>();
 
 // Remember the inputs of the tools the host just listed ({name, input}),
 // replacing the last list.
-export function rememberListed(defs) {
+export function rememberListed(defs: { name: string; input: ToolInput }[]) {
     listed = new Map(defs.map((d) => [d.name, d.input]));
 }
 
 // Whether a tool with this input is a freeform tool: the model writes text,
 // constrained by a grammar or not.
-export function isFreeformInput(input) {
+export function isFreeformInput(input?: ToolInput): input is Exclude<ToolInput, { tag: 'json-schema' }> {
     return input?.tag === 'grammar' || input?.tag === 'text';
 }
 
 // The JSON Schema the agent holds for a tool with this input: the listed
 // schema, or for a freeform tool an object with the text as its one property.
-export function agentSchema(input) {
+export function agentSchema(input?: ToolInput): object {
     if (isFreeformInput(input)) {
         return { type: 'object', properties: { [FREEFORM_TEXT]: { type: 'string' } }, required: [FREEFORM_TEXT] };
     }
@@ -52,14 +59,14 @@ export function agentSchema(input) {
 
 // The input to offer the model for an agent tool ({name, parameters}): as the
 // host listed it, or, for a tool the host did not list, its schema.
-export function offeredInput(tool) {
+export function offeredInput(tool: { name: string; parameters?: object }): ToolInput {
     return listed.get(tool.name) ?? { tag: 'json-schema', val: JSON.stringify(tool.parameters ?? { type: 'object' }) };
 }
 
 // The model's arguments as the agent holds them: a JSON object as one (an
 // empty one when the model's JSON does not parse, which the agent's own
 // validation then reports), and a freeform call's text as FREEFORM_TEXT.
-export function agentArguments(args) {
+export function agentArguments(args?: Arguments): Record<string, JsonValue> {
     if (args?.tag === 'text') {
         return { [FREEFORM_TEXT]: args.val };
     }
@@ -71,10 +78,11 @@ export function agentArguments(args) {
 }
 
 // Whether the agent's arguments object carries a freeform call's text.
-function isFreeform(args) {
+function isFreeform(args: unknown): args is { [FREEFORM_TEXT]: string } {
     return (
         args != null &&
         typeof args === 'object' &&
+        FREEFORM_TEXT in args &&
         typeof args[FREEFORM_TEXT] === 'string' &&
         Object.keys(args).length === 1
     );
@@ -82,7 +90,7 @@ function isFreeform(args) {
 
 // The agent's arguments as they leave it: a freeform call's text as `text`,
 // verbatim, and anything else as `json`.
-export function toolArguments(args) {
+export function toolArguments(args: unknown): Arguments {
     return isFreeform(args)
         ? { tag: 'text', val: args[FREEFORM_TEXT] }
         : { tag: 'json', val: JSON.stringify(args ?? {}) };
@@ -90,6 +98,6 @@ export function toolArguments(args) {
 
 // The arguments as a journal entry records them: a freeform call's text as a
 // string, and an object as itself.
-export function recordedArguments(args) {
+export function recordedArguments(args: unknown) {
     return isFreeform(args) ? args[FREEFORM_TEXT] : (args ?? {});
 }

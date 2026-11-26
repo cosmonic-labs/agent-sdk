@@ -5,6 +5,8 @@
  * loop's full transcript onto the compacted one. Registers tests; no main.
  */
 
+import type { UserMessage } from '@earendil-works/pi-ai';
+import type { Reply, TranscriptMessage } from '../src/types.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
@@ -30,16 +32,47 @@ import {
     plan,
     transcriptText,
     turnStart,
-} from '../src/compaction.js';
+} from '../src/compaction.ts';
+
+function user(content: string): UserMessage {
+    return { role: 'user', content, timestamp: 0 };
+}
+
+function assistant(content: Reply['content']): Reply {
+    return {
+        role: 'assistant',
+        content,
+        api: 'test',
+        model: 'test',
+        provider: 'test',
+        timestamp: 0,
+        stopReason: 'stop',
+        usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+    };
+}
 
 // A system message, `n` earlier exchanges, then the current question.
-function transcript(n) {
-    const out = [{ role: 'system', content: 'You are Pi.', toolsAdded: [{ name: 'iss_position' }] }];
+function transcript(n: number): TranscriptMessage[] {
+    const out: TranscriptMessage[] = [
+        {
+            timestamp: 0,
+            role: 'system',
+            content: 'You are Pi.',
+            toolsAdded: [{ name: 'iss_position', description: '', parameters: {} }],
+        },
+    ];
     for (let i = 0; i < n; i++) {
-        out.push({ role: 'user', content: `question ${i}` });
-        out.push({ role: 'assistant', content: [{ type: 'text', text: `answer ${i}` }] });
+        out.push(user(`question ${i}`));
+        out.push(assistant([{ type: 'text', text: `answer ${i}` }]));
     }
-    out.push({ role: 'user', content: 'the current question' });
+    out.push(user('the current question'));
     return out;
 }
 
@@ -55,14 +88,17 @@ test('the threshold counts the reserve and needs a known window', () => {
 
 test('only the conversation before the kickoff is summarized; system messages are kept', () => {
     const t = transcript(3);
-    t.push({ role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'iss_position', arguments: {} }] });
+    t.push(assistant([{ type: 'toolCall', id: 'c1', name: 'iss_position', arguments: {} }]));
     t.push({
         role: 'toolResult',
+        timestamp: 0,
+        isError: false,
         toolCallId: 'c1',
         toolName: 'iss_position',
         content: [{ type: 'text', text: 'over the Pacific' }],
     });
     const p = plan(t);
+    assert.ok(p);
     assert.equal(p.at, 7);
     assert.equal(p.system.length, 1);
     assert.equal(p.older.length, 6);
@@ -75,7 +111,7 @@ test('only the conversation before the kickoff is summarized; system messages ar
 test('nothing worth summarizing is no plan', () => {
     assert.equal(plan(transcript(0)), null);
     // Already a summary and a turn: summarizing again would not shrink it.
-    const again = compacted(plan(transcript(3)), 'summary', 'llama3.2');
+    const again = compacted(plan(transcript(3))!, 'summary', 'llama3.2');
     assert.equal(plan(again), null);
 });
 
@@ -91,9 +127,9 @@ test('a single completed exchange before a new kickoff is summarized', () => {
 
 test('a large first exchange that overflows an 8,192 token window has a plan', () => {
     const t = [
-        { role: 'user', content: 'u'.repeat(24_000) },
-        { role: 'assistant', content: [{ type: 'text', text: 'a'.repeat(4_000) }] },
-        { role: 'user', content: 'n'.repeat(12_000) },
+        user('u'.repeat(24_000)),
+        assistant([{ type: 'text', text: 'a'.repeat(4_000) }]),
+        user('n'.repeat(12_000)),
     ];
     assert.equal(estimateTokens(t), 10_000);
     assert.ok(overThreshold(estimateTokens(t), 8192));
@@ -106,17 +142,13 @@ test('a large first exchange that overflows an 8,192 token window has a plan', (
 test('only messages a compaction wrote count as a prior summary, never look-alike text', () => {
     // The same two messages without the compaction marker are a real exchange,
     // even when their text is the agent's preamble.
-    const lookalike = [
-        { role: 'user', content: SUMMARY_PREAMBLE },
-        { role: 'assistant', content: [{ type: 'text', text: 'summary' }] },
-        { role: 'user', content: 'next' },
-    ];
+    const lookalike = [user(SUMMARY_PREAMBLE), assistant([{ type: 'text', text: 'summary' }]), user('next')];
     assert.ok(plan(lookalike));
     // A summary pair followed by a real exchange is summarized again, the old
     // summary with it.
-    const after = compacted(plan(transcript(3)), 'summary', 'm');
-    after.push({ role: 'assistant', content: [{ type: 'text', text: 'answer' }] });
-    after.push({ role: 'user', content: 'and then' });
+    const after = compacted(plan(transcript(3))!, 'summary', 'm');
+    after.push(assistant([{ type: 'text', text: 'answer' }]));
+    after.push(user('and then'));
     const p = plan(after);
     assert.ok(p);
     assert.equal(p.older.length, 4);
@@ -124,13 +156,15 @@ test('only messages a compaction wrote count as a prior summary, never look-alik
 
 test("the summary is the model's, never system text or the person's", () => {
     const p = plan(transcript(3));
+    assert.ok(p);
     const c = compacted(p, 'We talked about the ISS.', 'llama3.2');
     assert.deepEqual(
         c.map((m) => m.role),
         ['system', 'user', 'assistant', 'user'],
     );
     assert.equal(c[1].content, SUMMARY_PREAMBLE);
-    assert.equal(c[2].content[0].text, 'We talked about the ISS.');
+    assert.equal(c[2].role, 'assistant');
+    assert.deepEqual(c[2].content, [{ type: 'text', text: 'We talked about the ISS.' }]);
     assert.equal(c[2].model, 'llama3.2');
     assert.ok(c[1].compaction && c[2].compaction);
     // The person's question is still the kickoff, so the turn goes on.
@@ -159,7 +193,7 @@ test('the entry has the reserved fields', () => {
             through: { start: 0, end: 41 },
         },
     );
-    const overflow = entryData({ trigger: 'overflow', summary: 's', model: 'm', throughEnd: null });
+    const overflow = entryData({ trigger: 'overflow', summary: 's', model: 'm', throughEnd: null, kept: 0 });
     assert.equal(overflow.trigger, 'overflow');
     assert.equal('through' in overflow, false);
 });
@@ -182,26 +216,30 @@ test('the compacted event carries the entry fields without the summary, model or
         tokensAfter: 1200,
         seq: 44,
     });
-    assert.equal(compactionInfo(data, null).seq, undefined);
+    assert.equal(compactionInfo(data, null)!.seq, undefined);
     // No range, no event: the event cannot say what it covers.
-    assert.equal(compactionInfo(entryData({ trigger: 'overflow', summary: 's', model: 'm' }), 3), null);
+    assert.equal(
+        compactionInfo(entryData({ trigger: 'overflow', summary: 's', model: 'm', throughEnd: null, kept: 0 }), 3),
+        null,
+    );
 });
 
 test('the summarizer gets tool output cut short and the newest lines when it must drop some', () => {
     const big = 'x'.repeat(5000);
     const text = transcriptText([
-        { role: 'user', content: 'first' },
-        { role: 'toolResult', toolName: 'read', content: [{ type: 'text', text: big }] },
+        user('first'),
+        {
+            role: 'toolResult',
+            timestamp: 0,
+            isError: false,
+            toolName: 'read',
+            toolCallId: 'read-1',
+            content: [{ type: 'text', text: big }],
+        },
     ]);
     assert.ok(text.includes('[tool read]'));
     assert.ok(text.includes('3000 more characters'));
-    const capped = transcriptText(
-        [
-            { role: 'user', content: 'oldest' },
-            { role: 'user', content: 'newest' },
-        ],
-        20,
-    );
+    const capped = transcriptText([user('oldest'), user('newest')], 20);
     assert.ok(capped.includes('newest') && !capped.includes('oldest'));
 });
 
@@ -214,43 +252,43 @@ test("the view maps the loop's full transcript onto the compacted one", () => {
     const full = transcript(3);
     assert.equal(view.apply(full), full);
     const p = plan(full);
+    assert.ok(p);
     const next = compacted(p, 'summary', 'm');
     view.replace(full, full, p.at, next.slice(0, next.length - p.kept.length));
     assert.deepEqual(view.apply(full), next);
     // The loop goes on appending to its own copy; the view keeps up.
-    const later = [...full, { role: 'assistant', content: [{ type: 'text', text: 'done' }] }];
+    const later = [...full, assistant([{ type: 'text', text: 'done' }])];
     const viewed = view.apply(later);
     assert.equal(viewed.length, next.length + 1);
-    assert.equal(viewed[viewed.length - 1].content[0].text, 'done');
+    assert.deepEqual(viewed.at(-1)?.content, [{ type: 'text', text: 'done' }]);
     assert.equal(view.index(7), 3, "the person's message moves to just after the summary");
 
     // A second compaction, of an already compacted view.
     for (let i = 0; i < 3; i++) {
-        later.push(
-            { role: 'user', content: `more ${i}` },
-            { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
-        );
+        later.push(user(`more ${i}`), assistant([{ type: 'text', text: 'ok' }]));
     }
-    later.push({ role: 'user', content: 'latest' });
+    later.push(user('latest'));
     const viewed2 = view.apply(later);
     const p2 = plan(viewed2);
+    assert.ok(p2);
     const next2 = compacted(p2, 'summary 2', 'm');
     view.replace(later, viewed2, p2.at, next2.slice(0, next2.length - p2.kept.length));
     assert.deepEqual(view.apply(later), next2);
-    assert.equal(view.apply(later).at(-1).content, 'latest');
+    assert.equal(view.apply(later).at(-1)?.content, 'latest');
 });
 
 // A run's counters and limits, and a compaction whose summary call is charged
 // like the agent's: `usage` is what the summary call reports.
-function budgeted(limits, usage = { input: 10, output: 10 }) {
+function budgeted(limits: Parameters<typeof limitReached>[1], usage = { input: 10, output: 10 }) {
     const counts = { steps: 0, toolCalls: 0, input: 0, output: 0 };
-    const calls = [];
-    const compact = async (full) => {
+    const calls: number[] = [];
+    const compact = async (full: TranscriptMessage[]) => {
         await charged(counts, async () => {
             calls.push(full.length);
             return { text: 'summary', usage };
         });
         const p = plan(full);
+        assert.ok(p);
         return compacted(p, 'summary', 'm');
     };
     return { counts, calls, compact, limits: { maxSteps: null, maxTotalTokens: null, deadline: null, ...limits } };
@@ -259,11 +297,7 @@ function budgeted(limits, usage = { input: 10, output: 10 }) {
 // A transcript past the threshold of an 8,192 token window, with earlier
 // conversation to summarize.
 function overflowing() {
-    return [
-        { role: 'user', content: 'u'.repeat(24_000) },
-        { role: 'assistant', content: [{ type: 'text', text: 'a'.repeat(4_000) }] },
-        { role: 'user', content: 'n'.repeat(12_000) },
-    ];
+    return [user('u'.repeat(24_000)), assistant([{ type: 'text', text: 'a'.repeat(4_000) }]), user('n'.repeat(12_000))];
 }
 
 test('the limits read as the finish reason, tokens first, then time, then steps', () => {
@@ -334,7 +368,7 @@ test('no summary is started once a limit is reached', async () => {
         [{ maxSteps: 2 }, { steps: 2 }, 0, 'max-steps'],
         [{ maxTotalTokens: 100 }, { input: 100 }, 0, 'max-total-tokens'],
         [{ deadline: 10 }, {}, 10, 'max-duration'],
-    ]) {
+    ] as const) {
         const b = budgeted(limits);
         Object.assign(b.counts, counts);
         const r = await compactWithinLimits({
@@ -368,7 +402,7 @@ test('within its limits a run summarizes and goes on to the normal call', async 
     // Under the threshold, or with nothing to summarize, nothing is checked or called.
     const quiet = budgeted({ maxSteps: 1 });
     quiet.counts.steps = 1;
-    const small = [{ role: 'user', content: 'hi' }];
+    const small = [user('hi')];
     const s = await beforeCall(small, {
         view: new View(),
         window: 8192,
@@ -416,9 +450,9 @@ test("the turn starts at the person's real seq, even across gaps", () => {
 // A stream that records what is pushed to it and whether it was ended.
 function recorder() {
     return {
-        events: [],
+        events: [] as string[],
         ended: false,
-        push(ev) {
+        push(ev: { type: string; message?: string }) {
             this.events.push(ev.type === 'error' ? `error:${ev.message ?? ''}` : ev.type);
         },
         end() {
@@ -428,7 +462,7 @@ function recorder() {
 }
 
 // A model call's events, then optionally a throw.
-async function* events(types, thrown) {
+async function* events(types: string[], thrown?: Error) {
     for (const type of types) {
         yield { type };
     }
@@ -437,7 +471,7 @@ async function* events(types, thrown) {
     }
 }
 
-const fail = (e) => ({ type: 'error', message: e.message });
+const fail = (e: unknown) => ({ type: 'error', message: e instanceof Error ? e.message : String(e) });
 
 test('a model call that throws ends the stream with an error instead of hanging', async () => {
     const out = recorder();
@@ -493,29 +527,42 @@ test('an overflow is retried once only before any text of the reply was streamed
 // A session store with conditional commits: a commit carrying `version` and
 // `end` lands only when neither moved since, as the host's does.
 function store() {
-    const s = { version: 1, end: 3, entries: [], state: 'larger' };
-    s.commit = (entries, { state, version, end, tooLarge } = {}) => {
-        if (version != null && (version !== s.version || end !== s.end)) {
-            return 'stale';
-        }
-        if (tooLarge) {
-            return 'too-large';
-        }
-        s.entries.push(...entries);
-        s.end += entries.length;
-        if (state != null) {
-            s.state = state;
-            s.version++;
-        }
-        return 'committed';
+    const s = {
+        version: 1,
+        end: 3,
+        entries: [] as { kind: string; outcome?: string }[],
+        state: 'larger',
+        commit(
+            entries: { kind: string; outcome?: string }[],
+            {
+                state,
+                version,
+                end,
+                tooLarge,
+            }: { state?: string; version?: number; end?: number; tooLarge?: boolean } = {},
+        ): 'committed' | 'stale' | 'too-large' {
+            if (version != null && (version !== s.version || end !== s.end)) {
+                return 'stale';
+            }
+            if (tooLarge) {
+                return 'too-large';
+            }
+            s.entries.push(...entries);
+            s.end += entries.length;
+            if (state != null) {
+                s.state = state;
+                s.version++;
+            }
+            return 'committed';
+        },
     };
     return s;
 }
 
 // One run of the loop's step: compact if over the threshold, then the model
-// call, which counts only when made. Superseded ends the run, as main.js
+// call, which counts only when made. Superseded ends the run, as main.ts
 // turns it into a run that ends superseded with no further call.
-async function step(messages, compact) {
+async function step(messages: TranscriptMessage[], compact: Parameters<typeof beforeCall>[1]['compact']) {
     let modelCalls = 0;
     try {
         const r = await beforeCall(messages, {
@@ -537,13 +584,13 @@ async function step(messages, compact) {
     }
 }
 
-// Compact with a summary paused until `go` resolves, writing as session.js
+// Compact with a summary paused until `go` resolves, writing as session.ts
 // does: the conditional commit, then the failed op result when it cannot land.
-function compactor(s, { go = Promise.resolve(), tooLarge = false } = {}) {
-    return async (messages) => {
+function compactor(s: ReturnType<typeof store>, { go = Promise.resolve(), tooLarge = false } = {}) {
+    return async (messages: TranscriptMessage[]) => {
         const seen = { version: s.version, end: s.end };
         await go;
-        const next = [{ role: 'assistant', content: 'summary' }, messages.at(-1)];
+        const next = [assistant([{ type: 'text', text: 'summary' }]), messages.at(-1)!];
         const outcome = await closeCompaction({
             owned: true,
             install: async () =>
@@ -563,16 +610,12 @@ function compactor(s, { go = Promise.resolve(), tooLarge = false } = {}) {
     };
 }
 
-const crowded = () => [
-    { role: 'user', content: 'old '.repeat(10000) },
-    { role: 'assistant', content: [{ type: 'text', text: 'prior' }] },
-    { role: 'user', content: 'new' },
-];
+const crowded = () => [user('old '.repeat(10000)), assistant([{ type: 'text', text: 'prior' }]), user('new')];
 
 test('a competing commit while the summary runs ends the run superseded, with no model call', async () => {
     const s = store();
-    let release;
-    const go = new Promise((r) => (release = r));
+    let release!: () => void;
+    const go = new Promise<void>((r) => (release = r));
     const running = step(crowded(), compactor(s, { go }));
     // Another writer commits while the summary is in flight.
     s.commit([{ kind: 'agent.step.v1' }], { state: 'theirs', version: s.version, end: s.end });
@@ -621,9 +664,9 @@ test('a run that already lost the session makes no further model call, nor a sum
 
 test('a failed summary that loses the session ends the run superseded, with no model call', async () => {
     const s = store();
-    let release;
-    const go = new Promise((r) => (release = r));
-    // As session.js closes a failed summary: the failed result with the
+    let release!: () => void;
+    const go = new Promise<void>((r) => (release = r));
+    // As session.ts closes a failed summary: the failed result with the
     // unchanged transcript under conditions, then again without them.
     const failing = async () => {
         const seen = { version: s.version, end: s.end };
@@ -694,7 +737,10 @@ test('a requested compaction records the focus, and its result whether it summar
     });
     assert.equal(data.trigger, 'requested');
     assert.equal(data.focus, 'the API');
-    assert.equal('focus' in entryData({ trigger: 'threshold', summary: 's', model: 'm' }), false);
+    assert.equal(
+        'focus' in entryData({ trigger: 'threshold', summary: 's', model: 'm', throughEnd: null, kept: 0 }),
+        false,
+    );
     assert.deepEqual(compactResultData('c1', 'done', { finish: 'done' }, true), {
         compact: 'c1',
         outcome: 'done',
@@ -720,7 +766,7 @@ test('a compaction id is known by its accepted entry, a namespace apart from run
 });
 
 test("a requested summary covers the journal up to the person's latest message", () => {
-    const step = (seq, role) => ({ seq, kind: 'agent.step.v1', data: JSON.stringify({ role }) });
+    const step = (seq: number, role: string) => ({ seq, kind: 'agent.step.v1', data: JSON.stringify({ role }) });
     const entries = [
         step(0, 'user'),
         { seq: 1, kind: 'agent.run.v1', data: '{}' },

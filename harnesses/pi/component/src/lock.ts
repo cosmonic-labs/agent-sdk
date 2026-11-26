@@ -4,7 +4,7 @@
  * or compaction is accepted and released when it has made its last commit.
  */
 
-import { createRunLock } from '../../../shared/js/run-rules.js';
+import { createRunLock } from '../../../shared/js/run-rules.ts';
 
 // The typed, compact and HTTP adapters operate on the same instance.
 export const { acquire, release } = createRunLock();

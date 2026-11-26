@@ -35,12 +35,12 @@ export async function main({
     componentizer = process.env.COMPONENTIZE_QJS || 'componentize-qjs',
     composer = process.env.WAC || 'wac',
     bundle,
-} = {}) {
+}: { directory?: string; componentizer?: string; composer?: string; bundle?: typeof import('esbuild').build } = {}) {
     directory = resolve(directory);
     const build = bundle ?? (await import('esbuild')).build;
     await build({
         absWorkingDir: directory,
-        entryPoints: ['component/src/entry.js'],
+        entryPoints: ['component/src/entry.ts'],
         bundle: true,
         format: 'esm',
         platform: 'neutral',

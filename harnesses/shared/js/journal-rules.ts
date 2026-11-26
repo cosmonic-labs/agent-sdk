@@ -4,7 +4,7 @@
  * session.wit for the contract these follow.
  */
 
-import { recordedArguments } from './tool-input.js';
+import { recordedArguments } from './tool-input.ts';
 
 export const STEP_KIND = 'agent.step.v1';
 export const OP_KIND = 'agent.op.v1';
@@ -15,11 +15,27 @@ export const CONTEXT_RESET_KIND = 'agent.context-reset.v1';
 export const RUN_KIND = 'agent.run.v1';
 export const RUN_RESULT_KIND = 'agent.run-result.v1';
 
+interface JournalEntry {
+    kind: string;
+    data: Uint8Array | string;
+}
+type End = { tag: 'empty' } | { tag: 'at'; val: number | bigint };
+interface Op {
+    op: string;
+    target: string;
+    name: string;
+}
+type Status = 'committed' | 'dispatched' | { done: string };
+type ResultEntry =
+    | [typeof OP_RESULT_KIND, { op: string; outcome: string }]
+    | [typeof STEP_KIND, ReturnType<typeof unresolvedStep>];
+type CallError = { tag: string; val?: { tag: string } };
+
 const dec = new TextDecoder();
 const enc = new TextEncoder();
 
 // The JSON value of an entry's data (bytes or text), or null when it is not JSON.
-export function parse(data) {
+export function parse(data: JournalEntry['data']) {
     try {
         return JSON.parse(typeof data === 'string' ? data : dec.decode(data));
     } catch {
@@ -28,31 +44,25 @@ export function parse(data) {
 }
 
 // A journal entry to commit: `value` as JSON bytes under `kind`.
-/** @type {(kind: string, value: unknown) => { kind: string, data: Uint8Array }} */
-export const entry = (kind, value) => ({ kind, data: enc.encode(JSON.stringify(value)) });
+export const entry = (kind: string, value: unknown) => ({ kind, data: enc.encode(JSON.stringify(value)) });
 
 // The state condition for a commit that expects `version` (null or undefined: none saved).
-/** @type {(version?: string | null) => { tag: 'absent' } | { tag: 'version', val: string }} */
-export const condition = (version) => (version == null ? { tag: 'absent' } : { tag: 'version', val: version });
+export const condition = (version?: string | null): { tag: 'absent' } | { tag: 'version'; val: string } =>
+    version == null ? { tag: 'absent' } : { tag: 'version', val: version };
 
 // The first seq after journal end `end`.
-/** @type {(end: { tag: 'empty' } | { tag: 'at', val: number | bigint }) => number} */
-export const startAfter = (end) => (end.tag === 'empty' ? 0 : Number(end.val) + 1);
+export const startAfter = (end: End) => (end.tag === 'empty' ? 0 : Number(end.val) + 1);
 
 // Whether journal end `a` is past `b`.
-/** @type {(a: { tag: 'empty' } | { tag: 'at', val: number | bigint }, b: { tag: 'empty' } | { tag: 'at', val: number | bigint }) => boolean} */
-export const later = (a, b) => a.tag === 'at' && (b.tag === 'empty' || Number(a.val) > Number(b.val));
+export const later = (a: End, b: End) => a.tag === 'at' && (b.tag === 'empty' || Number(a.val) > Number(b.val));
 
 // Every journal entry of `store` (a cosmonic:agent/session store) from seq
 // `start` on, read a page at a time.
-/**
- * @template {{ seq: number | bigint }} T
- * @param {{ read(start: number, limit: number): PromiseLike<T[]> }} store
- * @param {number} [start]
- * @param {number} [page]
- * @returns {Promise<T[]>}
- */
-export async function readEntries(store, start = 0, page = 1000) {
+export async function readEntries<T extends { seq: number | bigint }>(
+    store: { read(start: number, limit: number): PromiseLike<T[]> },
+    start = 0,
+    page = 1000,
+) {
     const out = [];
     for (;;) {
         const read = await store.read(start, page);
@@ -65,7 +75,7 @@ export async function readEntries(store, start = 0, page = 1000) {
 }
 
 // The steps among journal `entries`, oldest first, skipping any that are not JSON.
-export function stepsOf(entries) {
+export function stepsOf(entries: JournalEntry[]) {
     const out = [];
     for (const e of entries) {
         if (e.kind !== STEP_KIND) {
@@ -81,8 +91,8 @@ export function stepsOf(entries) {
 }
 
 // The ops in `entries` ({kind, data}) that no op-result resolves, oldest first.
-export function unresolvedOps(entries) {
-    let open = [];
+export function unresolvedOps(entries: JournalEntry[]) {
+    let open: Op[] = [];
     for (const { kind, data } of entries) {
         if (kind !== OP_KIND && kind !== OP_RESULT_KIND) {
             continue;
@@ -107,8 +117,8 @@ export function unresolvedOps(entries) {
 // tool recognizes repeats, which this agent does not read, and a tool's
 // annotations never authorize it. It is closed as unresolved, with an error
 // step naming the call, and left to a person.
-export function resolutionEntries(unresolved) {
-    const out = [];
+export function resolutionEntries(unresolved: Op[]) {
+    const out: ResultEntry[] = [];
     for (const u of unresolved) {
         if (u.target === 'model') {
             out.push([OP_RESULT_KIND, { op: u.op, outcome: 'cancelled' }]);
@@ -121,7 +131,7 @@ export function resolutionEntries(unresolved) {
 }
 
 // The error step that goes with an unresolved tool call, naming it.
-function unresolvedStep(op, name) {
+function unresolvedStep(op: string, name?: string) {
     return {
         role: 'error',
         text:
@@ -134,7 +144,7 @@ function unresolvedStep(op, name) {
 
 // A step without its images, marked so a reader can say they were dropped;
 // null when it had none to drop.
-export function stepWithoutImages(data) {
+export function stepWithoutImages(data: JournalEntry['data']) {
     const v = parse(data);
     if (!v || !Array.isArray(v.images) || v.images.length === 0) {
         return null;
@@ -145,7 +155,14 @@ export function stepWithoutImages(data) {
 // An agent.op.v1 for each tool call in a Pi assistant message. The op is the
 // tool call's id, which is also the id the tool is called with. A freeform
 // call's arguments are recorded as its text.
-export function toolOps(message) {
+export function toolOps(message: {
+    role?: string;
+    content: (
+        | { type: 'toolCall'; id: string; name: string; arguments: unknown }
+        | { type: 'text'; text: string }
+        | { type: 'thinking'; thinking: string }
+    )[];
+}) {
     return (message?.content ?? [])
         .filter((c) => c.type === 'toolCall')
         .map((c) => ({
@@ -161,7 +178,7 @@ export function toolOps(message) {
    cancelled or timed out was made and never returned, so whether it took
    effect is not known: unresolved. Any other error came back from the call:
    failed. */
-export function outcomeForCallError(tag) {
+export function outcomeForCallError(tag?: string) {
     return tag === 'cancelled' || tag === 'timed-out' ? 'unresolved' : 'failed';
 }
 
@@ -170,7 +187,7 @@ export function outcomeForCallError(tag) {
    conventions record as cancelled. `outcome-unknown` may have taken effect:
    unresolved, and the run stops there (`stopsTheRun`), except a timeout on a
    tool its provider marks read only, which closes as failed. */
-export function outcomeForToolError(error, readOnly) {
+export function outcomeForToolError(error?: CallError, readOnly?: boolean) {
     if (error?.tag === 'not-dispatched') {
         return 'cancelled';
     }
@@ -183,14 +200,14 @@ export function outcomeForToolError(error, readOnly) {
    read only. That claim is the provider's, taken at its word, so the model
    reads the timeout and can ask for less. A missing `readOnly` annotation
    counts as not read only. An error of no known shape stops the run. */
-export function stopsTheRun(error, readOnly) {
+export function stopsTheRun(error?: CallError, readOnly?: boolean) {
     if (error?.tag === 'not-dispatched') {
         return false;
     }
     return !(error?.tag === 'outcome-unknown' && error.val?.tag === 'timed-out' && readOnly === true);
 }
 
-export function outcomeOf(status) {
+export function outcomeOf(status?: Status) {
     if (status === 'committed') {
         return 'cancelled';
     }
@@ -202,9 +219,9 @@ export function outcomeOf(status) {
 
 // What to commit when this turn closes one of its own ops: the result and,
 // when the call is unresolved, an error step naming it.
-export function closingEntries(op, name, status) {
+export function closingEntries(op: string, name: string | undefined, status?: Status) {
     const outcome = outcomeOf(status);
-    const out = [[OP_RESULT_KIND, { op, outcome }]];
+    const out: ResultEntry[] = [[OP_RESULT_KIND, { op, outcome }]];
     if (outcome === 'unresolved') {
         out.push([STEP_KIND, unresolvedStep(op, name)]);
     }
@@ -213,6 +230,6 @@ export function closingEntries(op, name, status) {
 
 // Pi's transcript in a form this build can use: an array of messages with
 // string roles. Anything else is an upgrade's old format.
-export function readableTranscript(value) {
+export function readableTranscript(value: unknown) {
     return Array.isArray(value) && value.every((m) => m && typeof m === 'object' && typeof m.role === 'string');
 }
