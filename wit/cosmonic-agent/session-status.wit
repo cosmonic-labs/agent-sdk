@@ -1,40 +1,41 @@
 package cosmonic:agent@0.4.3;
 
-/// Where a session stands: three facts that hold independently, so every
-/// combination is valid and none hides another.
+/// The types that describe where a session stands, with no functions, so an
+/// interface that carries a status (a child's state, say) can use them
+/// without importing `session-status` itself.
+///
+/// A status is three facts that hold independently, so every combination is
+/// valid and none hides another.
 ///
 /// - `activity`: what is in progress now.
 /// - `needs-input`: whether something is held for a person.
 /// - `last-run`: how the most recent run that ended did so.
 ///
-/// The implementer, whatever serves this import, sets all three only from
-/// what it observed itself: the run or compaction it is driving, what it
-/// holds at its gates, and how each run it drove ended, by the outcome or
-/// error `run` returned, a cancellation it carried out, or a restart that cut
-/// the run off. Entries an agent writes to the journal, `agent.run-result.v1`
-/// among them, are the agent's own report and never set any of the three, and
-/// nothing a model says does either. The one agent-reported value is the
-/// `finish` inside `run-end.replied`, which arrived in the run's outcome: a
-/// caller may route on it and must never allow anything on it. A run that
-/// finishes `input-required` does not set `needs-input`; the person's answer
-/// starts the next run.
+/// The implementer, whatever serves the import that returns a status, sets
+/// all three only from what it observed itself: the run or compaction it is
+/// driving, what it holds at its gates, and how each run it drove ended. That
+/// is the outcome or error `run` returned, a cancellation it carried out, a
+/// trap, or a stop or restart that cut the run off. Entries an agent writes
+/// to the journal, `agent.run-result.v1` among them, are the agent's own
+/// report and never set any of the three, and nothing a model says does
+/// either. The one agent-reported value is the `finish` inside
+/// `run-end.replied`, which arrived in the run's outcome: a caller may route
+/// on it and must never allow anything on it. A run that finishes
+/// `input-required` does not set `needs-input`; the person's answer starts
+/// the next run.
 ///
 /// One state to show. A caller that wants a single value for a badge or a
 /// list takes the first that applies:
 ///
 /// 1. needs input, when `needs-input` is set;
-/// 2. working, when `activity` is not `idle`;
+/// 2. working, when `activity` is not `idle`, which includes an activity
+///    this version does not name: something is in progress;
 /// 3. failed, when `last-run` ended `failed` or `interrupted`;
 /// 4. done, when `last-run` ended `replied`;
 /// 5. idle, otherwise, including after a cancelled run or an ending this
 ///    version does not name.
 ///
 /// A value it does not know on one fact leaves the other two readable.
-///
-/// As with `session` and `run`, the implementer binds the session and the
-/// caller never names one. The import suits a component that drives or
-/// watches an agent, such as an adapter serving a status endpoint, bound to
-/// that agent's session. Reading the status never grants driving the session.
 ///
 /// Adding a case to a variant here is a breaking change. Until a release
 /// adds one, the implementer reports an activity, a hold or a run ending this
@@ -43,13 +44,19 @@ package cosmonic:agent@0.4.3;
 /// nothing. Error detail is different: `status-error` carries optional
 /// diagnostic text that a caller may log and never parses.
 ///
-/// Times are `wasi:clocks/system-clock` instants, so a component that
-/// imports this interface also imports `system-clock`.
+/// Every string the implementer puts in a status or an error is its own
+/// words, at most 256 bytes: never text an agent, a model or a tool wrote,
+/// never a secret or credential value, and never a binding, storage or
+/// infrastructure name the caller was not shown. The one exception is the
+/// agent's `finish`, which is marked as the agent's own wherever it appears.
+///
+/// Times are `wasi:clocks/system-clock` instants, so a component that uses
+/// these types also imports `system-clock`.
 ///
 /// Unstable behind `agent-session-status`, which needs `agent-run` as well,
 /// for `finish`. The shape may change before it is marked `@since`.
 @unstable(feature = agent-session-status)
-interface session-status {
+interface session-status-types {
     @unstable(feature = agent-session-status)
     use run-types.{finish};
     @unstable(feature = agent-session-status)
@@ -62,16 +69,17 @@ interface session-status {
         /// Nothing is in progress: no run and no compaction.
         idle,
         /// A run is in progress, with the `run-id` its driver gave it, or
-        /// `none` when the implementer withholds the id from this caller. A
-        /// run that waits on a person is still `running`, and so is a
-        /// cancelled run that has not yet stopped, as `run` stays `busy`
-        /// until it has.
+        /// `none` when the implementer withholds the id from this caller.
+        /// It starts when the implementer accepts the run, so a `run` call
+        /// refused with a `start-error` never shows here. A run that waits
+        /// on a person is still `running`, and so is a cancelled run that
+        /// has not yet stopped, as `run` stays `busy` until it has.
         running(option<string>),
         /// A compaction the driver asked for through `compact` is in
         /// progress. One the agent starts during a run is part of `running`.
         compacting,
         /// An activity this version does not name, by its kebab-case name,
-        /// which is never empty.
+        /// which is never empty. Something is in progress.
         other(string),
     }
 
@@ -85,7 +93,7 @@ interface session-status {
         /// A change waiting for review.
         review,
         /// A kind this version does not name, by its kebab-case name, which
-        /// is never empty.
+        /// is never empty. Something is still held for a person.
         other(string),
     }
 
@@ -99,26 +107,32 @@ interface session-status {
         since: option<instant>,
     }
 
-    /// How a run ended, as the implementer observed it.
+    /// How a run ended, as the implementer observed it. A `run` call refused
+    /// with a `start-error` was never accepted, so it never ends here and
+    /// leaves `last-run` as it was.
     @unstable(feature = agent-session-status)
     variant run-end {
         /// `run` returned a `run-outcome`, carrying the finish the agent
         /// reported. Agent-reported: a caller routes on it and never allows
         /// anything on it, and treats the text in `finish.other` as the
-        /// agent's own. A cancelled run whose outcome had already arrived
-        /// ends here too.
+        /// agent's own. A run whose outcome `run` had already returned when
+        /// a cancellation arrived ends here, not `cancelled`.
         replied(finish),
-        /// `run` returned a `run-error` other than `cancelled`.
+        /// The run failed: `run` returned a `run-error` other than
+        /// `cancelled`, or the agent trapped while running it.
         failed,
-        /// Cut off: the implementer stopped or restarted before `run`
-        /// returned the run's outcome or error. Reported even when the
-        /// journal holds a result the agent wrote for that run, since that
-        /// result is the agent's own report.
+        /// Cut off: the implementer stopped or restarted, other than to carry
+        /// out a cancellation, before `run` returned the run's outcome or
+        /// error. Reported even when the journal holds a result the agent
+        /// wrote for that run, since that result is the agent's own report.
         interrupted,
-        /// `run` returned `run-error.cancelled`.
+        /// The implementer carried out a cancellation before `run` returned
+        /// an outcome: `run` returned `run-error.cancelled`, or the
+        /// implementer stopped the run by force to cancel it.
         cancelled,
         /// An ending this version does not name, by its kebab-case name,
-        /// which is never empty.
+        /// which is never empty. Show it as the run having ended; act on
+        /// nothing.
         other(string),
     }
 
@@ -147,9 +161,12 @@ interface session-status {
         /// that run's `run-options.max-duration`.
         needs-input: option<hold>,
         /// The most recent run that ended. Stays set while a later run is
-        /// in progress, and changes only when a run ends or the session is
-        /// cleared, which resets it to `none`. `none` when no run has ended
-        /// since the session began or was cleared.
+        /// in progress, and changes only when a run ends or when the driver
+        /// or a person clears the session, which resets it to `none`. A
+        /// clear the agent makes through its own `session` import leaves it
+        /// as it was, so an agent cannot hide how its last run ended. `none`
+        /// when no run has ended since the session began or was last cleared
+        /// that way.
         last-run: option<ended-run>,
     }
 
@@ -158,6 +175,9 @@ interface session-status {
     variant status-error {
         /// This caller may not read the session's status, or no longer may.
         denied(option<string>),
+        /// The session has ended: it was deleted or its workload was removed.
+        /// Nothing more will be reported, so calling again will not help.
+        ended,
         /// The implementer could not serve the call, or could not keep a
         /// watch going. Trying again later may succeed. The detail is for
         /// logs.
@@ -166,8 +186,24 @@ interface session-status {
         /// Never parse it.
         other(option<string>),
     }
+}
 
-    /// The session's status now.
+/// Read and follow where a session stands. The types, and the rules for how
+/// the implementer sets them, are in `session-status-types`.
+///
+/// As with `session` and `run`, the implementer binds the session and the
+/// caller never names one. The import suits a component that drives or
+/// watches an agent, such as an adapter serving a status endpoint, bound to
+/// that agent's session. Reading the status never grants driving the session.
+///
+/// Unstable behind `agent-session-status`, which needs `agent-run` as well.
+/// The shape may change before it is marked `@since`.
+@unstable(feature = agent-session-status)
+interface session-status {
+    @unstable(feature = agent-session-status)
+    use session-status-types.{session-status, status-error};
+
+    /// The session's status now. Once the session has ended, `ended`.
     @unstable(feature = agent-session-status)
     get: async func() -> result<session-status, status-error>;
 
@@ -180,18 +216,18 @@ interface session-status {
     /// stream goes on with `last-run` reset to `none`.
     ///
     /// The future says why the stream ended, and resolves only once it has.
-    /// `ok` means a clean end: the session itself ended, or the caller
-    /// dropped the stream. An error means the watch stopped while the
-    /// session goes on: `denied` when this caller's access to the status was
+    /// `ok` means the caller dropped the stream. An error carries what a
+    /// fresh `get` would answer at that moment: `ended` when the session
+    /// ended, `denied` when this caller's access to the status was
     /// withdrawn, which ends every watch it holds, or `unavailable` when the
-    /// implementer could not keep the watch going. After an error the caller
-    /// may call `watch` again; the new stream's first item is the status
-    /// then, so no change is lost beyond the short-lived values a slow
-    /// reader may miss anyway.
+    /// implementer could not keep the watch going. After `unavailable` the
+    /// caller may call `watch` again; the new stream's first item is the
+    /// status then, so no change is lost beyond the short-lived values a
+    /// slow reader may miss anyway.
     ///
-    /// An implementer may bound how many watches a caller holds open at
-    /// once. Past that bound, `watch` returns `unavailable` without starting
-    /// one. The outer error is for a watch that never started, for the same
+    /// An implementer bounds how many watches a caller holds open at once.
+    /// Past that bound, `watch` returns `unavailable` without starting one.
+    /// The outer error is for a watch that never started, for the same
     /// reasons `get` gives.
     @unstable(feature = agent-session-status)
     watch: async func() -> result<tuple<stream<session-status>, future<result<_, status-error>>>, status-error>;
