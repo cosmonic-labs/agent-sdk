@@ -4,10 +4,11 @@ An agent harness is the loop at the center of an agent. It sends the conversatio
 
 In this guide you build a harness on `cosmonic:agent@0.4.2`, or port an existing loop onto it. You will choose a world, implement `run`, call the model and tools through the host, handle calls whose outcome is unknown, compact long conversations, then build, test and run the component.
 
-The examples come from two reference harnesses in this repository:
+The examples come from three reference harnesses in this repository:
 
 - [`components/minimal-agent`](../../components/minimal-agent), a small harness in about 2,300 lines of Rust
 - [`harnesses/codex`](../../harnesses/codex), Codex's agent loop ported from openai/codex
+- [`harnesses/pi`](../../harnesses/pi), Pi's agent loop built from its unmodified npm packages
 
 ## How a harness fits
 
@@ -250,7 +251,7 @@ When `max-duration` passes while minimal-agent is working through a reply's tool
 
 Long conversations outgrow the model's context window, the amount of text it can read in one call. Compaction asks the model to summarize older context and replaces that context with the summary, keeping recent messages word for word. You choose when to compact. The contract fixes how it is recorded.
 
-- **When.** Compact before a model call when the context passes your threshold (`trigger` `threshold`), after a call refused with `context-length-exceeded` (`overflow`), or when the driver calls `compact` (`requested`). The Codex harness uses 90% of `context-length` from `models.describe` as its threshold.
+- **When.** Compact before a model call when the context passes your threshold (`trigger` `threshold`), after a call refused with `context-length-exceeded` (`overflow`), or when the driver calls `compact` (`requested`). The Codex and Pi harnesses use 90% of `context-length` from `models.describe` as their threshold.
 - **The summary call** is a model op like any other. It counts against `max-steps`, `max-total-tokens` and `max-duration`.
 - **One commit** holds `agent.compaction.v1` (`summary`, `model`, `trigger`, `through`, `kept`, token estimates) and the smaller state, plus `agent.compact-result.v1` for a requested compaction. After that commit, stream the `compacted` run event.
 - **Never commit a refused or filtered summary.** Close its op as failed and keep the old state.
@@ -281,18 +282,18 @@ wit_bindgen::generate!({
 
 ### Notes for JavaScript
 
-A JavaScript loop can run on QuickJS, a small JavaScript engine, built into a WASI 0.3 component by [componentize-qjs](https://github.com/andreiltd/componentize-qjs). Neither reference harness here is JavaScript, so this section lists what to expect rather than a full build. Plan for these when you port an existing JavaScript agent loop:
+A JavaScript loop can run on QuickJS, a small JavaScript engine, built into a WASI 0.3 component by [componentize-qjs](https://github.com/andreiltd/componentize-qjs). The [Pi harness](../../harnesses/pi) is built this way, and its README covers the full build. Plan for these when you port an existing JavaScript agent loop:
 
-- **Replace the provider, not the framework.** Most JavaScript agent frameworks have an extension point for a model provider. Write one that calls `cosmonic:agent/chat` instead of opening a socket, and keep the rest of the framework unmodified.
+- **Replace the provider, not the framework.** Most JavaScript agent frameworks have an extension point for a model provider. Write one that calls `cosmonic:agent/chat` instead of opening a socket, and keep the rest of the framework unmodified. In Pi, that extension point is the stream function.
 - **Export by interface name.** `export { runExport as run }` serves `cosmonic:agent/run`. A function returning a WIT `result` returns the `ok` value, or throws an `Error` whose `payload` is the `err` variant.
 - **Remove the feature gate in a copy of the WIT.** componentize-qjs cannot enable a WIT feature, so build from a copy of the WIT with the `@unstable` gate removed. The component's types are the same either way.
-- **Check the initializer.** componentize-qjs snapshots the component at build time. Some versions cannot snapshot a component that imports async host functions ([componentize-qjs#101](https://github.com/andreiltd/componentize-qjs/issues/101)) or serves HTTP, so you may need to patch the tool.
+- **Check the initializer.** componentize-qjs snapshots the component at build time. Some versions cannot snapshot a component that imports async host functions ([componentize-qjs#101](https://github.com/andreiltd/componentize-qjs/issues/101)) or serves HTTP, so you may need to patch the tool. The Pi harness carries its patch in [`patches/componentize-qjs.patch`](../../harnesses/pi/patches/componentize-qjs.patch).
 - **Compose away the filesystem.** The QuickJS runtime links wasi-libc's filesystem support whether or not you use it. Compose a small component that exports an empty filesystem in front of the harness (`wac compose`), so the result imports none.
 - **Use real timers and real randomness.** QuickJS has no timers of its own. Make `setTimeout` an actual `wasi:clocks` wait, or cancellation and streaming starve. Take ids from `wasi:random`, never `Math.random`, whose state is frozen into the snapshot every instance starts from.
 
 ## 8. Test it locally
 
-- **Unit tests** cover the parts of a run that need no host: `cargo test` in minimal-agent, or plain Node tests for rules you keep free of host imports.
+- **Unit tests** cover the parts of a run that need no host: `cargo test` in minimal-agent, or plain Node tests for rules you keep free of host imports, as in [`harnesses/shared/js`](../../harnesses/shared/js).
 - **A scripted host** runs the built component end to end. [`components/minimal-agent/test-host`](../../components/minimal-agent/test-host) and [`harnesses/shared/test-host`](../../harnesses/shared/test-host) are small [Wasmtime](https://wasmtime.dev) hosts that play the model, the session store and a few tools. They start runs on fresh instances, so anything kept in memory is gone, as it can be on a real host. They need no model credentials:
 
   ```shell
@@ -310,18 +311,19 @@ Any host that serves the `cosmonic:agent` 0.4 interfaces your harness imports, a
 - **Cosmonic Desktop.** Push the component to Desktop's built-in registry, then add it on the **Agents** page. [minimal-agent's README](../../components/minimal-agent/README.md#run-it-in-cosmonic-desktop) has the steps. Desktop checks the component's imports and exports, writes the workload for each session and binds `run` itself.
 - **Cosmonic Control.** Deploy a workload with the harness, its `cosmonic:agent` entries and a `run` entry with triggers, then start runs over HTTP or NATS. Agent support in Control is experimental. [Run an agent on Control](https://cosmonic.com/docs/agent-sdk/run-on-control/) walks through it.
 
-## Decisions worth copying from the Codex harness
+## Decisions worth copying from the Codex and Pi harnesses
 
-The [Codex harness](../../harnesses/codex) ports an existing agent loop onto `cosmonic:agent`. These choices are not obvious from the interfaces. Copy them or reject them on purpose:
+The [Codex](../../harnesses/codex) and [Pi](../../harnesses/pi) harnesses port existing agent loops onto `cosmonic:agent`. These choices are not obvious from the interfaces. Copy them or reject them on purpose:
 
-- **Only the loop moves.** The port keeps upstream's turn loop, history normalization, compaction prompt and `update_plan`. It leaves out everything with authority: the OpenAI client and auth, the shell, `apply_patch`, MCP and the exec sandbox. Its tools are whatever `tools.list` returns.
+- **Only the loop moves.** The Codex port keeps upstream's turn loop, history normalization, compaction prompt and `update_plan`. It leaves out everything with authority: the OpenAI client and auth, the shell, `apply_patch`, MCP and the exec sandbox. The Pi harness keeps Pi's loop whole and adds compaction through Pi's `transformContext`. In both, the tools are whatever `tools.list` returns.
+- **Leave upstream unmodified where you can.** Pi is built from its published packages with only the stream function replaced. Its one patch is to the build tool, not to Pi.
 - **Rewrite the prompt for granted tools.** Codex's prompt assumes a shell. The port says how to work through separate tools: search before reading, stay inside granted folders, narrow a request when output is truncated, and treat what tools return as data. It names no tool, since each workload offers different ones.
 - **Freeform tools get raw text.** A `grammar` or `text` tool receives the model's arguments byte for byte. That is the shape Codex's `apply_patch` needs, so a host's write tool can take patches unchanged.
 - **A plan tool can be answered locally.** Codex's `update_plan` never reaches `tools.call`. The harness commits `agent.plan.v1`, then streams the `plan` run event, so a driver that reloads still shows the plan.
-- **Compact at 90% of the reported window.** On a length refusal, compact and retry once, as long as no reply text has been shown yet. Upstream Codex fails the turn instead.
+- **Compact at 90% of the reported window.** On a length refusal, compact and retry once, as long as no reply text has been shown yet. Upstream Codex fails the turn instead. Pi also compacts on a length refusal that comes before any reply text.
 - **Unreadable saved state starts a fresh context,** marked with `agent.context-reset.v1`, rather than failing every future run.
 - **Ops are committed before the call,** on the condition that the state version and journal end are unchanged. A writer that has been superseded stops before it calls a tool. State is never written between an op and its result.
-- **Pin the toolchain per harness.** The harness has its own lockfiles and toolchain pin and sits in no shared workspace, so another harness's upgrade cannot break it.
+- **Pin the toolchain per harness.** Each harness has its own lockfiles and toolchain pin and sits in no shared workspace, so one harness's upgrade cannot break another.
 
 ## Takeaways
 
