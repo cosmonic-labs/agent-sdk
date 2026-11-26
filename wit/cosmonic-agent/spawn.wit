@@ -30,8 +30,11 @@ package cosmonic:agent@0.4.4;
 /// the caller's ceiling and policy does not ask for one. Otherwise the child
 /// exists in state `pending` (no instance, no reach) until a grantor decides;
 /// runs sent to it wait (`blocked(admission)`). A refusal, an expired
-/// request, or `end` while pending ends the child, and its waiting runs fail
-/// `not-admitted`. One approval admits one child, and that child only: what
+/// request, or a failed re-check ends the child, and its waiting runs fail
+/// `not-admitted`; `end` while pending ends it too, and its waiting runs fail
+/// `cancelled`. The spawned agent's own grants are never approvable: they
+/// stay within the caller's reach. One approval admits one child, and that
+/// child only: what
 /// was approved for it counts as beyond its ceiling when its own children
 /// ask, so they are refused unless every higher ancestor holds it, and then
 /// need their own approval.
@@ -63,8 +66,11 @@ interface spawn {
         component: component-ref,
         /// A model alias the caller was granted.
         model-alias: string,
-        /// What the agent component may touch: within the caller's own
-        /// grants. Reach the caller lacks goes in a tool component.
+        /// What the agent component may touch. It must be contained in the
+        /// caller's own reach; anything beyond is `denied`, and no grantor
+        /// can approve it, so an agent component never gets reach its
+        /// parent lacks. Reach the caller lacks goes in a tool component.
+        /// Secrets are refused here (`invalid`); they go to a tool component.
         grants: grants,
         /// Its tool components, in order.
         tool-components: list<tool-component-source>,
@@ -79,8 +85,9 @@ interface spawn {
         catalog(catalog-name),
         /// An agent the caller describes.
         custom(agent-spec),
-        /// A source this version does not name, by its kebab-case name. An
-        /// implementer that does not serve it answers `invalid`.
+        /// A source this version does not name, by its kebab-case name, never
+        /// empty. An implementer that does not serve it answers `invalid`. An
+        /// empty name is `invalid` too.
         other(string),
     }
 
@@ -97,9 +104,9 @@ interface spawn {
         /// withheld and every other outcome field is the implementer's own.
         /// For reading untrusted content in quarantine.
         structured-only(json),
-        /// A shape this version does not name, by its kebab-case name. An
-        /// implementer that does not serve it answers `invalid` and never
-        /// substitutes another shape.
+        /// A shape this version does not name, by its kebab-case name, never
+        /// empty. An implementer that does not serve it answers `invalid` and
+        /// never substitutes another shape. An empty name is `invalid` too.
         other(string),
     }
 
@@ -125,6 +132,13 @@ interface spawn {
         max-duration: option<duration>,
         /// Children its subtree may spawn in all.
         max-spawns: option<u32>,
+        /// Runs in progress at once across its subtree, its share of the
+        /// tree's limit. `none` takes the implementer's default, a part of
+        /// what the tree allows, so one subtree cannot take every place.
+        max-concurrent-runs: option<u32>,
+        /// Children not yet ended across its subtree, its share of the
+        /// tree's limit, defaulting the same way.
+        max-live-children: option<u32>,
     }
 
     /// A power a child may receive; it gets one only if the caller holds it.
@@ -138,8 +152,9 @@ interface spawn {
         tool-discovery,
         /// Load tool components into itself.
         tool-loading,
-        /// A power this version does not name, by its kebab-case name. An
-        /// implementer that does not know it answers `invalid`.
+        /// A power this version does not name, by its kebab-case name, never
+        /// empty. An implementer that does not know it answers `invalid`. An
+        /// empty name is `invalid` too.
         other(string),
     }
 
@@ -167,17 +182,20 @@ interface spawn {
     variant spawn-limit {
         /// Nesting depth.
         depth,
-        /// Runs in progress at once in the tree.
+        /// Runs in progress at once, in the tree or under an ancestor's
+        /// `max-concurrent-runs`.
         concurrent-runs,
-        /// Children not yet ended in the tree.
+        /// Children not yet ended, in the tree or under an ancestor's
+        /// `max-live-children`.
         live-children,
         /// Children spawned in all, in the tree or under a child's
         /// `max-spawns`.
         total-children,
         /// Approvals pending at once.
         pending-approvals,
-        /// A limit this version does not name, by its kebab-case name. Treat
-        /// it like the others: retry only after something changes.
+        /// A limit this version does not name, by its kebab-case name, never
+        /// empty. Treat it like the others: retry only after something
+        /// changes.
         other(string),
     }
 
@@ -198,8 +216,9 @@ interface spawn {
     variant spawn-error {
         /// Spawning is not enabled for this caller. Permanent.
         disabled,
-        /// Policy refused, a refusal's cooldown is running, or the request
-        /// reaches beyond what any ancestor holds.
+        /// Policy refused, a refusal's cooldown is running, the agent's own
+        /// grants reach beyond the caller's, or a tool component reaches
+        /// beyond what an ancestor above the caller holds.
         denied(option<string>),
         /// The caller's own subtree is being stopped. Retry after it stops.
         stopping,
@@ -320,9 +339,11 @@ interface spawn {
         send: async func(run-id: run-id, message: user-message) -> result<child-run, send-error>;
 
         /// A new subscription to a run the caller sent here, including the
-        /// first run `spawn` started. A run that has ended gives an outcome
-        /// that is already resolved and a progress stream that is already
-        /// closed.
+        /// first run `spawn` started. A run that has ended, however it ended,
+        /// gives an outcome that is already resolved (to its error, if it
+        /// failed) and a progress stream that is already closed. The call
+        /// itself fails `failed(expired)` only once the outcome is no longer
+        /// kept, and `unknown-run` for a run the caller never sent.
         @unstable(feature = agent-spawn)
         watch-run: async func(run-id: run-id) -> result<child-run, wait-error>;
 

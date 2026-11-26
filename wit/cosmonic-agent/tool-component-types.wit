@@ -2,8 +2,9 @@ package cosmonic:agent@0.4.4;
 
 /// Types for describing a component's reach and the tool components an agent
 /// may load or hand to a child. No functions: importing it grants nothing.
-/// Unstable behind `agent-tool-loading`. `spawn-types` uses `grants`,
-/// `pending-approval` and the catalog names, which is why `agent-spawn`
+/// Unstable behind `agent-tool-loading`. `spawn-types` uses
+/// `pending-approval`, and `spawn` uses `grants`, `component-ref`,
+/// `tool-component-source` and `catalog-name`, which is why `agent-spawn`
 /// builds on this feature.
 ///
 /// Reach is what a component can actually touch: its grants, limited to the
@@ -73,11 +74,12 @@ interface tool-component-types {
         volumes: list<volume-mount>,
         /// Interfaces it may import beyond its world.
         interfaces: list<interface-grant>,
-        /// Secret names delivered into its memory. Refused on a spawned
-        /// agent's own component.
+        /// Secret names delivered into its memory. Refused (`invalid`) on a
+        /// spawned agent's own component.
         secrets: list<string>,
         /// Credential references the implementer applies to its outbound
-        /// requests; the value never enters the component.
+        /// requests, only to the destinations each credential's binding
+        /// names; the value never enters the component.
         credentials: list<string>,
     }
 
@@ -106,8 +108,9 @@ interface tool-component-types {
         catalog(catalog-name),
         /// A tool component the caller describes.
         custom(tool-component-spec),
-        /// A source this version does not name, by its kebab-case name. An
-        /// implementer that does not serve it answers `invalid`.
+        /// A source this version does not name, by its kebab-case name, never
+        /// empty. An implementer that does not serve it answers `invalid`. An
+        /// empty name is `invalid` too.
         other(string),
     }
 
@@ -118,8 +121,9 @@ interface tool-component-types {
         /// Implementer-issued, to match the approval interface and audit
         /// log.
         id: string,
-        /// What the grantor is asked, as the implementer wrote it. Never
-        /// text the caller chose.
+        /// What the grantor is asked, as the implementer wrote it. Never the
+        /// caller's free text; a name the caller chose appears only quoted,
+        /// marked as the caller's, and limited to `[a-z0-9-_./:]`.
         summary: string,
     }
 
@@ -128,9 +132,10 @@ interface tool-component-types {
     variant tool-component-state {
         /// Waiting on a grantor. Nothing is bound.
         awaiting-approval(pending-approval),
-        /// Refused by a grantor, or the request was withdrawn or expired.
-        /// Listed until the caller loads it again, sets it aside, or the
-        /// cooldown ends. The detail is diagnostic.
+        /// Refused by a grantor or by policy, or the request expired
+        /// undecided. Listed until the caller loads it again or sets it
+        /// aside; a request the caller withdraws leaves the listing instead.
+        /// The detail is diagnostic.
         denied(option<string>),
         /// Admitted; its component is starting. Not callable yet.
         loading,
@@ -149,8 +154,8 @@ interface tool-component-types {
         /// loads it again, which starts over, or sets it aside. The detail is
         /// diagnostic.
         failed(option<string>),
-        /// A state this version does not name, by its kebab-case name. Treat
-        /// it as not callable.
+        /// A state this version does not name, by its kebab-case name, never
+        /// empty. Treat it as not callable.
         other(string),
     }
 }

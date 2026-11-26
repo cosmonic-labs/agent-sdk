@@ -1,6 +1,6 @@
 package cosmonic:agent@0.4.4;
 
-/// The guest may read the session tree it belongs to: where it sits, its
+/// The caller may read the session tree it belongs to: where it sits, its
 /// remaining budget, and the sessions below it. Reading acts on nothing;
 /// starting and driving sessions takes `spawn`. Unstable behind
 /// `agent-spawn`.
@@ -49,9 +49,9 @@ interface session-tree {
         changed(session-info),
         /// A session left the listing.
         removed(session-id),
-        /// An event this version does not name, by its kebab-case name. Safe
-        /// to ignore: a later `changed` or `removed` carries the session's
-        /// latest record.
+        /// An event this version does not name, by its kebab-case name, never
+        /// empty. Safe to ignore: a later `changed` or `removed` carries the
+        /// session's latest record.
         other(string),
     }
 
@@ -87,10 +87,11 @@ interface session-tree {
     /// A failure before the watch starts is the call's own error. Otherwise
     /// the call returns the stream of events and a future that resolves once
     /// the stream has ended or been dropped. Drop the stream to stop
-    /// watching, and the future resolves `ok`. If the watch fails or is
-    /// withdrawn midway (the store failed, or the caller lost the power),
-    /// the stream ends and the future resolves to why; watch again for a
-    /// fresh snapshot.
+    /// watching, and the future resolves `ok`. If the watch stops midway,
+    /// the stream ends and the future resolves to what a fresh call would
+    /// answer then: `disabled` when the caller lost the power, `unavailable`
+    /// when the state could not be read. After `unavailable`, watch again
+    /// for a fresh snapshot.
     @unstable(feature = agent-spawn)
     watch-children: async func(query: child-query) -> result<tuple<stream<child-event>, future<result<_, session-tree-error>>>, session-tree-error>;
 }

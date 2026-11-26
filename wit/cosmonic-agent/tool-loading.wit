@@ -15,7 +15,9 @@ package cosmonic:agent@0.4.4;
 /// as `awaiting-approval`. `tool-discovery` reports the same decision as an
 /// offer's `fit`. A person's approval lasts for the session: loading the
 /// identical tool component again later needs no prompt, until the person
-/// removes it. A request nobody decides expires after a while.
+/// removes it. Identical means the same image digests, the same resolved
+/// reach and no more functions than were approved; offering more functions
+/// asks again. A request nobody decides expires after a while.
 ///
 /// Timing. A load serves the run in progress where the implementer can: the
 /// caller's `tools.list` includes the tool component's tools once it is
@@ -45,15 +47,19 @@ interface tool-loading {
         /// The caller or its model loaded it. Only these are set aside
         /// automatically, and only these can be set aside by the caller.
         agent-loaded,
-        /// An origin this version does not name, by its kebab-case name.
-        /// Treat it like `workload-declared`: never set it aside.
+        /// An origin this version does not name, by its kebab-case name,
+        /// never empty. Treat it like `workload-declared`: never set it
+        /// aside.
         other(string),
     }
 
     /// One tool component in the caller's session.
     @unstable(feature = agent-tool-loading)
     record tool-component-info {
-        /// Its name, unique among the caller's tool components.
+        /// Its name, unique among the caller's tool components: the spec's
+        /// `name` for one the caller described, and the catalog name for one
+        /// loaded from the catalog. A catalog load whose name another tool
+        /// component already holds answers `name-taken`.
         name: string,
         /// The model-facing names its tools are offered under. They carry no
         /// authority and do not change during the session.
@@ -94,8 +100,9 @@ interface tool-loading {
         tool-components,
         /// Approvals pending at once.
         pending-approvals,
-        /// A limit this version does not name, by its kebab-case name. Treat
-        /// it like the others: retry only after something changes.
+        /// A limit this version does not name, by its kebab-case name, never
+        /// empty. Treat it like the others: retry only after something
+        /// changes.
         other(string),
     }
 
@@ -115,15 +122,18 @@ interface tool-loading {
     variant load-error {
         /// Loading is not enabled for this caller. Permanent.
         disabled,
-        /// Policy or a person refused, or a refusal's cooldown is running.
+        /// Policy or a person refused, a refusal's cooldown is running, or
+        /// the tool component reaches beyond what an ancestor above the
+        /// caller holds.
         denied(option<string>),
         /// Another tool component already holds the name.
         name-taken,
         /// A limit would be exceeded.
         over-limit(load-limit-exceeded),
         /// Malformed: an unknown catalog name or function, an empty function
-        /// list, a source this implementer does not serve, or a component
-        /// whose imports its grants do not cover.
+        /// list, a source this implementer does not serve, an image that
+        /// could not be read, or a component whose imports its grants do not
+        /// cover.
         invalid(option<string>),
         /// Could not be served now, or the tool component failed to start.
         /// Retry may succeed.

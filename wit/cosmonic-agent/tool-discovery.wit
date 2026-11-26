@@ -25,8 +25,8 @@ interface tool-discovery {
         within-ceiling,
         /// Loading it waits on a grantor, who could allow it.
         beyond-ceiling,
-        /// A relation this version does not name, by its kebab-case name.
-        /// Treat it as `beyond-ceiling`.
+        /// A relation this version does not name, by its kebab-case name,
+        /// never empty. Treat it as `beyond-ceiling`.
         other(string),
     }
 

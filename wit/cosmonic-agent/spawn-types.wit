@@ -20,7 +20,11 @@ package cosmonic:agent@0.4.4;
 /// caller's direct children carry no text a child chose. A child can still
 /// signal through how much it spends and when, and through tree-wide limits,
 /// as seen in usage, remaining budgets, `over-limit` answers and
-/// `watch-children` events.
+/// `watch-children` events. Below the caller's direct children those figures
+/// are coarsened (whole minutes, powers of two), which narrows that channel
+/// without closing it. A child can also learn, from `denied` against a wait
+/// on a grantor, whether its ancestors hold some reach; the implementer
+/// rate-limits and audits those answers.
 ///
 /// Session ids and run ids authorize nothing on their own: the implementer
 /// acts only for the component that spawned a child.
@@ -55,13 +59,15 @@ interface spawn-types {
         /// Time: an ancestor's active time, which halts the session, or the
         /// session's own `max-duration`, which ends it.
         max-duration,
-        /// A budget this version does not name, by its kebab-case name.
-        /// Treat it as spent until someone raises it.
+        /// A budget this version does not name, by its kebab-case name, never
+        /// empty. Treat it as spent until someone raises it.
         other(string),
     }
 
-    /// Why a child takes no more runs, or why it ended. Detail strings are
-    /// diagnostic: the implementer's own words, never the child's.
+    /// Why a child takes no more runs, or why it ended. The cases name a
+    /// reason, so an unnamed one is `other` by name; the detail strings some
+    /// cases carry are diagnostic: the implementer's own words, never the
+    /// child's.
     @unstable(feature = agent-spawn)
     variant stop-reason {
         /// A grantor refused it.
@@ -76,8 +82,12 @@ interface spawn-types {
         exhausted(session-budget-item),
         /// It no longer fits its ancestors' current reach or policy.
         revoked(option<string>),
-        /// A reason not captured above.
-        other(option<string>),
+        /// Its parent ended, or the component that spawned it is gone, and
+        /// it ended with them.
+        parent-ended,
+        /// A reason this version does not name, by its kebab-case name, never
+        /// empty. Treat it as one that does not lift.
+        other(string),
     }
 
     /// Where a child stands.
@@ -100,8 +110,9 @@ interface spawn-types {
         /// Ended; the reason, when it was not an orderly `end`. A refused or
         /// withdrawn pending child ends this way, freeing its place.
         ended(option<stop-reason>),
-        /// A state this version does not name, by its kebab-case name.
-        /// Treat the child as taking no runs now, and read it again later.
+        /// A state this version does not name, by its kebab-case name, never
+        /// empty. Treat the child as taking no runs now, and read it again
+        /// later.
         other(string),
     }
 
@@ -115,8 +126,9 @@ interface spawn-types {
         /// The outcome broke the output shape or size limit. The detail never
         /// quotes the rejected output.
         output-rejected(option<string>),
-        /// The child was never admitted (refused, withdrawn or expired), so
-        /// the run never started.
+        /// The child was never admitted (refused, expired, or a re-check
+        /// failed), so the run never started. A run waiting when the caller
+        /// ends a pending child fails `cancelled` instead.
         not-admitted,
         /// A person or auditor declined to release the outcome.
         withheld,
@@ -146,8 +158,8 @@ interface spawn-types {
         done,
         /// Ended without one.
         failed(child-run-error),
-        /// A state this version does not name, by its kebab-case name. Treat
-        /// the run as not yet ended: `wait` resolves it.
+        /// A state this version does not name, by its kebab-case name, never
+        /// empty. Treat the run as not yet ended: `wait` resolves it.
         other(string),
     }
 
@@ -230,10 +242,12 @@ interface spawn-types {
         tool-approval,
         /// Policy holds the outcome for release.
         outcome-release,
-        /// The run waits to be placed after its machine was lost.
+        /// The run waits to be placed: an earlier run's machine was lost, and
+        /// the implementer holds new runs back until that run is surely
+        /// stopped.
         placement-delay,
-        /// A reason this version does not name, by its kebab-case name. Treat
-        /// the run as paused.
+        /// A reason this version does not name, by its kebab-case name, never
+        /// empty. Treat the run as paused.
         other(string),
     }
 
@@ -248,8 +262,8 @@ interface spawn-types {
         cancelling,
         /// Cumulative counts for this run, metered by the implementer.
         counts(run-counts),
-        /// A frame this version does not name, by its kebab-case name. Safe
-        /// to ignore.
+        /// A frame this version does not name, by its kebab-case name, never
+        /// empty. Safe to ignore.
         other(string),
     }
 
