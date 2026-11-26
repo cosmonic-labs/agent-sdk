@@ -181,7 +181,7 @@ the others, so every combination is valid:
 | Fact | What it says |
 | --- | --- |
 | `activity` | What is in progress now: `idle`, `running` with the run's id, or `compacting` when the driver asked for a compaction. A run waiting on a person is still `running`. |
-| `needs-input` | Set while the host holds something for a person: a tool call or outbound request waiting to be allowed, a tool waiting to be added, a change waiting for review. It can be set with or without a run in progress. |
+| `needs-input` | Set while the host holds something for a person, with what kind: `approval` (a tool call or outbound request waiting to be allowed), `tool-addition` (a tool waiting to be added) or `review` (a change waiting for review). It can be set with or without a run in progress. |
 | `last-run` | The most recent run that ended, and how: `replied` with its `finish`, `failed`, `interrupted` (the host stopped or restarted before the run recorded a result), or `cancelled`. It stays set while the next run is in progress. |
 
 ### The state to show
@@ -208,17 +208,18 @@ from the host's gates, never from a reply that asks a question: a run that
 finishes `input-required` ends `replied`, and the person's answer starts the
 next run.
 
-The activities and the run endings will grow. Until a minor release names a
-new one, a host reports it as `other` with its name, and a caller treats it as
+The activities, the kinds of hold and the run endings will grow. Until a
+minor release names a new one, a host reports it as `other` with its name, and a caller treats it as
 unknown. An unknown value on one fact leaves the other two readable.
 
 A component reads the status with `get` and follows it with `watch`. It
 needs only the `session-status` import, so watching a session never grants
 driving it. Times are `wasi:clocks/system-clock` instants, so the import also
-brings in `system-clock`, which lets the component read the wall clock. Like `session` and `run`, it never names a session:
-the host binds the one it reports. It stays unstable until more
-than one host adopts it, so its shape can still change, for example to let
-a hold say what is held.
+brings in `system-clock`, which lets the component read the wall clock.
+Like `session` and `run`, it never names a session:
+the host binds the one it reports.
+It stays unstable until more than one host adopts it,
+so its shape can still change.
 
 ## Versioning
 
