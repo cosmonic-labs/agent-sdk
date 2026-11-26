@@ -11,23 +11,25 @@ package cosmonic:agent@0.4.4;
 @unstable(feature = agent-spawn)
 interface session-tree {
     @unstable(feature = agent-spawn)
-    use spawn-types.{session-info, remaining-spawn-budget};
+    use spawn-types.{session-id, session-info, remaining-spawn-budget};
 
     /// Where the caller sits in the tree.
     @unstable(feature = agent-spawn)
     record lineage {
         /// Its session id.
-        session-id: string,
-        /// Its parent's session id; none for a root.
-        parent-session-id: option<string>,
-        /// 0 for a root.
-        session-depth: u32,
+        session-id: session-id,
+        /// Its parent's session id; `none` for a root.
+        parent: option<session-id>,
+        /// How far below its root it sits: 0 for a root, 1 for a root's
+        /// child.
+        depth: u32,
         /// The tokens, time and runs it has left under its own budget, and
         /// the tokens and time its tightest ancestor has left.
         remaining: remaining-spawn-budget,
     }
 
-    /// Which sessions below the caller a listing covers.
+    /// Which sessions below the caller a listing covers. A record, so the
+    /// call site names what it asks for.
     @unstable(feature = agent-spawn)
     record child-query {
         /// False lists the caller's direct children only; true lists its
@@ -45,22 +47,25 @@ interface session-tree {
         /// A session appeared or changed. Usage-only changes are coalesced
         /// to at most one per session per second.
         changed(session-info),
-        /// A session left the listing, by session id.
-        removed(string),
-        /// An event not captured above. Safe to ignore.
-        other(option<string>),
+        /// A session left the listing.
+        removed(session-id),
+        /// An event this version does not name, by its kebab-case name. Safe
+        /// to ignore: a later `changed` or `removed` carries the session's
+        /// latest record.
+        other(string),
     }
 
-    /// Why a read of the tree failed.
+    /// Why a read of the tree failed. Detail strings are diagnostic: the
+    /// implementer's own words, safe to show the caller, never to be parsed.
     @unstable(feature = agent-spawn)
     variant session-tree-error {
-        /// This power is not enabled for the caller. Permanent.
+        /// Reading the tree is not enabled for this caller. Permanent.
         disabled,
         /// Policy refused it.
         denied(option<string>),
         /// Not served now (the state could not be read, or a limit on open
         /// watches was reached). Retry may succeed.
-        unavailable(string),
+        unavailable(option<string>),
         /// A failure not captured above.
         other(option<string>),
     }
@@ -78,7 +83,14 @@ interface session-tree {
 
     /// The same listing, then each change. A slow reader may miss an
     /// intermediate change but always gets each session's latest record.
-    /// Drop the stream to stop watching.
+    ///
+    /// A failure before the watch starts is the call's own error. Otherwise
+    /// the call returns the stream of events and a future that resolves once
+    /// the stream has ended or been dropped. Drop the stream to stop
+    /// watching, and the future resolves `ok`. If the watch fails or is
+    /// withdrawn midway (the store failed, or the caller lost the power),
+    /// the stream ends and the future resolves to why; watch again for a
+    /// fresh snapshot.
     @unstable(feature = agent-spawn)
-    watch-children: async func(query: child-query) -> result<stream<child-event>, session-tree-error>;
+    watch-children: async func(query: child-query) -> result<tuple<stream<child-event>, future<result<_, session-tree-error>>>, session-tree-error>;
 }

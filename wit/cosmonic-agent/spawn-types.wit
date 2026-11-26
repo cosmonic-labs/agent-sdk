@@ -8,17 +8,21 @@ package cosmonic:agent@0.4.4;
 /// Sessions spawned from one root session form a session tree. A child's
 /// reach never exceeds what its ancestors hold plus what a grantor approved
 /// for that child, and is checked again each time the child starts a run or
-/// loads a tool component. Budgets cover a session and everything below it.
+/// loads a tool component, and whenever what it rests on narrows. Budgets
+/// cover a session and everything below it.
 ///
-/// What a caller sees of a child is the implementer's own: state, usage,
-/// progress, and the final outcome. Only the outcome's reply carries text the
-/// child wrote, and it can carry anything the child read; nothing here blocks
-/// prompt injection. Records about sessions below the caller's direct
-/// children carry no text a child chose. A child can still signal through how
-/// much it spends and when, and through tree-wide limits, as seen in usage,
-/// remaining budgets, `over-limit` answers and `watch-children` events.
+/// What a caller sees of a child is the implementer's own (state, usage,
+/// model, progress) except for what the child produced in an outcome: the
+/// reply, the structured value and the `finish` it reported. Those are the
+/// child's, can carry anything the child read, and authorize nothing; a
+/// structured value that matches its schema is still untrusted content.
+/// Nothing here blocks prompt injection. Records about sessions below the
+/// caller's direct children carry no text a child chose. A child can still
+/// signal through how much it spends and when, and through tree-wide limits,
+/// as seen in usage, remaining budgets, `over-limit` answers and
+/// `watch-children` events.
 ///
-/// Session ids and names authorize nothing on their own: the implementer
+/// Session ids and run ids authorize nothing on their own: the implementer
 /// acts only for the component that spawned a child.
 @unstable(feature = agent-spawn)
 interface spawn-types {
@@ -31,6 +35,16 @@ interface spawn-types {
     @unstable(feature = agent-spawn)
     use tool-component-types.{pending-approval};
 
+    /// A session's id, assigned by the implementer.
+    @unstable(feature = agent-spawn)
+    type session-id = string;
+
+    /// A run's id within its child. The caller chooses it: 1 to 64
+    /// characters of `[a-z0-9-]`, never reused. It is the `run-id` the
+    /// child's run gets, so the child's `session-status` shows it.
+    @unstable(feature = agent-spawn)
+    type run-id = string;
+
     /// A budget that can leave a session unable to take another run.
     @unstable(feature = agent-spawn)
     variant session-budget-item {
@@ -40,13 +54,15 @@ interface spawn-types {
         max-total-tokens,
         /// An ancestor's time. (A session's own `max-duration` ends it.)
         max-duration,
-        /// An item not captured above.
-        other(option<string>),
+        /// A budget this version does not name, by its kebab-case name.
+        /// Treat it as spent until someone raises it.
+        other(string),
     }
 
-    /// Why a child takes no more runs.
+    /// Why a child takes no more runs, or why it ended. Detail strings are
+    /// diagnostic: the implementer's own words, never the child's.
     @unstable(feature = agent-spawn)
-    variant child-failure {
+    variant stop-reason {
         /// A grantor refused it.
         denied(option<string>),
         /// Its approval request was withdrawn (the caller ended it) or
@@ -54,7 +70,8 @@ interface spawn-types {
         withdrawn,
         /// Its components could not start.
         start-failed(option<string>),
-        /// A budget is spent, until an operator or person raises it.
+        /// A budget is spent, until an operator or person raises it. A
+        /// child's own `max-duration` ends it instead.
         exhausted(session-budget-item),
         /// It no longer fits its ancestors' current reach or policy.
         revoked(option<string>),
@@ -76,33 +93,40 @@ interface spawn-types {
         /// text a child chose. Below the caller's direct children, the run
         /// ids in `activity.running` and `last-run.run` are `none` too.
         live(session-status),
-        /// Admitted, but takes no more runs, for this reason.
-        stopped(child-failure),
-        /// Ended; the reason, when it was not an orderly end. A refused or
+        /// Admitted, but takes no more runs, for this reason. It keeps its
+        /// conversation. Only `exhausted` lifts, when the budget is raised.
+        halted(stop-reason),
+        /// Ended; the reason, when it was not an orderly `end`. A refused or
         /// withdrawn pending child ends this way, freeing its place.
-        ended(option<child-failure>),
-        /// A state not captured above.
-        other(option<string>),
+        ended(option<stop-reason>),
+        /// A state this version does not name, by its kebab-case name.
+        /// Treat the child as taking no runs now, and read it again later.
+        other(string),
     }
 
-    /// Why a child's run failed after it started. Detail strings are the
-    /// implementer's, never the child's.
+    /// Why a child's run failed after it was accepted. Detail strings are
+    /// diagnostic: the implementer's own words, never the child's.
     @unstable(feature = agent-spawn)
     variant child-run-error {
-        /// Cancelled. Effects caused before the child stopped remain.
+        /// Cancelled, at whatever phase it had reached. Effects caused
+        /// before the child stopped remain.
         cancelled,
         /// The outcome broke the output shape or size limit. The detail never
         /// quotes the rejected output.
-        output-rejected(string),
+        output-rejected(option<string>),
         /// The child was never admitted (refused, withdrawn or expired), so
         /// the run never started.
         not-admitted,
         /// A person or auditor declined to release the outcome.
         withheld,
-        /// The machine running the child was lost mid-run. Effects already
-        /// under way may remain; a later run starts afresh from the recorded
-        /// conversation.
-        host-lost(option<string>),
+        /// The machine running the child stopped or was lost before the run
+        /// recorded a result; the child's `last-run` shows `interrupted` too.
+        /// Effects already under way may remain; a later run starts afresh
+        /// from the recorded conversation.
+        interrupted(option<string>),
+        /// Stopped because the child no longer fits its ancestors' current
+        /// reach or policy.
+        revoked,
         /// The child failed.
         failed(option<string>),
         /// The run ended and its outcome is no longer kept.
@@ -111,7 +135,7 @@ interface spawn-types {
         other(option<string>),
     }
 
-    /// How the last run the caller started in a child stands.
+    /// How a run the caller started in a child stands.
     @unstable(feature = agent-spawn)
     variant run-state {
         /// Accepted and not yet ended.
@@ -120,8 +144,18 @@ interface spawn-types {
         done,
         /// Ended without one.
         failed(child-run-error),
-        /// A state not captured above.
-        other(option<string>),
+        /// A state this version does not name, by its kebab-case name. Treat
+        /// the run as not yet ended: `wait` resolves it.
+        other(string),
+    }
+
+    /// The last run the caller started in a child.
+    @unstable(feature = agent-spawn)
+    record sent-run {
+        /// The run's id.
+        run-id: run-id,
+        /// How it stands as the caller sees it.
+        state: run-state,
     }
 
     /// Spend the implementer metered for a session and its whole subtree.
@@ -142,30 +176,31 @@ interface spawn-types {
         /// only, since deeper names were written by a child.
         name: option<string>,
         /// Its session id, for drawing the tree.
-        session-id: string,
+        session-id: session-id,
         /// Its parent's session id.
-        parent: string,
-        /// 1 for a child of a root session.
+        parent: session-id,
+        /// How far below its root it sits: 1 for a root's child.
         depth: u32,
         /// Where it stands.
         state: child-state,
-        /// The last run the caller started there, by its run name, and how
-        /// it stands as the caller sees it, including endings only the
-        /// caller sees, such as `withheld`, `not-admitted` and `expired`.
-        /// `none` for deeper descendants and for a child the caller never
-        /// sent to. The child's own last ended run, whoever started it, is
-        /// `last-run` in its `live` status.
-        sent-run: option<tuple<string, run-state>>,
+        /// The last run the caller started there and how it stands as the
+        /// caller sees it, including endings only the caller sees, such as
+        /// `withheld`, `not-admitted` and `expired`. `none` for deeper
+        /// descendants and for a child the caller never sent to. The child's
+        /// own last ended run, whoever started it, is `last-run` in its
+        /// `live` status.
+        sent-run: option<sent-run>,
         /// An operator-named host group or zone it last ran in, for display.
         location: option<string>,
         /// What it and its subtree have spent.
         usage: session-usage-total,
     }
 
-    /// What the caller has left. Its own figures are exact. Ancestor bounds
+    /// What the caller has left. Its own figures are exact. Ancestor figures
     /// are coarse (rounded down to a power of two tokens or a whole minute,
-    /// refreshed at most once a minute) so they do not reveal what other
-    /// subtrees spend.
+    /// refreshed at most once a minute). That narrows what one subtree can
+    /// learn of another's spending but does not close it: a change in a
+    /// coarse figure still says that something below the ancestor spent.
     @unstable(feature = agent-spawn)
     record remaining-spawn-budget {
         /// Tokens left under its own budget; none if it sets no limit.
@@ -195,8 +230,9 @@ interface spawn-types {
         outcome-release,
         /// The run waits to be placed after its machine was lost.
         placement-delay,
-        /// A reason not captured above.
-        other(option<string>),
+        /// A reason this version does not name, by its kebab-case name. Treat
+        /// the run as paused.
+        other(string),
     }
 
     /// Contentless progress, coalesced by the implementer.
@@ -210,13 +246,20 @@ interface spawn-types {
         cancelling,
         /// Cumulative counts for this run, metered by the implementer.
         counts(run-counts),
-        /// A frame not captured above. Safe to ignore.
-        other(option<string>),
+        /// A frame this version does not name, by its kebab-case name. Safe
+        /// to ignore.
+        other(string),
     }
 
-    /// A child's run: progress, then the outcome. Dropping either only stops
-    /// listening; the run goes on, and `child-session.wait` collects it
-    /// later.
+    /// One subscription to a child's run: its progress, then its outcome.
+    ///
+    /// The two halves are independent. The outcome resolves when the run
+    /// ends whether or not progress is read; unread progress frames are
+    /// coalesced, never holding up the run or its outcome. The progress
+    /// stream opens with the run's current state and ends when the run ends.
+    /// Every `send`, retry or `watch-run` gets its own subscription. Dropping
+    /// either half only stops listening; the run goes on, and
+    /// `child-session.wait` collects it later.
     @unstable(feature = agent-spawn)
     record child-run {
         /// Contentless progress until the run ends.

@@ -5,33 +5,36 @@ package cosmonic:agent@0.4.4;
 ///
 /// The implementer keeps the catalog and answers for this caller only,
 /// leaving out offers policy would never grant. Asking starts and loads
-/// nothing. The host's `find_tools` tool is an adapter over `list-offers`.
-/// Tool names and descriptions are written by tool component authors: treat
-/// them as untrusted input to a model.
+/// nothing. A `find_tools` tool the implementer offers the model is an
+/// adapter over `list-offers`, and exists only where the caller holds this
+/// power. Tool names and descriptions are written by tool component authors:
+/// treat them as untrusted input to a model.
 @unstable(feature = agent-tool-loading)
 interface tool-discovery {
     @unstable(feature = agent-tool-loading)
     use tool-types.{tool-def};
     @unstable(feature = agent-tool-loading)
-    use tool-component-types.{tool-component-state};
+    use tool-component-types.{catalog-name, tool-component-state};
 
-    /// How an offer relates to the caller's ceiling (what it may add without
-    /// asking). Describes reach; policy may still ask within the ceiling.
+    /// Whether loading an offer would wait on a grantor, as `tool-loading`
+    /// would decide it for this caller now. It can change: a person may
+    /// approve or remove an entry, and policy may change.
     @unstable(feature = agent-tool-loading)
     variant ceiling-fit {
         /// Loading it needs no grantor.
         within-ceiling,
         /// Loading it waits on a grantor, who could allow it.
         beyond-ceiling,
-        /// A relation not captured above. Treat as `beyond-ceiling`.
-        other(option<string>),
+        /// A relation this version does not name, by its kebab-case name.
+        /// Treat it as `beyond-ceiling`.
+        other(string),
     }
 
     /// One catalog entry the caller may load or hand to a child.
     @unstable(feature = agent-tool-loading)
     record offer {
-        /// The catalog name, as `catalog-entry` takes it.
-        name: string,
+        /// The catalog name, as `tool-component-source.catalog` takes it.
+        name: catalog-name,
         /// What it does, from the catalog.
         summary: string,
         /// Its tools under their own names.
@@ -40,13 +43,14 @@ interface tool-discovery {
         /// binary: it can call nothing else directly. This does not show
         /// where data flows through those interfaces or their configuration.
         imports: list<string>,
-        /// Fit against the caller's ceiling.
+        /// Whether loading it would wait on a grantor.
         fit: ceiling-fit,
         /// Its state in the caller's session, if the caller holds it.
         state: option<tool-component-state>,
     }
 
-    /// Why discovery failed.
+    /// Why discovery failed. Detail strings are diagnostic: the
+    /// implementer's own words, safe to show the caller, never to be parsed.
     @unstable(feature = agent-tool-loading)
     variant discovery-error {
         /// Discovery is not enabled for this caller. Permanent.
@@ -54,22 +58,23 @@ interface tool-discovery {
         /// Policy refused it.
         denied(option<string>),
         /// Could not be served now. Retry may succeed.
-        unavailable(string),
+        unavailable(option<string>),
         /// A failure not captured above.
         other(option<string>),
     }
 
     /// The catalog entries this caller may use, best match first. With
     /// `query`, only those whose name, summary or tools match it, ignoring
-    /// case.
+    /// case; an empty query is the same as `none`.
     ///
-    /// Read as many offers as needed and drop the stream to stop; the
-    /// listing has no cap of its own. The future resolves once the stream
-    /// has ended or been dropped, so read or drop the stream before waiting
-    /// on it. It is `ok` when every match was sent or the caller stopped
-    /// early, and an error when discovery failed. An error before any offer
-    /// ends the stream with nothing on it; an error midway ends it after the
-    /// offers already sent, which stay valid but are not all the matches.
+    /// A failure before any offer, such as `disabled` or `denied`, is the
+    /// call's own error. Otherwise the call returns a stream of offers and a
+    /// future. Read as many offers as needed and drop the stream to stop; the
+    /// listing has no cap of its own. The future resolves once the stream has
+    /// ended or been dropped, so read or drop the stream before waiting on
+    /// it. It is `ok` when every match was sent or the caller stopped early,
+    /// and an error when discovery failed midway: the offers already sent
+    /// stay valid, but they are not all the matches.
     @unstable(feature = agent-tool-loading)
-    list-offers: async func(query: option<string>) -> tuple<stream<offer>, future<result<_, discovery-error>>>;
+    list-offers: async func(query: option<string>) -> result<tuple<stream<offer>, future<result<_, discovery-error>>>, discovery-error>;
 }

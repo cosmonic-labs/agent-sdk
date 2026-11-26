@@ -2,7 +2,9 @@ package cosmonic:agent@0.4.4;
 
 /// Types for describing a component's reach and the tool components an agent
 /// may load or hand to a child. No functions: importing it grants nothing.
-/// Unstable behind `agent-tool-loading`.
+/// Unstable behind `agent-tool-loading`. `spawn-types` uses `grants`,
+/// `pending-approval` and the catalog names, which is why `agent-spawn`
+/// builds on this feature.
 ///
 /// Reach is what a component can actually touch: its grants, limited to the
 /// interfaces it imports. A grant for an interface the component does not
@@ -15,8 +17,18 @@ package cosmonic:agent@0.4.4;
 /// tool provider (exports `cosmonic:agent/tools`) or a typed tool (exports
 /// its own interfaces). The caller reaches it only through the implementer's
 /// dispatch, never by linking, and inherits none of its grants.
+///
+/// Catch-alls follow two rules. A variant that names something (a state, a
+/// source, a limit) ends in `other(string)`, carrying the kebab-case name of
+/// a case this version does not name; it is never empty. A variant that
+/// describes a failure ends in `other(option<string>)`, carrying optional
+/// diagnostic detail that a caller logs and never parses.
 @unstable(feature = agent-tool-loading)
 interface tool-component-types {
+    /// The name of an entry in the implementer's catalog.
+    @unstable(feature = agent-tool-loading)
+    type catalog-name = string;
+
     /// A component image pinned by content digest, so a moving tag cannot
     /// change what was approved.
     @unstable(feature = agent-tool-loading)
@@ -30,7 +42,8 @@ interface tool-component-types {
     /// A named volume mounted into one component.
     @unstable(feature = agent-tool-loading)
     record volume-mount {
-        /// A volume the implementer knows, by name. Never a host path.
+        /// A volume the implementer knows, by name. Never a path on the
+        /// machine.
         volume: string,
         /// Where the component sees it.
         mount-path: string,
@@ -41,12 +54,13 @@ interface tool-component-types {
     /// An interface granted to one component, with its configuration (such as
     /// a bucket or topic). Never a `cosmonic:agent` interface: those powers
     /// reach a component only through its world or a parent's grant of
-    /// powers.
+    /// powers. A kind of reach this package does not name is granted this
+    /// way, by the interface that carries it.
     @unstable(feature = agent-tool-loading)
     record interface-grant {
         /// Fully qualified, with version.
         name: string,
-        /// Interface-specific configuration.
+        /// Interface-specific configuration, as key and value pairs.
         config: list<tuple<string, string>>,
     }
 
@@ -78,37 +92,34 @@ interface tool-component-types {
         component: component-ref,
         /// What it may touch.
         grants: grants,
-        /// The functions to offer, by name; none offers all of them.
+        /// The functions to offer, by name; `none` offers all of them. An
+        /// empty list is `invalid`.
         functions: option<list<string>>,
     }
 
-    /// An entry of the implementer's catalog, chosen by name.
-    @unstable(feature = agent-tool-loading)
-    record catalog-entry {
-        /// The entry's name, as `tool-discovery` lists it for tool
-        /// components.
-        name: string,
-    }
-
-    /// Where a tool component comes from.
+    /// Where a tool component comes from. The caller builds it.
     @unstable(feature = agent-tool-loading)
     variant tool-component-source {
-        /// An entry of the implementer's catalog, as `tool-discovery` lists
-        /// it. The implementer supplies its component and grants.
-        catalog(catalog-entry),
+        /// An entry of the implementer's catalog, by the name
+        /// `tool-discovery` lists. The implementer supplies its component
+        /// and grants.
+        catalog(catalog-name),
         /// A tool component the caller describes.
         custom(tool-component-spec),
-        /// A source not captured above.
-        other(option<string>),
+        /// A source this version does not name, by its kebab-case name. An
+        /// implementer that does not serve it answers `invalid`.
+        other(string),
     }
 
     /// A request waiting on a grantor (policy, an auditor, or a person).
+    /// Also how `spawn-types` shows a pending child.
     @unstable(feature = agent-tool-loading)
     record pending-approval {
         /// Implementer-issued, to match the approval interface and audit
         /// log.
         id: string,
-        /// What the grantor is asked, as the implementer wrote it.
+        /// What the grantor is asked, as the implementer wrote it. Never
+        /// text the caller chose.
         summary: string,
     }
 
@@ -118,7 +129,8 @@ interface tool-component-types {
         /// Waiting on a grantor. Nothing is bound.
         awaiting-approval(pending-approval),
         /// Refused by a grantor, or the request was withdrawn or expired.
-        /// Listed until the caller loads it again or the cooldown ends.
+        /// Listed until the caller loads it again, sets it aside, or the
+        /// cooldown ends. The detail is diagnostic.
         denied(option<string>),
         /// Admitted; its component is starting. Not callable yet.
         loading,
@@ -128,26 +140,17 @@ interface tool-component-types {
         next-run,
         /// In the model's tool list and callable.
         offered,
-        /// Bound and approved but set aside, out of the model's tool list. A
-        /// `load` returns it to `offered` at once; until then its tools
-        /// answer `unknown-tool`.
-        ready,
+        /// Set aside: out of the model's tool list, with its approval kept.
+        /// Its tools answer `unknown-tool`. A `load` brings it back as a new
+        /// load would resolve, at `offered` or `next-run`, without asking a
+        /// grantor again.
+        set-aside,
         /// Its rollout failed or ran out of time. Listed until the caller
-        /// loads it again, which starts over.
+        /// loads it again, which starts over, or sets it aside. The detail is
+        /// diagnostic.
         failed(option<string>),
-        /// A state not captured above.
-        other(option<string>),
-    }
-
-    /// Why a call that reads or changes the implementer's state failed.
-    @unstable(feature = agent-tool-loading)
-    variant store-error {
-        /// This power is not enabled for the caller. Permanent.
-        disabled,
-        /// Not served now (the state could not be read, or a limit on open
-        /// streams was reached). Retry may succeed.
-        unavailable(string),
-        /// A failure not captured above.
-        other(option<string>),
+        /// A state this version does not name, by its kebab-case name. Treat
+        /// it as not callable.
+        other(string),
     }
 }
