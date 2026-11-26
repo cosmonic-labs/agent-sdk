@@ -129,7 +129,7 @@ next `tools.list`.
 
 ## Session status
 
-`session-status` (0.4.3, unstable behind the `session-status` feature, which
+`session-status` (0.4.3, unstable behind the `agent-session-status` feature, which
 also needs `agent-run`) reports where a session stands, so every host reports
 it the same way: a desktop app's session list, a cluster's session API, and a
 component that drives an agent. It reports three facts, each independent of
@@ -189,5 +189,5 @@ hosts and agents adopt it.
   `@since` for the new items. New interfaces, and new functions on interfaces
   the host serves, are additive.
 - Published artifacts never change. Interfaces that may still move are behind
-  `@unstable` features (`agent-run` and `session-status` today).
+  `@unstable` features (`agent-run` and `agent-session-status` today).
 - Versions never contain "draft".
