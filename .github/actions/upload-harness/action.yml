@@ -1,0 +1,33 @@
+name: Upload component and notices
+description: Upload component and notices
+inputs:
+  name:
+    description: Artifact name
+    required: true
+  wasm:
+    description: Path to the component
+    required: true
+  notices:
+    description: Paths to the license notices
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Stage the component and its notices
+      env:
+        WASM: ${{ inputs.wasm }}
+        NOTICES: ${{ inputs.notices }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p out/notices
+        cp "$WASM" out/
+        for f in $NOTICES; do cp "$f" "out/notices/$(basename "$f")"; done
+        (cd out && sha256sum ./*.wasm notices/*) | tee out/SHA256SUMS
+
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.name }}
+        path: out/
+        retention-days: 7
+        if-no-files-found: error

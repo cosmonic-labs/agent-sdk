@@ -1,0 +1,71 @@
+name: pi-harness
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "harnesses/pi/**"
+      - "harnesses/shared/**"
+      - "wit/wkg-registries.toml"
+      - ".github/actions/setup-harness/**"
+      - ".github/actions/upload-harness/**"
+      - ".github/workflows/pi-harness.yml"
+      - ".github/actions/setup-pi/**"
+  pull_request:
+    paths:
+      - "harnesses/pi/**"
+      - "harnesses/shared/**"
+      - "wit/wkg-registries.toml"
+      - ".github/actions/setup-harness/**"
+      - ".github/actions/upload-harness/**"
+      - ".github/workflows/pi-harness.yml"
+      - ".github/actions/setup-pi/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build pi-harness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-harness
+      - uses: ./.github/actions/setup-pi
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3 # zizmor: ignore[cache-poisoning] -- nothing built here is published
+        with:
+          workspaces: |
+            harnesses/pi/deny-fs -> target
+            harnesses/shared/test-host -> target
+
+      # Fetches the WIT under the committed lock, builds with the toolchain the
+      # harness pins, runs the sandbox gate, the unit tests and the scripted
+      # test host.
+      - name: Build and test
+        working-directory: harnesses/pi
+        run: just test
+
+      - uses: ./.github/actions/upload-harness
+        with:
+          name: pi-harness
+          wasm: harnesses/pi/dist/pi-harness.wasm
+          notices: |
+            LICENSE
+            harnesses/pi/NOTICE
+            harnesses/shared/notices/wasi-libc.txt

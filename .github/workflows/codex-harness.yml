@@ -1,0 +1,68 @@
+name: codex-harness
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "harnesses/codex/**"
+      - "harnesses/shared/**"
+      - "wit/wkg-registries.toml"
+      - ".github/actions/setup-harness/**"
+      - ".github/actions/upload-harness/**"
+      - ".github/workflows/codex-harness.yml"
+  pull_request:
+    paths:
+      - "harnesses/codex/**"
+      - "harnesses/shared/**"
+      - "wit/wkg-registries.toml"
+      - ".github/actions/setup-harness/**"
+      - ".github/actions/upload-harness/**"
+      - ".github/workflows/codex-harness.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build codex-harness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-harness
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3 # zizmor: ignore[cache-poisoning] -- nothing built here is published
+        with:
+          workspaces: |
+            harnesses/codex/component -> target
+            harnesses/shared/test-host -> target
+
+      # Fetches the WIT under the committed lock, builds with the toolchain the
+      # harness pins, runs the sandbox gate, the unit tests and the scripted
+      # test host.
+      - name: Build and test
+        working-directory: harnesses/codex
+        run: just test
+
+      - uses: ./.github/actions/upload-harness
+        with:
+          name: codex-harness
+          wasm: harnesses/codex/dist/codex-harness.wasm
+          notices: |
+            harnesses/codex/NOTICE
+            harnesses/codex/component/LICENSE-codex
+            harnesses/shared/notices/wasi-libc.txt
