@@ -75,7 +75,9 @@ because reach and approval belong to the component.
 
 ### What `load` returns
 
-`load` resolves once there is something to act on, so a caller never polls:
+`load` resolves once there is something to act on, so a call never blocks on a person.
+Nothing tells the caller when a grantor decides: it calls `load` again or reads `list-loaded`,
+usually in a later run (6.3).
 
 ```mermaid
 flowchart TD
@@ -175,6 +177,8 @@ plus a few helpers a harness writes once and the bindings do not provide:
 `pinned` builds a `component-ref`, `user` builds a `user-message`,
 `schema_for` renders a JSON Schema, `Grants::none` and `Default` fill empty records,
 and `structured` parses a run outcome's structured value.
+Strings are passed as `&str` throughout; whether a record is passed by value or by reference
+depends on your bindings' settings, so adjust the few `clone` calls to match.
 
 ### Find a tool and use it in the same run
 
@@ -228,7 +232,7 @@ let done = tool_loading::load(ToolComponentSource::Catalog("git".into())).await?
 // done.set_aside = ["archive"]: set aside to make room; its approval stays.
 
 tool_loading::load(ToolComponentSource::Catalog("archive".into())).await?; // back, no prompt
-tool_loading::set_aside("git".into()).await?;                     // set-aside, still approved
+tool_loading::set_aside("git").await?;                           // set-aside, still approved
 ```
 
 What happens:
@@ -278,7 +282,7 @@ let info = auth.get_info().await?;
 // info.name = Some("reviewer-pr-42-auth"), info.session_id = "ses-8c1f…",
 // info.sent_run = Some(SentRun { run_id: "review", state: RunState::InProgress })
 
-let progress = auth.watch_run("review".into()).await?.progress; // working, blocked, counts…
+let progress = auth.watch_run("review").await?.progress; // working, blocked, counts…
 
 let (a, b) = futures::join!(auth.wait("review"), billing.wait("review"));
 let (auth_review, billing_review): (Review, Review) = (a?.structured()?, b?.structured()?);
@@ -297,7 +301,7 @@ What happens:
 - If the request needs a grantor,
   the child waits in state `pending` and its first run as `blocked(admission)` (7.2).
 - The parent sees contentless progress and the final outcome, never a reviewer's tool calls or conversation;
-  an outcome over `max-output-bytes` fails `output-rejected` (7.14).
+  an outcome over `max-output-bytes` fails `output-rejected` (7.21).
 
 ### Collect children's results in a later run
 
@@ -338,8 +342,8 @@ Goal: have a child read an untrusted message and return only a small, validated 
 
 ```rust
 let reader = SpawnRequest {
-    agent: AgentSource::Catalog("quarantine-reader".into()), // imports only chat
-    output: OutputShape::StructuredOnly(schema_for::<Triage>()), // no free strings
+    agent: AgentSource::Catalog("quarantine-reader".into()), // no tools, no egress
+    output: OutputShape::StructuredOnly(schema_for::<Triage>()), // enums and numbers only
     max_output_bytes: Some(256),
     budget: SpawnBudget { max_runs: Some(1), max_steps_per_run: Some(1), ..Default::default() },
     ..base
@@ -353,10 +357,17 @@ What happens:
 
 - With `structured-only`, the parent receives only the validated structured value;
   every other outcome field is the implementer's own (7.20).
-  The value is still the reader's words within the schema: an enum or a number, never an instruction.
-- The reader imports nothing beyond `chat`, which the approver can see,
-  and its prompts reach only its model's provider:
+  The value is still the reader's words within the schema.
+  The implementer does not check a schema for free strings (7.21):
+  write one with no string fields, only enums, numbers and booleans,
+  or a field can carry any text the reader chose, instructions included.
+- The reader imports nothing beyond the `agent` world, and has no tool components,
+  which the approver can see.
+  Its prompts reach only its model's provider:
   use a model binding without provider-run tools (3.8).
+- The parent still sees exact counts and times for its direct child,
+  so the reader can signal a little through how much it spends and when.
+  Below direct children those figures are coarse (7.15).
 - An import list shows what a component can call directly, not where data flows.
   This narrows what a manipulated child can do and say;
   it does not stop it being manipulated.

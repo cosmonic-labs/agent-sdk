@@ -10,8 +10,8 @@ package cosmonic:agent@0.4.4;
 /// and exists only where the caller holds this power.
 ///
 /// Admission. A load needs no grantor when it is within the caller's ceiling
-/// (its own reach, plus tool components a person approved earlier in this
-/// session) and policy does not ask for one; otherwise it waits on a grantor
+/// (its own reach, plus its declared tool components and those a person
+/// approved earlier in this session) and policy does not ask for one; otherwise it waits on a grantor
 /// as `awaiting-approval`. `tool-discovery` reports the same decision as an
 /// offer's `fit`. A person's approval lasts for the session: loading the
 /// identical tool component again later needs no prompt, until the person

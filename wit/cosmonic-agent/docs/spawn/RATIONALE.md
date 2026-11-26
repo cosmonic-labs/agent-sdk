@@ -43,7 +43,7 @@ Nothing here blocks prompt injection.
 
 ### 2.1 Interfaces
 
-| Interface | The guest may | Gate |
+| Interface | The caller may | Gate |
 | --- | --- | --- |
 | `tool-component-types` | (types only: grants, tool component sources, states) | `agent-tool-loading` |
 | `tool-discovery` | ask which tool components are available | `agent-tool-loading` |
@@ -134,7 +134,7 @@ One rule also covers cases that would otherwise each need a special refusal.
 
 What a parent needs about a child is the current state of the last run it started there,
 carried in `session-info.sent-run`; `watch-children` covers the in-run case.
-A child runs one run at a time, started only by its parent or a person,
+A child runs one run at a time, started by its parent, a person or a trigger,
 so at the start of its next run a parent needs where each child stands,
 not a stream of events delivered once.
 State also needs no read-and-acknowledge protocol, sequence numbers or gap flag.
@@ -169,7 +169,7 @@ A catalog entry is named by `catalog-name`, a type alias, so the bindings say wh
 ### 3.7 Each function has its own error
 
 Errors are per function or per interface
-(`spawn-error`, `send-error`, `wait-error`, `child-error`, `load-error`, `set-aside-error`, `read-error`, `session-tree-error`),
+(`spawn-error`, `send-error`, `wait-error`, `lookup-error`, `child-error`, `load-error`, `set-aside-error`, `read-error`, `discovery-error`, `session-tree-error`),
 so each names only what can be returned,
 and each interface owns its errors: changing one never changes another interface's types.
 Each error is split by what the caller can do about it,
@@ -307,7 +307,7 @@ a schema limits its shape, not what it says.
 
 `session-status`, which a `live` child carries, reports three independent facts
 rather than one state:
-`activity` (what is in progress), `needs-input` (whether the host holds something for a person)
+`activity` (what is in progress), `needs-input` (whether the implementer holds something for a person)
 and `last-run` (how the most recent ended run ended).
 The single state a badge shows is a fixed derivation from them, stated once in the interface.
 
@@ -316,7 +316,7 @@ The single state a badge shows is a fixed derivation from them, stated once in t
   one state cannot say whether a held session also has a run in progress,
   that a cancelled run happened at all,
   or that a run failed just before the next one started.
-- **Needs-input is independent of activity.** A host holds things for a person with or without a run in progress,
+- **Needs-input is independent of activity.** An implementer holds things for a person with or without a run in progress,
   so it is a separate fact, not a kind of activity.
   Held time during a run counts toward that run's `max-duration`, and held time with no run does not.
 - **It ages better.** Adding a variant case is breaking, so a value a version does not name arrives as `other`.
@@ -371,6 +371,21 @@ and before it mediates anything that relies on it,
 and stops instances that hold the withdrawn reach directly.
 Checking only at the next run acceptance would let a long run keep removed grants for its whole life.
 A running instance's reach cannot be narrowed in place, so stopping it is the only way to withdraw what it holds.
+
+### 3.27 A spawned agent's own grants are never approvable
+
+A grantor can approve a tool component beyond the caller's ceiling, but never the agent component's own grants:
+those stay within the caller's reach (CONFORMANCE 7.1).
+An approved tool component is reached only through dispatch, so its reach stays behind the implementer's checks;
+an agent component with direct reach would hold it for every model call and tool result that steers it.
+Keeping the two apart is what lets a child gain new reach only in a form the implementer mediates.
+
+### 3.28 The ceiling is reach, not grants
+
+A caller's ceiling is its reach: its grants limited to what it imports.
+A grant the caller holds but cannot use, such as a volume with no filesystem import,
+would otherwise let it load a tool component that turns that inert grant live with no one asked.
+Using reach also matches how a component is admitted (3.3), so one rule decides both.
 
 ## 4. Where this departs from the WIT design guidance
 
@@ -494,6 +509,13 @@ It covers only the first run and only the call that started it; `watch-run` cove
 ### 5.20 Worlds that bundle these imports
 
 See 2.5: the import list is the contract, and a bundling world hides it.
+
+### 5.21 A strict schema mode for `structured-only`
+
+An opt-in mode that refuses schemas with unbounded string fields would make quarantine safer by default.
+It was not adopted: what counts as unbounded (a `maxLength`, an `enum`, a `pattern`) varies by use,
+and a caller that writes its own schema can already leave strings out.
+The guide says to, and CONFORMANCE 7.21 says plainly that the schema is not checked for them.
 
 ## 6. Still open
 

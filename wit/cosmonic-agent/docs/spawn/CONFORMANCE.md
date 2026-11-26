@@ -421,6 +421,8 @@ Never report a failure as a stream that silently ends short:
 
 A stream that ends with the future resolving `ok` carried every match.
 
+Cap open `list-offers` streams per caller (10.9); a call over the cap fails at once with `unavailable`.
+
 ## 6. `tool-loading`
 
 ### 6.1 One mechanism, two entry points
@@ -741,6 +743,9 @@ A descendant can still signal through how much it spends and when, at that coars
 ### 7.16 Size caps
 
 Cap instructions, schemas and messages (operator settings), answering `invalid`.
+Cap open `child-run` subscriptions per caller (10.9);
+past the cap, `send` and `watch-run` answer `unavailable` without opening another.
+A `send` refused this way starts no run, so a retry once a subscription closes starts it once.
 
 ### 7.17 Handles
 

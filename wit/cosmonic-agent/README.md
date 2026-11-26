@@ -158,7 +158,7 @@ and new tools appear in the next `tools.list`
 
 A harness that manages tools in code imports `tool-discovery` and `tool-loading`
 (unstable behind `agent-tool-loading`).
-That covers preloading, telling offered from ready, setting aside,
+That covers preloading, telling `offered` from `next-run`, setting aside,
 and waiting until a tool is callable in the same run.
 Both are one mechanism:
 the host's tools are an adapter over the interfaces,
@@ -289,4 +289,7 @@ This follows WASI 0.3, whose error codes carry `option<string>` and whose
 `wasi:http` method and scheme carry `string`. The released 0.4 types predate
 the split and use `other(string)` everywhere; their error variants move to
 `other(option<string>)` at the next breaking release, and their other
-variants keep `other(string)`.
+variants keep `other(string)`. `finish` is the one released variant whose
+`other` carries text the agent wrote; wherever that text could reach someone
+it should not, such as a child's status shown to its parent, the implementer
+replaces it with an empty string.
