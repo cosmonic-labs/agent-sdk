@@ -55,8 +55,8 @@ types. The published 0.3.0 artifact remains unchanged.
   append a short text note stating the original size.
 - Match `other(string)` in every released variant; `run-types` no longer uses
   `other(option<string>)`. Unstable interfaces added since follow the two
-  rules in the [package README](../README.md#catch-all-cases). Every stable interface, world and type carries
-  `@since` with the version that introduced its current shape: 0.3.0 for what
+  rules in the [package README](../README.md#catch-all-cases). Every stable
+  interface, world and type carries `@since` with the version that introduced its current shape: 0.3.0 for what
   0.3.0 had unchanged, 0.4.0 for `inference-types` and `tools`, which changed
   incompatibly, and for `tool-types` and the types new in this release.
 - Record an unknown tool outcome or abandoned call as an unresolved operation.

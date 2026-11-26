@@ -80,12 +80,12 @@ because the line that matters for what a component can do is reading versus acti
 Tool loading has its own types and its own feature gate, and `agent-spawn` builds on it.
 Tool loading needs no leases, trees or budgets,
 so it can stabilize on its own schedule.
-`agent-spawn` also builds on `agent-run` and `session-status`, whose types it uses.
+`agent-spawn` also builds on `agent-run` and `agent-session-status`, whose types it uses.
 
 A gate cannot name the gates it needs, so each supported set of features is listed in
 [`features.json`](../../features.json) and checked on every build.
 A stable item cannot use an unstable one, so the gates stabilize in this order:
-`agent-run`, then `session-status` and `agent-tool-loading`, then `agent-spawn`.
+`agent-run`, then `agent-session-status` and `agent-tool-loading`, then `agent-spawn`.
 
 ### 2.5 No worlds of their own
 

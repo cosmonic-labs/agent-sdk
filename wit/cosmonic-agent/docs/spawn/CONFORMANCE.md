@@ -736,7 +736,7 @@ Report them consistently:
 | `done` | `replied`, with the child's `finish` |
 | `failed(cancelled)` | `cancelled` |
 | `failed(output-rejected)` or `failed(withheld)` | `replied`: the child finished; the caller's check or a release decision kept the outcome back |
-| `failed(interrupted)` or `failed(revoked)` | `interrupted`: the implementer cut the run off before it recorded a result |
+| `failed(interrupted)` or `failed(revoked)` | `interrupted`: the implementer cut the run off before `run` returned its outcome, even if the journal holds a result the agent wrote |
 | `failed(failed)` | `failed` |
 | `failed(not-admitted)` | unchanged: the run never started |
 | `failed(expired)` | unchanged: the outcome aged out after the run ended as it did |

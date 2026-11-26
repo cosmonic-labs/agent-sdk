@@ -2,8 +2,8 @@ package cosmonic:agent@0.4.4;
 
 /// Types shared by `session-tree` and `spawn`. No functions:
 /// importing it grants nothing. Unstable behind `agent-spawn`, which also
-/// needs `agent-tool-loading`, `agent-run` and `session-status`, whose types
-/// these use.
+/// needs `agent-tool-loading`, `agent-run` and `agent-session-status`, whose
+/// types these use.
 ///
 /// Sessions spawned from one root session form a session tree. A child's
 /// reach never exceeds what its ancestors hold plus what a grantor approved
@@ -120,8 +120,9 @@ interface spawn-types {
         not-admitted,
         /// A person or auditor declined to release the outcome.
         withheld,
-        /// The machine running the child stopped or was lost before the run
-        /// recorded a result; the child's `last-run` shows `interrupted` too.
+        /// The machine running the child stopped or was lost before `run`
+        /// returned the run's outcome; the child's `last-run` shows
+        /// `interrupted` too.
         /// Effects already under way may remain; a later run starts afresh
         /// from the recorded conversation.
         interrupted(option<string>),

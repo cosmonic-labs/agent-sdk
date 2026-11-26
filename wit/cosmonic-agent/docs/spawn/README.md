@@ -368,11 +368,11 @@ before they are marked `@since`, so pin the exact version.
 
 - Tool discovery and loading are behind the `agent-tool-loading` feature.
 - The session tree and spawn are behind `agent-spawn`,
-  which also needs `agent-tool-loading`, `agent-run` and `session-status`.
+  which also needs `agent-tool-loading`, `agent-run` and `agent-session-status`.
 
 [`features.json`](../../features.json) lists each feature and what it needs.
 For wit-bindgen, list the features you need
-(`features: ["agent-tool-loading", "agent-spawn", "agent-run", "session-status"]`).
+(`features: ["agent-tool-loading", "agent-spawn", "agent-run", "agent-session-status"]`).
 A Wasmtime host sets the same options on the `LinkOptions`
 its generated `add_to_linker` takes.
 

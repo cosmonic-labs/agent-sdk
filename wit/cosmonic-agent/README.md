@@ -173,17 +173,17 @@ and [conformance](docs/spawn/CONFORMANCE.md) requirements.
 
 ## Session status
 
-`session-status` (unstable behind the `session-status` feature, which also
-needs `agent-run`) reports where a session stands, so every host reports it
-the same way: a desktop app's session list, a cluster's session API, and a
-component that drives an agent. It reports three facts, each independent of
-the others, so every combination is valid:
+`session-status` (unstable behind the `agent-session-status` feature,
+which needs `agent-run` as well) reports where a session stands, so every
+implementer reports it the same way: a desktop app's session list, a
+cluster's session API, and a component that drives an agent. It reports three
+facts, each independent of the others, so every combination is valid:
 
 | Fact | What it says |
 | --- | --- |
 | `activity` | What is in progress now: `idle`, `running` with the run's id, or `compacting` when the driver asked for a compaction. A run waiting on a person is still `running`. |
-| `needs-input` | Set while the host holds something for a person, with what kind: `approval` (a tool call or outbound request waiting to be allowed), `tool-addition` (a tool waiting to be added) or `review` (a change waiting for review). It can be set with or without a run in progress. |
-| `last-run` | The most recent run that ended, and how: `replied` with its `finish`, `failed`, `interrupted` (the host stopped or restarted before the run recorded a result), or `cancelled`. It stays set while the next run is in progress. |
+| `needs-input` | Set while the implementer holds something for a person, with what kind: `approval` (a tool call or outbound request waiting to be allowed), `tool-addition` (a tool waiting to be added) or `review` (a change waiting for review). It can be set with or without a run in progress. |
+| `last-run` | The most recent run that ended, and how: `replied` with its `finish`, `failed`, `interrupted` (the implementer stopped or restarted before `run` returned the outcome), or `cancelled`. It stays set while the next run is in progress. |
 
 ### The state to show
 
@@ -198,29 +198,47 @@ facts by taking the first row that applies:
 | done | `last-run` ended `replied`. |
 | idle | Otherwise: no run has ended since the session began or was cleared, the last run was cancelled, or it ended in a way this version does not name. |
 
-The host owns all three facts and derives them from its own: the run or
-compaction it is driving, the approvals it holds at its gates, and the outcome
-it received or the result the journal records. An agent can't set `activity`
-or `needs-input`, and a model can't either. The one value the agent reports is
-the `finish` inside `replied`: a caller routes on it, to tell a finished run
+### What sets the facts
+
+The implementer, whatever serves the import, sets all three facts only from
+what it observed itself: the run or compaction it is driving, what it holds
+at its gates, and how each run it drove ended, by the outcome or error `run`
+returned, a cancellation, or a restart that cut the run off. An agent can't
+set any of them, and a model can't either. The run result an agent writes to
+the journal is the agent's own report, so a run cut off before `run` returned
+is `interrupted` even when the journal holds a result for it.
+
+The one value the agent reports is the `finish` inside `replied`, which
+arrived in the run's outcome. A caller routes on it, to tell a finished run
 from one stopped at a limit or one that asked a question, and never allows
-anything on it. `needs-input` comes
-from the host's gates, never from a reply that asks a question: a run that
-finishes `input-required` ends `replied`, and the person's answer starts the
-next run.
+anything on it. `needs-input` comes from the implementer's gates, never from
+a reply that asks a question: a run that finishes `input-required` ends
+`replied`, and the person's answer starts the next run.
 
 The activities, the kinds of hold and the run endings will grow. Until a
-minor release names a new one, a host reports it as `other` with its name, and a caller treats it as
+release names a new one, the implementer reports it as `other` with its
+kebab-case name, and a caller may show the name but treats the value as
 unknown. An unknown value on one fact leaves the other two readable.
 
-A component reads the status with `get` and follows it with `watch`. It
-needs only the `session-status` import, so watching a session never grants
-driving it. Times are `wasi:clocks/system-clock` instants, so the import also
-brings in `system-clock`, which lets the component read the wall clock.
-Like `session` and `run`, it never names a session:
-the host binds the one it reports.
-It stays unstable until more than one host adopts it,
-so its shape can still change.
+### Reading and watching
+
+`get` reads the status once. `watch` follows it: it returns a stream whose
+first item is the status when the watch began, then each change in order, and
+a future that says why the stream ended. The future resolves `ok` when the
+session ended or the caller dropped the stream. It resolves to an error when
+the watch stopped while the session goes on: `denied` when the caller's
+access was withdrawn, `unavailable` when the implementer could not keep the
+watch going. A caller that watches again starts from the status then, so it
+loses no change beyond the short-lived values a slow reader may miss anyway.
+Clearing the session is a change on the stream, not an end. An implementer
+may bound how many watches a caller holds open.
+
+The import is all a component needs to read the status, so watching a session
+never grants driving it. Times are `wasi:clocks/system-clock` instants, so
+the import also brings in `system-clock`, which lets the component read the
+wall clock. Like `session` and `run`, it never names a session: the
+implementer binds the one it reports. It stays unstable until more than one
+implementer adopts it, so its shape can still change.
 
 ## Versioning
 
@@ -233,32 +251,23 @@ hosts and agents adopt it.
 - An additive change bumps the patch version (0.4.0 to 0.4.1) and carries
   `@since` for the new items. New interfaces, and new functions on interfaces
   the host serves, are additive.
-- A variant that will grow ends in a catch-all `other` case, and its payload
-  says which kind it is. A variant of states, kinds or endings carries the
-  kebab-case name of the case this version does not name, as `other(string)`:
-  the name is never empty, and a caller may show it but acts on nothing. An
-  error variant carries diagnostic detail a caller may log and never parses.
-  The released error variants carry it as `other(string)`, an empty string
-  when there is none. Error variants added since carry it as
-  `other(option<string>)`, and the released ones move to that shape at the
-  next breaking version.
 - Published artifacts never change. Interfaces that may still move are behind
-  `@unstable` features (`agent-run`, `session-status`, `agent-tool-loading`
-  and `agent-spawn` today). An unstable item can change shape in any patch
-  release, and no compatibility holds across patches for it, so a consumer
-  of an unstable feature pins the exact version.
+  `@unstable` features (`agent-run`, `agent-session-status`,
+  `agent-tool-loading` and `agent-spawn` today). An unstable item can change
+  shape in any patch release, and no compatibility holds across patches for
+  it, so a consumer of an unstable feature pins the exact version.
 - [`features.json`](features.json) lists each unstable feature and the
   features it needs; the build checks that each set resolves. A stable item
   cannot use an unstable one, so features stabilize in that order:
-  `agent-run`, then `session-status` and `agent-tool-loading`, then
+  `agent-run`, then `agent-session-status` and `agent-tool-loading`, then
   `agent-spawn`.
 - Versions never contain "draft".
 
 ### Catch-all cases
 
-A variant that can grow ends in an `other` case, so a host can report a case
-this version does not name without a breaking release. What it carries
-depends on what the variant is:
+A variant that can grow ends in an `other` case, so an implementer can
+report a case this version does not name without a breaking release. What
+it carries depends on what the variant is:
 
 - A variant that names something (a state, a kind, a source, a limit, an
   event) ends in `other(string)`: the kebab-case name of the unnamed case,
