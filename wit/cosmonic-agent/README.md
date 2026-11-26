@@ -176,14 +176,16 @@ and [conformance](docs/spawn/CONFORMANCE.md) requirements.
 `session-status` (unstable behind the `agent-session-status` feature,
 which needs `agent-run` as well) reports where a session stands, so every
 implementer reports it the same way: a desktop app's session list, a
-cluster's session API, and a component that drives an agent. It reports three
-facts, each independent of the others, so every combination is valid:
+cluster's session API, and a component that drives an agent. Its types are in
+`session-status-types`, an interface with no functions, so another interface
+can carry a status without importing the functions. It reports three facts,
+each independent of the others, so every combination is valid:
 
 | Fact | What it says |
 | --- | --- |
-| `activity` | What is in progress now: `idle`, `running` with the run's id, or `compacting` when the driver asked for a compaction. A run waiting on a person is still `running`. |
+| `activity` | What is in progress now: `idle`, `running` with the run's id, or `compacting` when the driver asked for a compaction. A run is `running` from when the implementer accepts it, and a run waiting on a person is still `running`. |
 | `needs-input` | Set while the implementer holds something for a person, with what kind: `approval` (a tool call or outbound request waiting to be allowed), `tool-addition` (a tool waiting to be added) or `review` (a change waiting for review). It can be set with or without a run in progress. |
-| `last-run` | The most recent run that ended, and how: `replied` with its `finish`, `failed`, `interrupted` (the implementer stopped or restarted before `run` returned the outcome), or `cancelled`. It stays set while the next run is in progress. |
+| `last-run` | The most recent run that ended, and how: `replied` with its `finish`, `failed` (a run error, or the agent trapped), `interrupted` (the implementer stopped or restarted before `run` returned, other than to cancel), or `cancelled` (the implementer carried out a cancellation). It stays set while the next run is in progress. A `run` call refused with a `start-error` never started, so it leaves `last-run` alone. Only a clear by the driver or a person resets it; a clear the agent makes itself does not. |
 
 ### The state to show
 
@@ -203,10 +205,11 @@ facts by taking the first row that applies:
 The implementer, whatever serves the import, sets all three facts only from
 what it observed itself: the run or compaction it is driving, what it holds
 at its gates, and how each run it drove ended, by the outcome or error `run`
-returned, a cancellation, or a restart that cut the run off. An agent can't
-set any of them, and a model can't either. The run result an agent writes to
-the journal is the agent's own report, so a run cut off before `run` returned
-is `interrupted` even when the journal holds a result for it.
+returned, a cancellation it carried out, a trap, or a stop or restart that cut
+the run off. An agent can't set any of them, and a model can't either: even
+the agent's own `session.clear` leaves `last-run` as it was. The run result an
+agent writes to the journal is the agent's own report, so a run cut off before
+`run` returned is `interrupted` even when the journal holds a result for it.
 
 The one value the agent reports is the `finish` inside `replied`, which
 arrived in the run's outcome. A caller routes on it, to tell a finished run
@@ -220,24 +223,30 @@ release names a new one, the implementer reports it as `other` with its
 kebab-case name, and a caller may show the name but treats the value as
 unknown. An unknown value on one fact leaves the other two readable.
 
+Every string the implementer puts in a status or an error is its own words,
+at most 256 bytes. It never holds text an agent, a model or a tool wrote, a
+secret or credential value, or a binding, storage or infrastructure name the
+caller was not shown. The agent's `finish` is the one exception, and it is
+marked as the agent's own.
+
 ### Reading and watching
 
 `get` reads the status once. `watch` follows it: it returns a stream whose
 first item is the status when the watch began, then each change in order, and
 a future that says why the stream ended. The future resolves `ok` when the
-session ended or the caller dropped the stream. It resolves to an error when
-the watch stopped while the session goes on: `denied` when the caller's
-access was withdrawn, `unavailable` when the implementer could not keep the
-watch going. A caller that watches again starts from the status then, so it
-loses no change beyond the short-lived values a slow reader may miss anyway.
-Clearing the session is a change on the stream, not an end. An implementer
-may bound how many watches a caller holds open.
+caller dropped the stream. Otherwise it carries what a fresh `get` would
+answer at that moment: `ended` when the session ended, `denied` when the
+caller's access was withdrawn, or `unavailable` when the implementer could not
+keep the watch going. After `unavailable`, a caller that watches again starts
+from the status then, so it loses no change beyond the short-lived values a
+slow reader may miss anyway. Clearing the session is a change on the stream,
+not an end. An implementer bounds how many watches a caller holds open.
 
 The import is all a component needs to read the status, so watching a session
 never grants driving it. Times are `wasi:clocks/system-clock` instants, so
-the import also brings in `system-clock`, which lets the component read the
-wall clock. Like `session` and `run`, it never names a session: the
-implementer binds the one it reports. It stays unstable until more than one
+the import (or `session-status-types` alone) also brings in `system-clock`,
+which lets the component read the wall clock. Like `session` and `run`, it
+never names a session: the implementer binds the one it reports. It stays unstable until more than one
 implementer adopts it, so its shape can still change.
 
 ## Versioning

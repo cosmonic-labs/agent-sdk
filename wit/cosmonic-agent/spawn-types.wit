@@ -31,7 +31,7 @@ interface spawn-types {
     @unstable(feature = agent-spawn)
     use run-types.{run-outcome, run-counts};
     @unstable(feature = agent-spawn)
-    use session-status.{session-status};
+    use session-status-types.{session-status};
     @unstable(feature = agent-spawn)
     use tool-component-types.{pending-approval};
 
