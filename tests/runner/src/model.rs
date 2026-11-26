@@ -13,7 +13,7 @@ use wasmtime::component::{
 use crate::host::{ModelHandle, Scripted, State, chat, models, run_types, tool_types, types};
 use types::{
     AssistantContent, AssistantMessage, AssistantPart, Chunk, ChunkDelta, Completion, FinishReason,
-    GenerationError, Message, RequestError, ToolArguments, ToolCall, Usage,
+    GenerationError, Message, RequestError, ToolCall, Usage,
 };
 
 pub const MODEL: &str = "scripted-model";
@@ -183,42 +183,11 @@ fn part(content: AssistantContent) -> AssistantPart {
     }
 }
 
-fn finish_reason(name: &str) -> FinishReason {
-    match name {
-        "stop" => FinishReason::Stop,
-        "stop-sequence" => FinishReason::StopSequence,
-        "max-tokens" => FinishReason::MaxTokens,
-        "context-length" => FinishReason::ContextLength,
-        "tool-calls" => FinishReason::ToolCalls,
-        "refusal" => FinishReason::Refusal,
-        "content-filter" => FinishReason::ContentFilter,
-        "pause-turn" => FinishReason::PauseTurn,
-        other => FinishReason::Other(other.into()),
-    }
-}
-
-fn request_error(name: &str) -> RequestError {
-    let detail = "scripted".to_string();
-    match name {
-        "rate-limited" => RequestError::RateLimited(types::RateLimit {
-            retry_after_seconds: Some(1),
-            detail,
-        }),
-        "context-length-exceeded" => RequestError::ContextLengthExceeded(types::ContextOverflow {
-            prompt_tokens: None,
-            context_length: None,
-            detail,
-        }),
-        "timed-out" => RequestError::TimedOut,
-        other => RequestError::Other(other.into()),
-    }
-}
-
 /// The chunks and completion for one scripted reply.
 fn reply(s: Scripted) -> Result<(Vec<Chunk>, Completion), RequestError> {
     let r = s.reply;
-    if let Some(e) = &r.request_error {
-        return Err(request_error(e));
+    if let Some(e) = r.request_error {
+        return Err(e);
     }
     let mut chunks = Vec::new();
     let mut parts = Vec::new();
@@ -232,23 +201,18 @@ fn reply(s: Scripted) -> Result<(Vec<Chunk>, Completion), RequestError> {
     if let Some(t) = r.refusal {
         parts.push(part(AssistantContent::Refusal(t)));
     }
-    for (call, id) in r.tool_calls.iter().zip(s.ids) {
-        let arguments = match (&call.text, &call.arguments) {
-            (Some(t), _) => ToolArguments::Text(t.clone()),
-            (None, Some(v)) => ToolArguments::Json(v.to_string()),
-            (None, None) => ToolArguments::Json("{}".into()),
-        };
-        parts.push(part(AssistantContent::ToolUse(ToolCall {
-            id,
-            name: call.name.clone(),
-            arguments,
-        })));
-    }
-    let finish = match (&r.finish, r.tool_calls.is_empty()) {
-        (Some(f), _) => finish_reason(f),
+    let finish = match (r.finish, r.tool_calls.is_empty()) {
+        (Some(f), _) => f,
         (None, false) => FinishReason::ToolCalls,
         (None, true) => FinishReason::Stop,
     };
+    for (call, id) in r.tool_calls.into_iter().zip(s.ids) {
+        parts.push(part(AssistantContent::ToolUse(ToolCall {
+            id,
+            name: call.name,
+            arguments: call.arguments,
+        })));
+    }
     let completion = Completion {
         finish_reason: finish,
         usage: Usage {

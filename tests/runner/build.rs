@@ -1,6 +1,6 @@
 //! wasmtime's bindgen has no switch for WIT feature gates, and `run` is
 //! `@unstable(feature = agent-run)` in cosmonic:agent@0.4.2. Copy wit/ (its
-//! packages fetched by `wkg wit fetch` into wit/deps) with that gate removed
+//! packages fetched by `wkg fetch` into wit/deps) with that gate removed
 //! into wit-host/ (gitignored).
 use std::fs;
 use std::path::Path;
@@ -32,7 +32,7 @@ fn main() -> std::io::Result<()> {
     println!("cargo:rerun-if-changed=wit");
     if !source.join("deps").is_dir() {
         return Err(std::io::Error::other(
-            "wit/deps is missing: run `WKG_CONFIG_FILE=../wit/wkg-registries.toml wkg wit fetch` here first",
+            "wit/deps is missing: run `WKG_CONFIG_FILE=../../wit/wkg-registries.toml wkg fetch` here first",
         ));
     }
     let dest = Path::new("wit-host");

@@ -68,7 +68,7 @@ cd test-host
 cargo run -- ../target/wasm32-wasip2/release/minimal_agent.wasm
 ```
 
-[`tests/minimal-agent`](../../tests/minimal-agent) holds the same kind of check written as test files for [`agent-test`](../../test-runner), the format any agent harness can use: a scripted model, the tools a test grants, and assertions on what the host recorded, including calls and requests the grants refused.
+The [Rust integration tests](../../tests/runner/tests/minimal_agent.rs) exercise minimal-agent with a scripted model and check the host's record of tool calls, network requests and grant refusals. Run them from the repository root with `cargo xtask agent-tests`.
 
 ## Run it in Cosmonic Desktop
 

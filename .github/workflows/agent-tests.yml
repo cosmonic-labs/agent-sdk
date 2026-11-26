@@ -1,6 +1,3 @@
-# Builds the agent-test runner and runs the agent tests: minimal-agent's
-# suite must pass, and the runner's must-fail files must fail, so an
-# assertion that stopped checking anything is caught. Publishes nothing.
 name: agent-tests
 
 on:
@@ -8,14 +5,20 @@ on:
     branches: [main]
     paths:
       - "components/minimal-agent/**"
-      - "test-runner/**"
+      - ".cargo/config.toml"
+      - "xtask/**"
+      - "harnesses/shared/scripts/fetch-wit.mjs"
+      - "harnesses/shared/scripts/build-helpers.mjs"
       - "tests/**"
       - "wit/wkg-registries.toml"
       - ".github/workflows/agent-tests.yml"
   pull_request:
     paths:
       - "components/minimal-agent/**"
-      - "test-runner/**"
+      - ".cargo/config.toml"
+      - "xtask/**"
+      - "harnesses/shared/scripts/fetch-wit.mjs"
+      - "harnesses/shared/scripts/build-helpers.mjs"
       - "tests/**"
       - "wit/wkg-registries.toml"
       - ".github/workflows/agent-tests.yml"
@@ -31,11 +34,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
-  RUST_VERSION: "1.97.1"
-  # Pinned by version and by the SHA-256 of the release download.
-  WKG_VERSION: "0.16.0"
-  WKG_SHA256: 8ab0f7138e1a84616cb0c87c2bd7b7d00a356b63d458be92bad3fbd463aa3e2a
-  WKG_CONFIG_FILE: ${{ github.workspace }}/wit/wkg-registries.toml
+  RUSTUP_TOOLCHAIN: "1.97.1"
 
 jobs:
   test:
@@ -47,67 +46,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install wkg (checksummed)
-        working-directory: ${{ runner.temp }}
-        run: |
-          set -euo pipefail
-          curl -sSfL -o wkg "https://github.com/bytecodealliance/wasm-pkg-tools/releases/download/v${WKG_VERSION}/wkg-x86_64-unknown-linux-gnu"
-          echo "$WKG_SHA256  wkg" | sha256sum -c -
-          sudo install -m 0755 wkg /usr/local/bin/
-
       - name: Install the toolchain and the wasm target
-        run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-wasip2
-          rustup default "$RUST_VERSION"
+        run: rustup toolchain install "${{ env.RUSTUP_TOOLCHAIN }}" --profile minimal --target wasm32-wasip2
 
-      # Nothing this workflow builds is published, so a cache cannot reach a
-      # release.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3 # zizmor: ignore[cache-poisoning] -- nothing built here is published
         with:
-          workspaces: |
-            test-runner
-            tests/fixtures/fetch-tool
-            components/minimal-agent
+          workspaces: tests/runner
 
-      - name: Fetch the WIT
-        run: |
-          set -euo pipefail
-          for dir in test-runner tests/fixtures/fetch-tool components/minimal-agent; do
-            (cd "$dir" && wkg wit fetch)
-          done
+      - name: Install wkg
+        run: cargo install --locked wkg@0.16.0
 
-      - name: Build the components under test
-        run: |
-          set -euo pipefail
-          (cd components/minimal-agent && cargo build --target wasm32-wasip2 --release)
-          (cd tests/fixtures/fetch-tool && cargo build --target wasm32-wasip2 --release)
-
-      - name: Build and unit test the runner
-        working-directory: test-runner
-        run: |
-          cargo test
-          cargo build
-
-      - name: Run minimal-agent's agent tests
-        working-directory: test-runner
-        run: target/debug/agent-test ../tests/minimal-agent
-
-      - name: Check that the must-fail tests fail
-        working-directory: test-runner
-        run: |
-          set -uo pipefail
-          # Bash runs with -e here; capture the expected failure's status.
-          status=0
-          out=$(target/debug/agent-test ../tests/must-fail) || status=$?
-          echo "$out"
-          if [ "$status" -ne 1 ]; then
-            echo "::error::agent-test exited $status on the must-fail tests, expected 1"
-            exit 1
-          fi
-          want=$(ls ../tests/must-fail/*.yaml | wc -l)
-          if ! echo "$out" | grep -q "^0 passed, ${want} failed$"; then
-            echo "::error::every must-fail test should fail"
-            exit 1
-          fi
-          echo "$out" | grep -q "never: delete_file was dispatched 1 times"
-          echo "$out" | grep -q "the script has 1 replies"
+      - name: Run agent tests
+        run: cargo xtask agent-tests
