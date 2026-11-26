@@ -20,8 +20,7 @@ on:
       - ".github/workflows/codex-harness.yml"
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
