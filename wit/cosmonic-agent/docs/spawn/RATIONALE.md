@@ -82,6 +82,11 @@ Tool loading needs no leases, trees or budgets,
 so it can stabilize on its own schedule.
 `agent-spawn` also builds on `agent-run` and `session-status`, whose types it uses.
 
+A gate cannot name the gates it needs, so each supported set of features is listed in
+[`features.json`](../../features.json) and checked on every build.
+A stable item cannot use an unstable one, so the gates stabilize in this order:
+`agent-run`, then `session-status` and `agent-tool-loading`, then `agent-spawn`.
+
 ### 2.5 No worlds of their own
 
 These interfaces come with no worlds; a component imports the ones it needs into its own world.
@@ -138,7 +143,9 @@ State also needs no read-and-acknowledge protocol, sequence numbers or gap flag.
 
 The name, scoped to the spawning component and session, is the child's durable address and its idempotency key.
 Spawning a name that exists returns that child (or `name-taken` if the request differs),
-and run names do the same for `send`.
+and run ids do the same for `send`.
+A run id is the `run-id` the child's run is driven under,
+so the child's own status and the parent's records use one term for one thing.
 A `child-session` resource is a reference for acting on it:
 dropping it releases the reference only, `end` consumes it,
 and `get-child` finds the child again from any later run or machine.
@@ -154,29 +161,35 @@ because a handle whose drop ended the child could not outlive one parent run.
 The types are variants and named records wherever a flag or an empty field would allow nonsense.
 `agent-source` and `tool-component-source` are variants (a catalog entry or a description),
 so no field must be left empty and a catalog entry cannot be edited by the caller.
-A catalog entry is a record with a named field, so it says what the string is and can grow.
+A catalog entry is named by `catalog-name`, a type alias, so the bindings say what the string is at no cost.
 `output-shape` is one variant rather than a schema option plus a `structured-only` flag.
 `child-state` is one variant rather than three fields with eight combinations.
-`child-run` is a record, so its two halves are named.
+`child-run`, `sent-run` and the `-limit-exceeded` records are records, not tuples, so their fields are named.
 
 ### 3.7 Each function has its own error
 
 Errors are per function or per interface
-(`spawn-error`, `send-error`, `load-error`, `unload-error`, `session-tree-error`),
-so each names only what can be returned.
+(`spawn-error`, `send-error`, `wait-error`, `child-error`, `load-error`, `set-aside-error`, `read-error`, `session-tree-error`),
+so each names only what can be returned,
+and each interface owns its errors: changing one never changes another interface's types.
+Each error is split by what the caller can do about it,
+so `send-error` tells waiting for a run (`busy`) from waiting for a stop (`stopping`)
+from a child that takes no more runs (`halted`, `ended`).
 
 ### 3.8 Listing and watching stay two functions
 
 `list-children` returns a list and `watch-children` a stream of events.
 One function would need a variant result, which is clumsier to call.
-Both take a `child-query` record instead of a bare flag,
-so filters can be added later without breaking either.
+Both take a `child-query` record instead of a bare flag, so a call site names what it asks for.
+A record cannot gain a field without breaking (3.23), so a new filter arrives as a new function or at a breaking release.
 
 ### 3.9 Discovery streams its offers
 
-`list-offers` returns a stream of offers, best match first,
-and a future that reports an error,
+`list-offers` fails at once when it cannot start (`disabled`, `denied`),
+and otherwise returns a stream of offers, best match first,
+and a future that reports an error midway,
 the shape of `read-directory` in WASI 0.3's `wasi:filesystem`.
+`watch-children` has the same shape, so every stream here ends with a reason.
 The caller reads as many offers as it wants and drops the stream to stop.
 The cap on what a model sees lives in the host's `find_tools` adapter (CONFORMANCE 2.8).
 
@@ -186,8 +199,9 @@ The cap on what a model sees lives in the host's `find_tools` adapter (CONFORMAN
   code reads on. Neither needs a page token or a `truncated` flag.
 - **A large or remote catalog can be produced lazily.**
   The implementer computes only what the caller reads.
-- **Errors keep their place.** An error before any offer and an error midway both arrive on the future,
-  so a short stream is never mistaken for a complete one.
+- **Errors keep their place.** An error before any offer is the call's own,
+  so a caller never waits on a future to learn it was never allowed;
+  an error midway arrives on the future, so a short stream is never mistaken for a complete one.
 
 ### 3.10 Implementer obligations live in a conformance document
 
@@ -225,8 +239,10 @@ coarse ancestor figures (3.15) are the cheaper fix.
 `spawn-budget` is the parent's cap over the child's whole life and its subtree, across all its runs.
 `run-options` has `max-steps` and `max-total-tokens`,
 but those limit one run and the run's driver sets them.
-`run-options` is released, so it stays as it is;
-the implementer keeps each run's limits within the budget.
+Both are unstable, and they stay separate because their owners and scopes differ:
+the parent caps a child it may never drive itself,
+and the implementer, as the child's driver, keeps each run's limits within that cap.
+The per-run field is named `max-steps-per-run` so it cannot be read as a lifetime total.
 
 ### 3.14 A load approval lasts for the session
 
@@ -252,7 +268,7 @@ and force bounds a child that ignores cancellation.
 
 ### 3.17 A lost machine fails the run instead of hanging
 
-A run whose machine is lost ends `failed(host-lost)`,
+A run whose machine is lost ends `failed(interrupted)`, the name the child's own `last-run` uses for the same event,
 and leases and fencing keep the old machine from writing after that.
 A parent can then decide what to do, rather than wait on a run that will never finish.
 The limits of fencing (effects already under way, a misbehaving clock) are stated plainly in CONFORMANCE 8.7.
@@ -278,12 +294,14 @@ Linking would join the tool component's reach to the agent's,
 while dispatch keeps each component's grants its own
 and lets the implementer see, meter and withdraw every call.
 
-### 3.21 The implementer builds `structured-only` output
+### 3.21 Every outcome field has a stated author
 
-With `structured-only`, the parent receives the validated structured value
-and fields (`finish`, `model`, counts) the implementer fills from its own records.
-Nothing the child chose to write, other than the value its schema allows,
-then reaches the parent.
+CONFORMANCE 7.20 says, for each output shape, which outcome fields the child wrote and which the implementer filled.
+`model` and counts are always the implementer's.
+With `structured-only`, the parent also gets `finish` from the implementer's records,
+so nothing the child chose to write, other than the value its schema allows, reaches the parent.
+A field the child wrote stays untrusted content even when it validates:
+a schema limits its shape, not what it says.
 
 ### 3.22 Session status reports three facts
 
@@ -313,15 +331,61 @@ The single state a badge shows is a fixed derivation from them, stated once in t
   toward separate conditions, because a phase is a state machine that cannot grow without breaking clients,
   while conditions are observations a client combines for display.
 
+### 3.23 Records grow only at a breaking release
+
+Adding a field to a record breaks compiled consumers,
+so budgets, usage, grants and the other records here change only at a breaking release.
+Until then, new reach arrives as an `interface-grant` naming the interface that carries it,
+and a new figure or filter arrives as a new function.
+A list of open limit variants would let budgets grow,
+but it allows duplicates and contradictions a record rules out (5.17).
+
+### 3.24 Two kinds of catch-all
+
+A variant that can grow ends in `other`, as WASI's do.
+What `other` carries depends on what the variant is:
+
+- **A variant that names something** (a state, a kind, a source, a limit, an event) ends in `other(string)`:
+  the kebab-case name of a case this version does not name, never empty.
+  The name is the value, so it is required, as in `wasi:http`'s `method` and `scheme`.
+  Each such variant says what a receiver does with an unknown case,
+  and a variant the caller builds says the implementer answers `invalid`, never substituting another case.
+- **A failure** ends in `other(option<string>)`: diagnostic detail a caller logs and never parses,
+  as WASI 0.3's error codes do. Named error cases carry their detail the same way.
+
+The WIT design guidance gives both rules, and WASI follows them.
+`cosmonic:agent`'s released types predate the split and use `other(string)` throughout;
+the package README says how they move at the next breaking release.
+
+### 3.25 Any run can be followed again
+
+`watch-run` returns a fresh `child-run` for any run the caller sent, including the first run `spawn` started.
+`spawn` returning a `child-run` beside the handle would cover only the first run and only the call that started it.
+With `watch-run`, a caller that dropped its subscription, or a later run, follows the same run again,
+and each subscription is independent of the others and of the outcome.
+
+### 3.26 Revocation is bounded, not instant
+
+When an authority a child rests on narrows, the implementer withdraws it within a stated bound
+and before it mediates anything that relies on it,
+and stops instances that hold the withdrawn reach directly.
+Checking only at the next run acceptance would let a long run keep removed grants for its whole life.
+A running instance's reach cannot be narrowed in place, so stopping it is the only way to withdraw what it holds.
+
 ## 4. Where this departs from the WIT design guidance
 
 ### 4.1 Virtualization
 
-Policy layers are installed by the host rather than composed as guests.
+Policy layers are part of the implementer rather than composed as guests.
 The guidance asks that any import may be served by a peer component sitting in the middle,
-but here caller identity is ambient (the calling workload, component and session),
-and a guest component placed in front of the implementer would become the caller and its grants the ceiling.
-A test double can still export any of these interfaces.
+but here caller identity is ambient (the calling workload, component and session).
+A guest component placed in front of the implementer becomes the caller:
+it can act only within its own reach and ceiling, so it cannot widen anything,
+and it cannot act for the component behind it either.
+Passing identity as an argument would let any guest claim to be another.
+A test double can still export any of these interfaces,
+and the normative text speaks of an abstract bound session and caller identity,
+so an implementer that is not a host plugin can meet it.
 Comments speak of the implementer and the caller, not the host.
 
 ### 4.2 Shared types interfaces
@@ -333,13 +397,7 @@ because one package cannot hold several interfaces named `types`.
 
 It follows `run` in this package and `wasi:cli/run`.
 
-### 4.4 Catch-alls
-
-These interfaces use `other(option<string>)` as the guidance asks,
-while the rest of the package uses `other(string)`;
-the two are to be aligned at the next breaking version.
-
-### 4.5 Grants by name
+### 4.4 Grants by name
 
 Volumes, secrets, credentials and models are named by string rather than by labeled imports,
 because requests are built at run time;
@@ -414,19 +472,39 @@ Defaults are an implementer's and operator's choice; CONFORMANCE.md lists recomm
 
 ### 5.16 A canonical form for the request digest in the contract
 
-Nothing is resent, so comparing requests is an implementer detail.
+Identity for retries is defined on the values the caller sent, field by field (CONFORMANCE 7.7).
+How an implementer stores or digests them is its own detail.
+
+### 5.17 Budgets as a list of limits
+
+A `list<budget-limit>` over an open variant could gain dimensions without a breaking release,
+but it admits a limit given twice or not at all, and every reader has to fold it.
+Records state each limit once (3.23).
+
+### 5.18 Trapping on a handle from another component
+
+A trap would end the caller's instance for a mistake it can recover from,
+and some bindings cannot catch it.
+Each fallible method answers `not-owner` instead (CONFORMANCE 7.17).
+
+### 5.19 `spawn` returning the first run's `child-run`
+
+It covers only the first run and only the call that started it; `watch-run` covers every run (3.25).
+
+### 5.20 Worlds that bundle these imports
+
+See 2.5: the import list is the contract, and a bundling world hides it.
 
 ## 6. Still open
 
-### 6.1 Records growing after stabilization
+### 6.1 Narrowing a running instance's reach
 
-Resources grow by methods;
-records returned in bulk should stay small and grow by new functions.
-A builder resource is the escape hatch for `spawn-request`.
+It needs runtime support. Until then, revocation stops the instance (3.26).
 
-### 6.2 Narrowing a running instance's reach
+### 6.2 Discovering agent definitions
 
-It needs runtime support.
+`agent-source.catalog` takes a name the operator publishes; no interface lists agent definitions yet.
+`tool-discovery` could list them beside tool components, with their own fit.
 
 ### 6.3 Goals and swarms
 
