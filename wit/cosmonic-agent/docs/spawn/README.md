@@ -1,13 +1,11 @@
 # Spawn and tool loading
 
-An agent with a job often needs help it did not start with:
-a tool it finds it needs halfway through a task,
-or a second agent to review one file or to read content it should not trust.
-These interfaces give it both.
-**Tool loading** adds a tool component to the agent's own session while it works.
-**Spawn** starts a child agent session (often called a subagent),
-with its own model, tools and budget,
-and collects what it returns.
+An agent often needs to load tools or spawn additional agents.
+These interfaces support both needs.
+
+* **Tool loading** adds a tool component to the agent's own session while it works.
+* **Spawn** starts a child agent session (often called a subagent),
+  with its own model, tools, and budget, and collects what it returns.
 
 ```mermaid
 flowchart TD
