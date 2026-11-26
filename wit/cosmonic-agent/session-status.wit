@@ -35,9 +35,9 @@ package cosmonic:agent@0.4.3;
 /// that agent's session.
 ///
 /// Adding a case to a variant here is a breaking change, so a host reports
-/// an activity or a run ending this version does not name as `other` with
-/// its kebab-case name until a minor release adds it. A caller may show the
-/// name but acts on nothing.
+/// an activity, a hold or a run ending this version does not name as
+/// `other` with its kebab-case name until a minor release adds it. A caller
+/// may show the name but acts on nothing.
 ///
 /// Times are `wasi:clocks/system-clock` instants, so a component that
 /// imports this interface also imports `system-clock`.
@@ -69,13 +69,26 @@ interface session-status {
         other(string),
     }
 
-    /// Something the host holds at one of its gates for a person, such as a
-    /// tool call or outbound request awaiting approval, a tool awaiting
-    /// addition, or a change awaiting review.
+    /// What kind of thing the host holds for a person.
+    @unstable(feature = session-status)
+    variant hold-kind {
+        /// A tool call or outbound request waiting to be allowed.
+        approval,
+        /// A tool waiting to be added to the session.
+        tool-addition,
+        /// A change waiting for review.
+        review,
+        /// A kind this version does not name, by its kebab-case name.
+        other(string),
+    }
+
+    /// Something the host holds at one of its gates for a person. When it
+    /// holds several, this describes the oldest.
     @unstable(feature = session-status)
     record hold {
-        /// When the oldest item still held was raised. `none` when the host
-        /// does not know.
+        /// What kind of thing is held.
+        kind: hold-kind,
+        /// When it was raised. `none` when the host does not know.
         since: option<instant>,
     }
 
