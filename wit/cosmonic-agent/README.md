@@ -150,7 +150,8 @@ A host translates typed tools like this:
 
 An agent can find and add tools during a session.
 Most harnesses need do nothing:
-the host offers two tools of its own, `find_tools` and `load_tools`,
+the host offers two tools of its own, `find_tools` where the agent may discover
+and `load_tools` where it may load,
 the model calls them,
 and new tools appear in the next `tools.list`
 (so list again before each model call).
@@ -243,5 +244,31 @@ hosts and agents adopt it.
   next breaking version.
 - Published artifacts never change. Interfaces that may still move are behind
   `@unstable` features (`agent-run`, `session-status`, `agent-tool-loading`
-  and `agent-spawn` today).
+  and `agent-spawn` today). An unstable item can change shape in any patch
+  release, and no compatibility holds across patches for it, so a consumer
+  of an unstable feature pins the exact version.
+- [`features.json`](features.json) lists each unstable feature and the
+  features it needs; the build checks that each set resolves. A stable item
+  cannot use an unstable one, so features stabilize in that order:
+  `agent-run`, then `session-status` and `agent-tool-loading`, then
+  `agent-spawn`.
 - Versions never contain "draft".
+
+### Catch-all cases
+
+A variant that can grow ends in an `other` case, so a host can report a case
+this version does not name without a breaking release. What it carries
+depends on what the variant is:
+
+- A variant that names something (a state, a kind, a source, a limit, an
+  event) ends in `other(string)`: the kebab-case name of the unnamed case,
+  never empty. Each says what a receiver does with an unknown case, and a
+  variant the caller builds says the implementer answers `invalid`.
+- A failure ends in `other(option<string>)`: diagnostic detail a caller
+  logs and never parses.
+
+This follows WASI 0.3, whose error codes carry `option<string>` and whose
+`wasi:http` method and scheme carry `string`. The released 0.4 types predate
+the split and use `other(string)` everywhere; their error variants move to
+`other(option<string>)` at the next breaking release, and their other
+variants keep `other(string)`.

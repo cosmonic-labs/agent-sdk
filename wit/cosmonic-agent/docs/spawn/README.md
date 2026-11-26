@@ -36,7 +36,7 @@ and [CONFORMANCE.md](CONFORMANCE.md) says what a host and an implementer must do
 | Tool | One function the model can call, such as `read_file`. |
 | Tool component | One component, with its own grants, that offers tools: a tool provider (exports `cosmonic:agent/tools`) or a typed tool (exports its own interfaces). |
 | Session | The conversation that persists across runs, identified by a session id. |
-| Run | One call of `run` on a session, from an incoming message to an outcome, with any number of model and tool calls between. |
+| Run | One call of `run` on a session, from an incoming message to an outcome, with any number of model and tool calls between. A parent names each run it sends with a run id. |
 | Child | A session another session spawned, running in its own workload and inheriting nothing. |
 | Session tree | A root session and every session spawned below it, which works like an OS process tree: each session has one parent, and its children and their descendants sit below it. |
 | Reach | What a component can actually touch: its grants, limited to the interfaces it imports. |
@@ -103,6 +103,8 @@ sequenceDiagram
     P->>I: spawn(name, request, first run "review")
     I->>C: admit and start run "review"
     I-->>P: child-session handle
+    P->>I: watch-run("review")
+    I-->>P: progress, then the outcome
     P->>I: get-info()
     I-->>P: sent-run: review, in-progress
     P->>I: wait("review")
@@ -115,6 +117,7 @@ sequenceDiagram
 
 `spawn` resolves as soon as the request is accepted,
 so the parent can do other work and wait later, even from a later run.
+`watch-run` follows any run the parent sent, including the first, as often as it likes.
 
 A parent reads two things about a child in its `session-info`.
 `state` says where the child stands; once admitted, it is `live`
@@ -167,23 +170,29 @@ world coder {
 ## Guides
 
 Section numbers below refer to [CONFORMANCE.md](CONFORMANCE.md).
+The examples are Rust against wit-bindgen's generated bindings,
+plus a few helpers a harness writes once and the bindings do not provide:
+`pinned` builds a `component-ref`, `user` builds a `user-message`,
+`schema_for` renders a JSON Schema, `Grants::none` and `Default` fill empty records,
+and `structured` parses a run outcome's structured value.
 
 ### Find a tool and use it in the same run
 
 Goal: discover a tool component, load it, and call its tools before the run ends.
 
 ```rust
-// Offers arrive on a stream, best match first.
-let (mut offers, done) = tool_discovery::list_offers(Some("archive".into())).await;
+// Offers arrive on a stream, best match first. A caller that may not
+// discover gets the error here, before any stream.
+let (mut offers, done) = tool_discovery::list_offers(Some("archive".into())).await?;
 let Some(offer) = offers.next().await else {
-    done.await?; // the stream ended empty: an error, or nothing matched
+    done.await?; // the stream ended empty: a failure midway, or nothing matched
     return Err(NoTool);
 };
 drop(offers); // the best match is enough; dropping the stream stops the listing
 // offer.imports lists what it can call: here, the filesystem only.
+// offer.fit says whether loading it waits on a grantor.
 
-let source = ToolComponentSource::Catalog(CatalogEntry { name: offer.name.clone() });
-let done = tool_loading::load(source).await?;
+let done = tool_loading::load(ToolComponentSource::Catalog(offer.name.clone())).await?;
 match done.tool_component.state {
     ToolComponentState::Offered => {
         let tools = tools::list().await?; // the new tools are listed now
@@ -199,8 +208,8 @@ match done.tool_component.state {
 What happens:
 
 - The caller reads as many offers as it wants; nothing caps the listing but the caller.
-  An error before any offer, or midway, ends the stream and arrives on the future (5.3).
-- Within the caller's ceiling, a catalog tool component loads without asking
+  An error before any offer is the call's own; one midway ends the stream and arrives on the future (5.3).
+- When `fit` is `within-ceiling`, the tool component loads without asking
   and serves the run in progress (6.2, 3.16).
 - Beyond it, `load` returns `awaiting-approval` at once rather than waiting (4.2).
 - A person's approval lasts for the session:
@@ -212,16 +221,14 @@ What happens:
 Goal: load another tool component when the model is offered nearly as many functions as it handles well.
 
 ```rust
-fn catalog(name: &str) -> CatalogEntry { CatalogEntry { name: name.into() } }
-
 let set = tool_loading::list_loaded().await?;
 // set.offered_functions = 125, set.max_offered_functions = Some(128)
 
-let done = tool_loading::load(ToolComponentSource::Catalog(catalog("git"))).await?;
-// done.set_aside = ["archive"]: set aside to make room; its component and approval stay.
+let done = tool_loading::load(ToolComponentSource::Catalog("git".into())).await?;
+// done.set_aside = ["archive"]: set aside to make room; its approval stays.
 
-tool_loading::load(ToolComponentSource::Catalog(catalog("archive"))).await?; // back at once
-tool_loading::set_aside("git".into()).await?;                       // ready, still approved
+tool_loading::load(ToolComponentSource::Catalog("archive".into())).await?; // back, no prompt
+tool_loading::set_aside("git".into()).await?;                     // set-aside, still approved
 ```
 
 What happens:
@@ -231,8 +238,9 @@ What happens:
 - When a load would go over it,
   the implementer sets aside the least recently called tool component the agent loaded,
   never one the workload declared or a person added (6.6).
-- A set-aside tool component is `ready`: loading it again returns it to `offered` at once,
-  after the same checks, setting another aside if the budget needs room.
+- A tool component in state `set-aside` keeps its approval:
+  loading it again brings it back without a prompt (`offered`, or `next-run` where only the next run can call it),
+  after the same checks, setting another aside if the budget needs room (6.10).
 
 ### Delegate a review to children
 
@@ -248,16 +256,16 @@ let request = SpawnRequest {
         component: pinned("ghcr.io/acme/agents/reviewer:1.2.0", "sha256:9f…"),
         model_alias: "frontier".into(),
         grants: Grants::none(),
-        tool_components: vec![ToolComponentSource::Catalog(catalog("repo-fs-readonly"))],
+        tool_components: vec![ToolComponentSource::Catalog("repo-fs-readonly".into())],
     }),
     instructions: "Review the PR and list risks.".into(),
     output: OutputShape::ReplyAndStructured(schema_for::<Review>()),
-    max_output_bytes: 16_384, // caps each run's encoded outcome
-    budget: SpawnBudget { max_runs: Some(3), max_steps: Some(12), ..Default::default() },
-    powers: AgentPowers::empty(),
+    max_output_bytes: Some(16_384), // caps each run's encoded outcome
+    budget: SpawnBudget { max_runs: Some(3), max_steps_per_run: Some(12), ..Default::default() },
+    powers: vec![], // no powers of its own
 };
-// Child and run names are 1 to 64 characters of [a-z0-9-].
-let first = |msg: &str| Some(FirstRun { run: "review".into(), message: user(msg) });
+// Child names and run ids are 1 to 64 characters of [a-z0-9-].
+let first = |msg: &str| Some(FirstRun { run_id: "review".into(), message: user(msg) });
 
 // Two reviewers start and work at once; neither waits on the other.
 let (auth, billing) = futures::join!(
@@ -268,7 +276,9 @@ let (auth, billing) = (auth?, billing?);
 
 let info = auth.get_info().await?;
 // info.name = Some("reviewer-pr-42-auth"), info.session_id = "ses-8c1f…",
-// info.sent_run = Some(("review", RunState::InProgress))
+// info.sent_run = Some(SentRun { run_id: "review", state: RunState::InProgress })
+
+let progress = auth.watch_run("review".into()).await?.progress; // working, blocked, counts…
 
 let (a, b) = futures::join!(auth.wait("review"), billing.wait("review"));
 let (auth_review, billing_review): (Review, Review) = (a?.structured()?, b?.structured()?);
@@ -279,9 +289,11 @@ What happens:
 
 - A child takes one run at a time, so work that should run in parallel goes to separate children.
 - The parent names each child and each run, and a name is also an idempotency key:
-  spawning `reviewer-pr-42-auth` again returns the same child,
+  spawning `reviewer-pr-42-auth` again with the same values returns the same child,
   and sending run `review` to it again returns the same run (7.7, 7.9).
   The implementer assigns the child's session id.
+- The reply and the structured value are the child's words, even when the value matches its schema:
+  treat them as untrusted content (7.20).
 - If the request needs a grantor,
   the child waits in state `pending` and its first run as `blocked(admission)` (7.2).
 - The parent sees contentless progress and the final outcome, never a reviewer's tool calls or conversation;
@@ -295,17 +307,17 @@ Goal: start long work in one run, end that run, and pick up the results in a lat
 // Run 1: start three researchers and end this run.
 for topic in ["pricing", "competitors", "regulation"] {
     let c = spawn::spawn(&format!("research-{topic}"), request_for(topic),
-        Some(FirstRun { run: "r1".into(), message: user(topic) })).await?;
+        Some(FirstRun { run_id: "r1".into(), message: user(topic) })).await?;
     drop(c); // releases the reference; the child keeps working
 }
 
 // Run 2, maybe on another machine: where does each stand?
 for info in session_tree::list_children(ChildQuery { descendants: false }).await? {
     // info.name = Some("research-pricing"), info.session_id = "ses-41d2…",
-    // info.sent_run = Some(("r1", RunState::Done))
-    if let Some((run, RunState::Done)) = &info.sent_run {
+    // info.sent_run = Some(SentRun { run_id: "r1", state: RunState::Done })
+    if let Some(SentRun { run_id, state: RunState::Done }) = &info.sent_run {
         let child = spawn::get_child(info.name.as_deref().unwrap()).await?;
-        let notes = child.wait(run).await?;
+        let notes = child.wait(run_id).await?;
         // ...
     }
 }
@@ -316,7 +328,7 @@ What happens:
 - Dropping a handle releases the reference only;
   `get-child` finds the child again by name from any later run (7.8, 7.17).
 - `watch-children` streams the same records within a run (11.2).
-- If a child's machine is lost mid-run, its `sent-run` becomes `failed(host-lost)` rather than hanging,
+- If a child's machine is lost mid-run, its `sent-run` becomes `failed(interrupted)` rather than hanging,
   and a later `send` starts a new run (8.2).
 - `cancel` and `end` reach everything below the child (section 9).
 
@@ -326,21 +338,22 @@ Goal: have a child read an untrusted message and return only a small, validated 
 
 ```rust
 let reader = SpawnRequest {
-    agent: AgentSource::Catalog(catalog("quarantine-reader")), // imports only chat
+    agent: AgentSource::Catalog("quarantine-reader".into()), // imports only chat
     output: OutputShape::StructuredOnly(schema_for::<Triage>()), // no free strings
-    max_output_bytes: 256,
-    budget: SpawnBudget { max_runs: Some(1), max_steps: Some(1), ..Default::default() },
+    max_output_bytes: Some(256),
+    budget: SpawnBudget { max_runs: Some(1), max_steps_per_run: Some(1), ..Default::default() },
     ..base
 };
 let child = spawn::spawn("triage-msg-881", reader,
-    Some(FirstRun { run: "triage".into(), message: user(&untrusted_email) })).await?;
+    Some(FirstRun { run_id: "triage".into(), message: user(&untrusted_email) })).await?;
 let triage: Triage = child.wait("triage").await?.structured()?;
 ```
 
 What happens:
 
 - With `structured-only`, the parent receives only the validated structured value;
-  every other outcome field is the implementer's own (7.14).
+  every other outcome field is the implementer's own (7.20).
+  The value is still the reader's words within the schema: an enum or a number, never an instruction.
 - The reader imports nothing beyond `chat`, which the approver can see,
   and its prompts reach only its model's provider:
   use a model binding without provider-run tools (3.8).
@@ -350,12 +363,14 @@ What happens:
 
 ## Using the unstable features
 
-**Status: unstable.** These interfaces are part of `cosmonic:agent` 0.4.4 and may change before they are marked `@since`.
+**Status: unstable.** These interfaces are part of `cosmonic:agent` 0.4.4 and may change in any patch release
+before they are marked `@since`, so pin the exact version.
 
 - Tool discovery and loading are behind the `agent-tool-loading` feature.
 - The session tree and spawn are behind `agent-spawn`,
   which also needs `agent-tool-loading`, `agent-run` and `session-status`.
 
+[`features.json`](../../features.json) lists each feature and what it needs.
 For wit-bindgen, list the features you need
 (`features: ["agent-tool-loading", "agent-spawn", "agent-run", "session-status"]`).
 A Wasmtime host sets the same options on the `LinkOptions`
@@ -371,3 +386,4 @@ its generated `add_to_linker` takes.
 | [`spawn-types.wit`](../../spawn-types.wit) | Child state, runs, budgets |
 | [`session-tree.wit`](../../session-tree.wit) | `session-tree` |
 | [`spawn.wit`](../../spawn.wit) | `spawn` and the `child-session` resource |
+| [`features.json`](../../features.json) | Each unstable feature and the features it needs |
