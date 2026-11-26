@@ -52,7 +52,8 @@ interface spawn-types {
         max-runs,
         /// Tokens, the session's or an ancestor's.
         max-total-tokens,
-        /// An ancestor's time. (A session's own `max-duration` ends it.)
+        /// Time: an ancestor's active time, which halts the session, or the
+        /// session's own `max-duration`, which ends it.
         max-duration,
         /// A budget this version does not name, by its kebab-case name.
         /// Treat it as spent until someone raises it.

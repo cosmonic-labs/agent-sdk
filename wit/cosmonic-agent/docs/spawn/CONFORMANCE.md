@@ -14,6 +14,7 @@ Two parties keep these promises:
 
 One program may be both.
 "Must" is a requirement for anything that serves real agents.
+Section 14 holds notes on particular runtimes; they illustrate, and require nothing.
 A test double, or a policy layer in front of a conforming implementer,
 may skip the mechanics but must not contradict what a caller observes.
 
@@ -23,10 +24,10 @@ may skip the mechanics but must not contradict what a caller observes.
 | --- | --- | --- |
 | The host | 1, 2 | Bind each workload to exactly one session for its whole life, put the session id in its bind configuration, and give every root a finite budget. |
 | Any of the interfaces | 1, 3, 4, 12 | Read reach from the pinned binary before running anything, keep a child within its ancestors' reach plus what a grantor approved for that child (7.1, 7.6), and re-check every approval against its snapshot when it is used. |
-| `tool-discovery` | 5, 2.8 | Answer from the same catalog, ceiling and policy the loader admits against, show each offer's import list, and report every failure on the future, never as a short stream. |
-| `tool-loading` | 6, 10.9 | Serve the run in progress or answer `next-run`, set aside only `agent-loaded` tool components, and keep aliases fixed for the session. |
-| `spawn` | 7, 8, 9, 10 | Accept a child and its first run in one atomic step, never reuse a name, stop a subtree behind a barrier, and, across machines, fence every run with a lease. |
-| `session-tree` | 11, 7.8, 7.15, 10.5 | List only sessions below the caller, return the same records as `spawn` with nothing a child chose below its direct children, cap open watches, and report the caller's own budget figures exactly and its ancestors' coarsely. |
+| `tool-discovery` | 5, 2.8, 3.16 | Answer from the same catalog, ceiling, policy and admission decision the loader uses, show each offer's import list, and report a failure before any offer as the call's error and one midway on the future, never as a short stream. |
+| `tool-loading` | 6, 3.16, 10.9 | Serve the run in progress or answer `next-run`, follow the state table (6.10), set aside only `agent-loaded` tool components, and keep aliases fixed for the session. |
+| `spawn` | 7, 8, 9, 10 | Authorize before matching a name, accept a child and its first run in one atomic step, never reuse a name, say who wrote each outcome field (7.20), withdraw narrowed authority within a bound (7.11), stop a subtree behind a barrier, and, across machines, fence every run with a lease. |
+| `session-tree` | 11, 7.8, 7.15, 10.5 | List only sessions below the caller, return the same records as `spawn` with nothing a child chose below its direct children, cap open watches and end them with a reason, and report the caller's own budget figures exactly and its ancestors' coarsely. |
 
 Section 13 lists the cases a conforming implementation passes.
 
@@ -37,7 +38,7 @@ Section 13 lists the cases a conforming implementation passes.
 | Requirement | Single machine | Sessions placed across machines |
 | --- | --- | --- |
 | Session store | Local, durable across restarts | Shared and linearizable (compare-and-swap) for leases, generations, names, approvals and limit reservations; a zone that cannot answer consistently answers `unavailable` |
-| Leases and fencing | Met trivially: a run and its store share a process; a restart ends every run in progress as `host-lost` | Required (section 8) |
+| Leases and fencing | Met trivially: a run and its store share a process; a restart ends every run in progress as `interrupted` | Required (section 8) |
 | Re-placement delay | Not needed | Required (8.5) |
 | Brokered calls | Checked locally | A broker away from the run checks the generation with the store and fails closed |
 | Placement | One machine | Operator policy (labels, zones); never a caller input |
@@ -56,8 +57,8 @@ so this binding is what lets an implementer attribute a call to a session.
 
 ### 2.2 Session id in the bind configuration
 
-When it creates such a workload, the host puts the session id in the workload's bind configuration,
-where a host plugin can read it (3.1).
+When it creates such a workload, the host makes the bound session's id available to the implementer
+on every call into the workload, for example in the workload's bind configuration (3.1, 14.1).
 
 ### 2.3 Stable workload incarnation
 
@@ -75,10 +76,12 @@ A root session not driven through `run` takes its context from whatever drives i
 
 ### 2.5 Policy layers
 
-Policy layers sit in front of the implementer, installed by the host,
-and pass the original caller through.
-A guest component placed between a caller and the implementer would become the caller,
-so there is no guest-side policy world (see [RATIONALE 4.1](RATIONALE.md#41-virtualization)).
+A policy layer in front of an implementer is part of it: the host installs it,
+and it passes the original caller through.
+A guest component placed between a caller and the implementer becomes the caller.
+It then acts within its own reach and ceiling, never the original caller's,
+so it cannot widen anything, but it cannot act for the caller either.
+There is no guest-side policy world (see [RATIONALE 4.1](RATIONALE.md#41-virtualization)).
 
 ### 2.6 Who decides
 
@@ -93,9 +96,11 @@ The UI lists every entry, bound or not.
 
 ### 2.8 Discovery adapter
 
-In every session that has discovery,
-the host offers the model-facing tools `find_tools` and `load_tools`,
+The host offers the model-facing tool `find_tools` in a session whose agent holds discovery,
+and `load_tools` in one whose agent holds loading,
 so a harness that never imports the interfaces still gets them.
+Each exists only with its own power:
+in a session without it, a call to the name answers `unknown-tool`, whoever guessed the name.
 The names are reserved: no other tool may take them.
 They are an adapter over the interfaces (6.1).
 
@@ -105,6 +110,7 @@ and shows the model the first N.
 If an offer arrives past the N-th, it drops the stream and tells the model that more matched
 and that a narrower query shows them.
 If the stream ends first, it waits on the future to tell a complete answer from a failure.
+If `list-offers` fails at once, it tells the model why.
 `list-offers` itself has no cap.
 
 ### 2.9 Every root is finite
@@ -118,10 +124,9 @@ An operator may raise them, never remove them.
 ### 3.1 Checking one session per workload
 
 Serve these imports only to a workload bound to one session for its whole life,
-and answer `disabled` otherwise.
-On wash-runtime 2.12, a host plugin gets the caller's workload and its per-workload bind configuration:
-it reads the session id from that configuration,
-and answers `disabled` if there is not exactly one.
+and answer `disabled` otherwise,
+including when the implementer cannot tell which one session a call belongs to.
+Section 14.1 shows how one runtime provides this.
 
 ### 3.2 Attributing a call
 
@@ -168,7 +173,7 @@ For a quarantined reader, use a model binding without provider-run tools or netw
 
 Read imports only from registries the operator allows,
 with size and time caps and a pull rate per caller.
-Answer every fetch failure the same way (`invalid`),
+Answer every fetch failure the same way (`invalid`, with the same detail text),
 so a caller cannot probe the implementer's network position.
 
 ### 3.10 Annotations never feed reach
@@ -220,10 +225,21 @@ A child whose grants (or whose tool components' grants) name one runs on its par
 Any child runs only where its snapshot resolves identically
 (the same storage, bindings and model).
 
-### 3.16 Admitting within the ceiling
+### 3.16 The admission decision
 
-Within the ceiling, admit at once only digests in the operator's catalog or matching an entry.
-Send any other digest to a grantor.
+One decision serves `load`, `spawn` and each offer's `fit` in `tool-discovery`,
+so `fit` says exactly whether a load would wait on a grantor for this caller now.
+Take the first row that applies:
+
+| The request | Decision |
+| --- | --- |
+| Reaches beyond what every ancestor's ceiling covers (7.1, 7.12) | `denied` |
+| Policy asks for a grantor | wait on a grantor |
+| Within the ceiling, and every digest is in the operator's catalog or matches an entry exactly (3.13) | admit, no grantor |
+| Within the ceiling, with any other digest | wait on a grantor |
+| Beyond the ceiling | wait on a grantor |
+
+An entry matched exactly is re-checked against its snapshot and current policy each time (4.2).
 
 ### 3.17 Tool components are dispatched, never linked
 
@@ -231,6 +247,15 @@ A tool component's exports are reached only through dispatch,
 and its imports are served only by its own grants.
 Refuse a tool component the runtime would link to a sibling
 (for example a tool provider under a served-within-workload rule).
+
+### 3.18 Diagnostics
+
+Detail strings returned to a caller are the implementer's own words, bounded (10.9), and safe for that caller to read.
+Never put in them text a child or a tool wrote, secret or credential values,
+names of bindings or storage the caller was not shown,
+or addresses of the implementer's infrastructure.
+Answer failures a caller must not tell apart with the same text (3.9).
+Keep the full detail in the implementer's own logs.
 
 ## 4. Approvals
 
@@ -255,8 +280,8 @@ re-checked against the snapshot and current policy each time.
 
 ### 4.3 Withdrawing a pending load
 
-A pending load the caller sets aside is withdrawn,
-as a pending child is (7.4).
+A pending load the caller sets aside is withdrawn, as a pending child is (7.4),
+and leaves the listing.
 
 ### 4.4 Removal
 
@@ -265,7 +290,8 @@ pending loads and pending children that name or rest on it,
 a rollout adding it (not published; the load reports `denied`),
 its binding, calls to it in flight,
 and descendants' admissions that rested on it.
-Withdrawal takes effect at the next dispatch as well as at the next run acceptance.
+Withdrawal follows 7.11: it takes effect within the revocation bound,
+and before any later dispatch or run acceptance.
 
 ### 4.5 Races with removal
 
@@ -314,11 +340,11 @@ so a large or remote catalog costs only what the caller reads.
 When the caller drops the stream, stop producing offers and resolve the future `ok`.
 Resolve the future only after the stream has ended or been dropped.
 
-Report every failure on the future, never as a stream that silently ends short:
+Never report a failure as a stream that silently ends short:
 
 | Discovery fails | The caller sees |
 | --- | --- |
-| Before any offer (for example `disabled` or `denied`) | The stream ends with no offers, then the future resolves to the error. |
+| Before any offer (for example `disabled` or `denied`) | The call's own error. No stream is returned. |
 | Midway | The stream ends after the offers already sent, then the future resolves to the error. Those offers stay valid, but they are not all the matches. |
 
 A stream that ends with the future resolving `ok` carried every match.
@@ -327,10 +353,12 @@ A stream that ends with the future resolving `ok` carried every match.
 
 ### 6.1 One mechanism, two entry points
 
-The host's `find_tools` and `load_tools` (2.8) are an adapter over `tool-discovery` and `tool-loading`.
+The host's `find_tools` and `load_tools` (2.8) are an adapter over `tool-discovery` and `tool-loading`,
+each offered only where its power is held.
 Calling `find_tools` is `list-offers` read up to the adapter's cap, plus one offer to tell whether more matched (2.8).
 Calling `load_tools` is `tool-loading.load` made on the agent's behalf,
-with the same catalog, admission, session approval, function budget and same-run behaviour.
+with the same authorization, catalog, admission decision (3.16), session approval, function budget and same-run behaviour.
+Neither adapter can do what its interface would refuse the same caller.
 
 ### 6.2 Same run where possible
 
@@ -370,6 +398,8 @@ nor one loaded or called within the residency window.
 
 Unbind only at the component cap,
 and only set-aside tool components with no call in flight.
+An unbound tool component stays `set-aside` with its approval;
+loading it again goes through `loading` without asking a grantor.
 
 ### 6.8 Aliases
 
@@ -382,6 +412,35 @@ and refuse a call whose alias now denotes another.
 
 Tool results are bounded as `tool-types.tool-response` describes.
 
+### 6.10 States
+
+A tool component moves through `tool-component-state` as follows.
+Approval, binding and availability in the current run are separate:
+a set-aside tool component keeps its approval whether or not it is bound,
+and one that could serve only the next run keeps that restriction while set aside.
+
+| From | Event | To |
+| --- | --- | --- |
+| (not held) | `load` that waits on a grantor (3.16) | `awaiting-approval` |
+| (not held) | `load` admitted at once | `loading` |
+| `awaiting-approval` | granted, and the re-checks pass | `loading` |
+| `awaiting-approval` | refused, or expired undecided | `denied` |
+| `awaiting-approval` | `set-aside` (withdrawn) | not held |
+| `loading` | ready, and the run in progress can call it | `offered` |
+| `loading` | ready, and only the next run can call it | `next-run` |
+| `loading` | rollout failed or out of time (6.4) | `failed` |
+| `next-run` | the caller's next run starts | `offered` |
+| `offered` or `next-run` | `set-aside`, or set aside to make room (6.6) | `set-aside` |
+| `set-aside` | `load`, still bound, the run in progress can call it | `offered` |
+| `set-aside` | `load`, still bound, it was `next-run` and that run has not started | `next-run` |
+| `set-aside` | `load`, unbound meanwhile (6.7) | `loading` |
+| `denied` or `failed` | `load` | as a new load (a refusal's cooldown still applies) |
+| `denied` or `failed` | `set-aside` | not held |
+| any | the person removes its entry (2.7, 4.4) | not held; a later `load` asks again |
+
+`set-aside` on a `loading` tool component answers `loading`;
+on one already `set-aside` it does nothing.
+
 ## 7. `spawn`: children
 
 A child moves through these states (`child-state`; `other` is for a state this version does not name):
@@ -392,10 +451,10 @@ stateDiagram-v2
     [*] --> live: spawn admitted at once
     pending --> live: granted, and re-checks pass (7.3)
     pending --> ended: refused, withdrawn, expired, end (7.4),<br>parent ends, or spawner's identity ends (7.13)
-    live --> stopped: budget spent, revoked,<br>or could not start
-    stopped --> live: budget raised (exhausted only)
-    live --> ended: end, max-duration, parent ends,<br>or spawner's identity ends (7.13)
-    stopped --> ended: the same triggers
+    live --> halted: an ancestor's budget spent, revoked,<br>or could not start
+    halted --> live: budget raised (exhausted only)
+    live --> ended: end, its own max-duration, parent ends,<br>or spawner's identity ends (7.13)
+    halted --> ended: the same triggers
 ```
 
 In `live`, report the child's `session-status` as its host reports it under that interface,
@@ -416,11 +475,12 @@ stateDiagram-v2
     }
     [*] --> in_progress: send, or spawn's first run, accepted
     in_progress --> done: ended with an outcome
-    in_progress --> failed: cancelled, output-rejected,<br>not-admitted, withheld,<br>host-lost, or failed
+    in_progress --> failed: cancelled, output-rejected,<br>not-admitted, withheld,<br>interrupted, revoked, or failed
 ```
 
 A run held for `outcome-release` has finished its work:
 it ends `done` when the outcome is released and `failed(withheld)` when it is not.
+Each run records one terminal transition, and the first the store records wins (7.23).
 `counts` progress frames report usage at any point and change no state,
 and `other` is for a state this version does not name.
 
@@ -479,12 +539,27 @@ The grantor summary for a child given `spawn` says so.
 
 ### 7.7 Names are never reused
 
-A child's name is scoped to the spawning component in its session, and a run's name to its child.
+A child's name is scoped to the spawning component in its session, and a run's id to its child.
 Both are `[a-z0-9-]`, 1 to 64 characters.
-Match the name before any other check, so a retry of a run in progress returns that run.
-Keep a record of every name used, with the request and first run (or message) it was accepted with,
+
+Authorize first: the caller's identity, that it holds `spawn` now, and that the handle is its own (7.17).
+Then match the name before any other check, so a retry of a run in progress returns that run,
+and only then check the barrier, limits and reservations for something new.
+A retry that matches makes no new reservation and never restores access that was withdrawn:
+it returns the child or run as it now stands.
+
+A retry is identical when the request and first run (or message) are the same values as the caller sent them,
+compared field by field before resolving catalog entries or defaults:
+strings, including JSON schemas and structured values, byte for byte;
+lists in order; attachments by the ids the caller sent (7.22).
+Keep a record of every name used, with what it was accepted with,
 for the life of the caller's session,
 so a retry is always recognized and a handle can never reach a different child.
+
+The caller's run id is the `run-id` the child's run is driven under,
+so the child's `session-status` shows it to a direct parent.
+Give runs started any other way (by a person, a trigger) ids with a character outside `[a-z0-9-]`,
+so they never collide with the caller's.
 
 ### 7.8 Retention
 
@@ -507,14 +582,27 @@ Every spawned child may import `session-tree`, whatever powers it was given.
 It reads only the child's own place and the sessions below it (11.1),
 so a child without `spawn` lists no sessions.
 
-### 7.11 Authority by provenance
+### 7.11 Authority by provenance, and revocation
 
-For each of a child's grants and entries, record what it rested on:
+For each of a child's grants, entries and powers, record what it rested on:
 an ancestor's grant or entry, or a grantor's approval of this child.
 At each run acceptance and each child load,
 re-check against that authority as it stands and against current policy.
-A tool component that no longer fits is withdrawn;
-a child whose own grants no longer fit is `stopped(revoked)`.
+
+Narrowing does not wait for the next check.
+When an authority a child rests on narrows
+(a grant or entry removed, a power withdrawn, policy changed),
+then within the revocation bound (10.9),
+and before the implementer mediates any later dispatch, model call or brokered egress that relies on it:
+
+- withdraw an affected tool component (its calls in flight are cancelled);
+- for a child whose own grants or powers no longer fit,
+  stop its run's instances as 9.2 describes, end that run `failed(revoked)`,
+  and mark the child `halted(revoked)`;
+- do the same for every descendant whose recorded authority rests on the change.
+
+Reach already applied to a running instance cannot be narrowed in place, so the instance is stopped.
+Direct egress through a component's own grants between the change and the stop is the limit of this guarantee (8.7).
 
 ### 7.12 A child's own loads
 
@@ -529,14 +617,10 @@ Each of these stops the child's subtree as section 9 describes.
 
 ### 7.14 Outputs
 
-- Validate every outcome against its output shape and `max-output-bytes`, whatever the shape.
-  `output-rejected` never quotes the rejected output.
-- With `structured-only`, return only the validated structured value,
-  and build `finish`, `model` and counts from the implementer's own records.
-  The schema is not checked for free strings.
-- Copy stored attachments across the boundary and re-issue them in the receiving session;
-  they count toward `max-output-bytes`.
-- Enforce `max-runs` and `max-steps` by the implementer's own count, never the child's.
+- Fill each outcome field from the source 7.20 gives it, under every output shape.
+- Check every outcome as 7.21 describes, whatever the shape.
+- Move attachments across the boundary as 7.22 describes.
+- Enforce `max-runs` and `max-steps-per-run` by the implementer's own count, never the child's.
 - In every `live` status, at any depth, a `finish` the child reported as `other` carries an empty string,
   and with `structured-only` the `finish` in `last-run` comes from the implementer's own records, as in the outcome.
 
@@ -553,7 +637,16 @@ Cap instructions, schemas and messages (operator settings), answering `invalid`.
 ### 7.17 Handles
 
 Keep one backing object per caller and name, recording the owning caller identity.
-Every method checks it, so a handle passed to another component addresses nothing.
+Every method checks it before anything else,
+so a handle passed to another component acts on nothing:
+
+| Method, called by another component | Answer |
+| --- | --- |
+| `get-name` | the name, which authorizes nothing |
+| `get-info`, `cancel` | `not-owner` |
+| `send` | `not-owner` |
+| `watch-run`, `wait` | `not-owner` |
+| `end` | `not-owner`; the handle is consumed and the child is untouched |
 
 ### 7.18 Ending through a handle
 
@@ -567,14 +660,86 @@ and a repeated `end` (through `get-child`) is idempotent and resolves when it is
 
 The only resource here is `spawn.child-session`, and it carries nothing but the child's name and owner:
 all state is in the session store.
-On a runtime where a resource served by a component host plugin is proxied into the caller's store,
-a caller that crashes holding a handle leaves the plugin's side registered until the plugin restarts.
-wash-runtime documents this in `crates/wash-runtime/src/engine/store/resource_bridge.rs`,
-module documentation, section "Known limitations", item "Caller crash leaks reals" (wasmCloud/wasmCloud main).
-An implementer should therefore keep one small plugin-side object per caller and name,
+Where a runtime keeps an implementer-side object for each handle a caller holds,
+a caller that crashes may leave that object behind (14.2).
+Keep it small, one per caller and name,
 and reclaim those whose caller's workload has stopped.
-A native host plugin, whose resources live in the caller's own store, has no such leak.
 Durability never depends on a handle: `get-child` reaches the same child by name from any run or machine.
+
+### 7.20 Who wrote each outcome field
+
+| Field | `reply` | `reply-and-structured` | `structured-only` |
+| --- | --- | --- | --- |
+| `reply` | the child's | the child's | withheld: empty |
+| `structured` | `none` | the child's, validated against the schema | the child's, validated against the schema |
+| `finish` | the child's report | the child's report | the implementer's: a limit it enforced, `refusal` or `content-filter` as the provider answered, otherwise `done` |
+| `counts` | the implementer's metering | the same | the same |
+| `model` | the implementer's record of the model that served the last call | the same | the same |
+
+A field the child wrote is untrusted content: it can carry anything the child read,
+and it authorizes nothing, even when it matches its schema.
+A caller routes on a reported `finish` and never allows anything on it.
+
+### 7.21 Checking outputs
+
+- Validate every outcome against its output shape and `max-output-bytes`.
+  `output-rejected` never quotes the rejected output.
+- Schemas are JSON Schema 2020-12.
+  Refuse at `spawn` (`invalid`) a schema that uses a keyword the implementer does not enforce,
+  or refers outside itself.
+  The schema is not checked for free strings.
+- A run whose last model call the provider answered with a refusal or a safety filter
+  finishes `refusal` or `content-filter` with `structured` none, under every shape.
+  It is not `output-rejected`.
+  Under `structured-only` its reply stays withheld; the size limit still applies.
+  Any other outcome without a valid structured value under a structured shape is `output-rejected`.
+- The encoded size of an outcome is the sum of the UTF-8 byte lengths of every string in it as delivered
+  (reply parts, the structured value's JSON text, a `finish` carrying `other` text)
+  plus the length of each attachment's content.
+  Count it after the output shape is applied and before attachment ids are reissued.
+
+### 7.22 Attachments in both directions
+
+- **From child to caller.** Copy stored attachments across the boundary and reissue them in the caller's session;
+  they count toward `max-output-bytes` (7.21).
+- **From caller to child**, in a first run or `send`, at acceptance:
+  check that each stored attachment id belongs to the caller's session (`invalid` otherwise),
+  copy it into the child's session under a new id, and count it toward the message size cap (7.16).
+  Fetch a URL attachment then, under the caller's reach, and pass its content;
+  the child never gains egress for it.
+  Keep the copies while the run waits (for admission or placement).
+- A retry compares the attachment ids the caller sent, never the copies.
+
+### 7.23 Cancelling at every phase
+
+`cancel` and `end` set the cancelling mark first (9.1).
+From then on the stop is durable: it completes even if the call that started it is dropped.
+Each run records one terminal transition, and the first the store records wins:
+an outcome released before the mark ends `done`; after it, the run ends `failed(cancelled)`.
+
+| The run is | On `cancel` or `end` |
+| --- | --- |
+| waiting for admission (`blocked(admission)`) | fails `cancelled`; the child stays `pending` on `cancel` and ends on `end` |
+| waiting for placement (`blocked(placement-delay)`) | fails `cancelled` and is never placed |
+| working | cancelled cooperatively, then by force (9.2); fails `cancelled` |
+| waiting on a tool approval (`blocked(tool-approval)`) | the held request is withdrawn; fails `cancelled` |
+| holding its outcome for release (`blocked(outcome-release)`) | the release request is withdrawn and the outcome discarded; fails `cancelled` |
+
+### 7.24 How the endings relate
+
+The caller's view of a run it sent (`run-state`) and the child's own last run (`session-status.run-end`)
+describe the same run from two sides.
+Report them consistently:
+
+| `run-state` | The child's `last-run` |
+| --- | --- |
+| `done` | `replied`, with the child's `finish` |
+| `failed(cancelled)` | `cancelled` |
+| `failed(output-rejected)` or `failed(withheld)` | `replied`: the child finished; the caller's check or a release decision kept the outcome back |
+| `failed(interrupted)` or `failed(revoked)` | `interrupted`: the implementer cut the run off before it recorded a result |
+| `failed(failed)` | `failed` |
+| `failed(not-admitted)` | unchanged: the run never started |
+| `failed(expired)` | unchanged: the outcome aged out after the run ended as it did |
 
 ## 8. Runs, leases and fencing
 
@@ -591,7 +756,7 @@ Each counts against budgets and limits and is stopped by its ancestors' `cancel`
 Expiry is recommended 60 seconds after the last renewal.
 The generation closes when the run ends or the lease expires;
 the store then rejects any write, outcome or dispatch it mediates under that generation.
-Whichever machine next reads the child reports the run `host-lost`;
+Whichever machine next reads the child reports the run `interrupted`;
 no particular machine has to be alive.
 
 ### 8.3 Self-fencing
@@ -643,8 +808,7 @@ After the mark and until the stop completes, no run acceptance in the subtree su
 | Attempt during the stop | Answer |
 | --- | --- |
 | `spawn` from inside the subtree | `stopping` |
-| `send` from inside the subtree | `stopped` |
-| `send` from outside the subtree | `busy` |
+| `send` into the subtree, from inside or outside it | `stopping` |
 | A run a person or trigger would start | not accepted |
 
 A store with per-key compare-and-swap meets this with one per-tree record
@@ -669,33 +833,43 @@ Effects already under way are not undone.
 ### 10.1 Subtree charging
 
 A session's spend counts against it and every ancestor.
-When a budget is spent, runs below it finish `max-total-tokens` or `max-duration`,
-and the sessions below it are `stopped(exhausted)` until an operator or person raises it.
+When a token budget or a root's active-time budget is spent,
+runs below it finish `max-total-tokens` or `max-duration`,
+and the sessions below it are `halted(exhausted)` until an operator or person raises it.
 
 ### 10.2 A child's own `max-duration`
 
-It is measured from admission (never while `pending`), and passing it ends the child.
+It is a lifetime, not a budget.
+It is measured from admission (never while `pending`),
+and passing it ends the child as `ended(some(exhausted(max-duration)))`.
+Its descendants end with it, as when any parent ends, and report `ended(none)`.
+When an ancestor's budget is spent at the same time, ending wins over halting.
 
 ### 10.3 Metering
 
-The broker serving model calls reserves the estimated prompt plus the call's maximum output before each call,
-refuses when any budget on the path cannot cover it,
+Token budgets bound accounted usage, and the accounting never undercounts.
+Before each model call, the broker serving it reserves the prompt as the implementer counts it
+plus the call's maximum output, which the implementer sets on the call whatever the guest asked.
+It refuses the call when any budget on the path cannot cover the reservation,
 and settles real usage afterwards.
+A call whose output it cannot bound is refused.
+A provider that reports no usage is charged the full reservation.
 A broker may instead draw down an allowance it holds locally,
 as long as the sum of allowances never exceeds a budget.
-A provider that reports no usage is charged the estimate.
 Spend is recorded outside the run's generation, so a fenced run's spend still counts.
 
 ### 10.4 Per-run limits within the budget
 
 The `run-options` the implementer passes when it drives a child's run stay within the child's `spawn-budget`:
-a run's `max-steps` never exceeds the budget's.
+a run's `max-steps` never exceeds `max-steps-per-run`.
 
 ### 10.5 Remaining budgets
 
 `session-tree.get-lineage` reports the caller's own limits exactly
 and ancestors' coarsely (rounded down to a power of two tokens or a whole minute, refreshed at most once a minute).
 A root's ancestor figures repeat its own, coarse.
+Coarse figures narrow what a subtree learns of its siblings' spending without closing it:
+a change in an ancestor's figure still says that something below that ancestor spent.
 
 ### 10.6 `over-limit`
 
@@ -728,7 +902,16 @@ Every spawn and run acceptance reserves its place atomically.
 | Residency before set-aside | 3 runs |
 | Lease timeout, self-fence margin, re-placement delay | 60 s, 15 s, 30 s |
 | Cancel grace period | 15 s |
+| Revocation bound (7.11) | 60 s |
+| Detail strings returned to a caller (3.18) | 256 bytes |
 | `watch-children` streams | 4 per caller |
+
+### 10.10 `max-runs`
+
+It counts runs accepted in the child's own session, whoever starts them (its parent, a person, a trigger).
+A retry that returns an existing run counts nothing.
+A descendant's runs count under its own `max-runs`;
+runs in progress across the tree are bounded by the concurrent-runs limit (10.9).
 
 ## 11. `session-tree`
 
@@ -746,7 +929,16 @@ under the same rules (7.15, 7.8).
 ### 11.3 Open watches
 
 Cap open `watch-children` streams per caller (10.9);
-a call over the cap answers `unavailable`.
+a call over the cap fails at once with `unavailable`.
+
+### 11.4 Ending a watch
+
+Take the snapshot and the subscription together, so no change between them is lost.
+After `synced`, send changes in order; a slow reader may miss intermediate ones but always gets each session's latest record.
+When the caller drops the stream, resolve the future `ok`.
+When the watch cannot continue (the store fails, or the caller loses the power),
+end the stream and resolve the future with the reason.
+A new watch starts with a fresh snapshot.
 
 ## 12. Audit and traces
 
@@ -807,14 +999,17 @@ An interface grant naming `cosmonic:agent/spawn`: `invalid`.
 ### 13.6 Never beyond an ancestor
 
 A child whose agent grants exceed the parent's: `denied`.
-Narrow the parent's grants: the child's next `send` answers `stopped`, and its state is `stopped(revoked)`.
-Remove a parent's entry a child's tool component rested on: the child loses it.
+Narrow the parent's grants while the child runs:
+within the revocation bound its run ends `failed(revoked)`, its state is `halted(revoked)`, and the next `send` answers `halted`.
+Remove a parent's entry a child's tool component rested on: the child loses it before its next call to it.
 
 ### 13.7 Names and retries
 
 Send run `r1`, drop the reply, send `r1` again with the same message: one run.
 With another message: `name-taken`.
-Drop the handle, call `get-child` from a fresh instance: the same child, and `wait` on `r1` returns its outcome.
+With the same values but a JSON schema whose keys are reordered: `name-taken`.
+Drop the handle, call `get-child` from a fresh instance: the same child, `watch-run` on `r1` follows it, and `wait` on `r1` returns its outcome.
+Withdraw the caller's `spawn` power, then retry: `disabled`, not the existing child.
 
 ### 13.8 State, not notices
 
@@ -825,12 +1020,15 @@ The next run's `list-children` shows each child's `sent-run` with its state.
 
 Cancel a child whose agent ignores cancellation:
 after the grace period its instances stop, metering stops, renewals are refused, and `cancel` resolves.
-During the stop, a `send` into the subtree answers `busy` and a spawn from inside answers `stopping`.
+During the stop, a `send` into the subtree and a spawn from inside both answer `stopping`.
+Cancel a run in each blocked phase: each fails `cancelled`, a pending child stays pending,
+and a run whose outcome was released before the mark stays `done`.
+Drop the `cancel` call right after it starts: the stop still completes.
 
 ### 13.10 Lost machine
 
 Cut off a child's machine mid-run:
-within the lease timeout its `sent-run` is `failed(host-lost)` and its `live` status shows `last-run` ended `interrupted`;
+within the lease timeout its `sent-run` is `failed(interrupted)` and its `live` status shows `last-run` ended `interrupted`;
 a later write from that machine is rejected;
 the next run shows `blocked(placement-delay)`;
 the journal ends the interrupted run with `unresolved` op results.
@@ -838,14 +1036,17 @@ the journal ends the interrupted run with `unresolved` op results.
 ### 13.11 Budgets
 
 Spend in a grandchild counts against its parent and root.
-Spend a root's tokens: runs below finish `max-total-tokens` and children are `stopped(exhausted)`.
+Spend a root's tokens: runs below finish `max-total-tokens` and children are `halted(exhausted)`.
+Let a child's own `max-duration` pass: it ends `ended(some(exhausted(max-duration)))` and its children end `ended(none)`.
 A sibling's `get-lineage` shows only coarse ancestor figures.
+A provider that reports no usage is charged the full reservation.
 
 ### 13.12 Structured only
 
 A child that writes text in its reply, finish reason and model name:
 the caller sees only the structured value and the implementer's own fields,
 in the outcome and in the `finish` of the child's `live` status.
+A child whose provider refuses: the outcome finishes `refusal` with no structured value and no reply, not `output-rejected`.
 
 ### 13.13 Sessions apart
 
@@ -862,7 +1063,7 @@ A hung rollout answers `unavailable` after the deadline and the tool component s
 
 End a child through its handle: the handle is consumed and the child ends.
 Crash a caller holding handles: the children are unaffected and reachable by name.
-Pass a handle to another component: it addresses nothing.
+Pass a handle to another component: each method answers as 7.17 says, and the child is untouched.
 
 ### 13.16 No child-chosen text upward
 
@@ -876,4 +1077,45 @@ A child given no `spawn` lists no sessions, and no child's listing shows its par
 ### 13.17 Disabled powers
 
 On a host that shares workloads between sessions, every function answers `disabled`.
-A plugin that finds no session id, or more than one, in the workload's bind configuration answers `disabled` too.
+An implementer that cannot tell which one session a call belongs to answers `disabled` too.
+
+### 13.18 Each adapter needs its power
+
+In a session whose agent holds discovery but not loading:
+the model is offered `find_tools` but not `load_tools`,
+and a call to `load_tools` by name answers `unknown-tool`.
+The reverse holds for loading without discovery.
+
+### 13.19 Attachments into a child
+
+Send a child a stored attachment from the caller's session: the child receives a copy under its own id.
+Send one from another session: `invalid`.
+Send a URL the caller may reach and the child may not: the child receives the content, and no egress.
+
+### 13.20 Watches end with a reason
+
+Open watches up to the cap: the next call fails at once with `unavailable`.
+Withdraw the caller's power while a watch is open: the stream ends and the future resolves `disabled`.
+
+### 13.21 Tool component states
+
+Load a tool component that can serve only the next run, set it aside, and load it again before that run:
+it is `next-run`, not `offered`.
+Unbind a set-aside one at the cap and load it again: `loading`, then `offered`, with no prompt.
+
+## 14. Notes on particular runtimes
+
+These show how one runtime meets the requirements above. They require nothing.
+
+### 14.1 Session id on wash-runtime
+
+On wash-runtime 2.12, a host plugin gets the caller's workload and its per-workload bind configuration.
+It reads the session id from that configuration, and answers `disabled` if there is not exactly one (3.1).
+
+### 14.2 Handles proxied across stores
+
+On a runtime where a resource served by a component host plugin is proxied into the caller's store,
+a caller that crashes holding a handle leaves the plugin's side registered until the plugin restarts.
+wash-runtime documents this in `crates/wash-runtime/src/engine/store/resource_bridge.rs`,
+module documentation, section "Known limitations", item "Caller crash leaks reals" (wasmCloud/wasmCloud main).
+A native host plugin, whose resources live in the caller's own store, has no such leak (7.19).
