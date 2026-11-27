@@ -1,4 +1,4 @@
-package cosmonic:agent@0.4.3;
+package cosmonic:agent@0.4.4;
 
 /// Messages, model handles, options, usage, and inference errors.
 @since(version = 0.4.0)

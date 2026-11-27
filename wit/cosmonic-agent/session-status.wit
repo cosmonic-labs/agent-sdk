@@ -1,4 +1,4 @@
-package cosmonic:agent@0.4.3;
+package cosmonic:agent@0.4.4;
 
 /// The types that describe where a session stands, with no functions, so an
 /// interface that carries a status (a child's state, say) can use them

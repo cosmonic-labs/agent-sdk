@@ -1,9 +1,12 @@
 # cosmonic:agent
 
-The interfaces an agent component uses to call models, call tools and keep a
-durable conversation, and the export a host uses to hand it work. This page is
-the design note for the package: how the pieces fit, and what a host, an agent
-or a tool author can rely on. The `.wit` files are the contract;
+`cosmonic:agent` lets an agent be written once, as a WebAssembly component, and
+run on any host that serves it. It holds the interfaces an agent component uses
+to call models, call tools and keep a durable conversation, and the export a
+host uses to hand it work. The host decides what each of those reaches, so the
+agent never holds an endpoint or a credential. This page is the design note for
+the package: how the pieces fit, and what a host, an agent or a tool author can
+rely on. The `.wit` files are the contract;
 [`world.wit`](world.wit) lists the worlds, and
 [docs/migrating-to-0.4.md](docs/migrating-to-0.4.md) lists what changed from
 0.3.0.
@@ -22,8 +25,33 @@ An agent has two interfaces, and they stay separate.
   event trigger, a parent agent) calls that. `compactable-agent` adds
   `compact`, so a driver can ask for a summary between runs.
 
+```mermaid
+flowchart LR
+    driver["Driver<br>(chat UI, HTTP ingress,<br>trigger, parent agent)"]
+    agent["Agent component"]
+    host["Host"]
+    tools["Tools<br>(tool components)"]
+    driver -->|"calls run"| agent
+    agent -->|"models, chat,<br>tools, session"| host
+    host -->|"dispatches tool calls"| tools
+```
+
 Exporting `run` adds no power: the agent reaches exactly what its imports
 allow.
+
+## Where to go next
+
+- **Writing an agent:** target the `agent` world, or `runnable-agent` to be
+  driven through `run`. Read [Running an agent](#running-an-agent) and
+  [What an agent sees](#what-an-agent-sees). To load tools or start child
+  agents while it works, see [docs/spawn](docs/spawn/README.md).
+- **Writing a tool:** read
+  [What makes a component a tool](#what-makes-a-component-a-tool), then export
+  `tools` or a typed interface of your own.
+- **Implementing a host:** the `.wit` files are the contract. Read
+  [Running an agent](#running-an-agent), [Session status](#session-status) and
+  [Versioning](#versioning), and for the unstable discovery, loading and spawn
+  interfaces, [the conformance requirements](docs/spawn/CONFORMANCE.md).
 
 ## Running an agent
 
@@ -120,16 +148,32 @@ A host translates typed tools like this:
 
 ### Discovery and loading
 
-A host can let an agent find and add tools during a session. It does this with
-two tools of its own, `find_tools` and `load_tools`, listed beside the others;
-the names are reserved. Loading is a host decision under the host's policy, and
-a tool added mid-run arrives on the agent's next run. Nothing in the WIT
-changes for discovery: it is ordinary tool calls, and new tools appear in the
-next `tools.list`.
+An agent can find and add tools during a session.
+Most harnesses need do nothing:
+the host offers two tools of its own, `find_tools` where the agent may discover
+and `load_tools` where it may load,
+the model calls them,
+and new tools appear in the next `tools.list`
+(so list again before each model call).
+
+A harness that manages tools in code imports `tool-discovery` and `tool-loading`
+(unstable behind `agent-tool-loading`).
+That covers preloading, telling `offered` from `next-run`, setting aside,
+and waiting until a tool is callable in the same run.
+Both are one mechanism:
+the host's tools are an adapter over the interfaces,
+with the same catalog, approvals and function budget.
+
+`session-tree` and `spawn` (unstable behind `agent-spawn`)
+let an agent read the session tree it belongs to and its remaining budget,
+and start named child agent sessions (often called subagents), possibly on other machines.
+A child's reach never exceeds its ancestors'.
+See [docs/spawn](docs/spawn/README.md), its [rationale](docs/spawn/RATIONALE.md)
+and [conformance](docs/spawn/CONFORMANCE.md) requirements.
 
 ## Session status
 
-`session-status` (0.4.3, unstable behind the `agent-session-status` feature,
+`session-status` (unstable behind the `agent-session-status` feature,
 which needs `agent-run` as well) reports where a session stands, so every
 implementer reports it the same way: a desktop app's session list, a
 cluster's session API, and a component that drives an agent. Its types are in
@@ -216,15 +260,36 @@ hosts and agents adopt it.
 - An additive change bumps the patch version (0.4.0 to 0.4.1) and carries
   `@since` for the new items. New interfaces, and new functions on interfaces
   the host serves, are additive.
-- A variant that will grow ends in a catch-all `other` case, and its payload
-  says which kind it is. A variant of states, kinds or endings carries the
-  kebab-case name of the case this version does not name, as `other(string)`:
-  the name is never empty, and a caller may show it but acts on nothing. An
-  error variant carries diagnostic detail a caller may log and never parses.
-  The released error variants carry it as `other(string)`, an empty string
-  when there is none. Error variants added since carry it as
-  `other(option<string>)`, and the released ones move to that shape at the
-  next breaking version.
 - Published artifacts never change. Interfaces that may still move are behind
-  `@unstable` features (`agent-run` and `agent-session-status` today).
+  `@unstable` features (`agent-run`, `agent-session-status`,
+  `agent-tool-loading` and `agent-spawn` today). An unstable item can change
+  shape in any patch release, and no compatibility holds across patches for
+  it, so a consumer of an unstable feature pins the exact version.
+- [`features.json`](features.json) lists each unstable feature and the
+  features it needs; the build checks that each set resolves. A stable item
+  cannot use an unstable one, so features stabilize in that order:
+  `agent-run`, then `agent-session-status` and `agent-tool-loading`, then
+  `agent-spawn`.
 - Versions never contain "draft".
+
+### Catch-all cases
+
+A variant that can grow ends in an `other` case, so an implementer can
+report a case this version does not name without a breaking release. What
+it carries depends on what the variant is:
+
+- A variant that names something (a state, a kind, a source, a limit, an
+  event) ends in `other(string)`: the kebab-case name of the unnamed case,
+  never empty. Each says what a receiver does with an unknown case, and a
+  variant the caller builds says the implementer answers `invalid`.
+- A failure ends in `other(option<string>)`: diagnostic detail a caller
+  logs and never parses.
+
+This follows WASI 0.3, whose error codes carry `option<string>` and whose
+`wasi:http` method and scheme carry `string`. The released 0.4 types predate
+the split and use `other(string)` everywhere; their error variants move to
+`other(option<string>)` at the next breaking release, and their other
+variants keep `other(string)`. `finish` is the one released variant whose
+`other` carries text the agent wrote; wherever that text could reach someone
+it should not, such as a child's status shown to its parent, the implementer
+replaces it with an empty string.

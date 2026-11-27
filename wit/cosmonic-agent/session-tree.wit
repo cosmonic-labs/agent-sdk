@@ -1,0 +1,97 @@
+package cosmonic:agent@0.4.4;
+
+/// The caller may read the session tree it belongs to: where it sits, its
+/// remaining budget, and the sessions below it. Reading acts on nothing;
+/// starting and driving sessions takes `spawn`. Unstable behind
+/// `agent-spawn`.
+///
+/// Like an OS process tree, each session has one parent, and its children
+/// and their descendants sit below it. The sessions below the caller are
+/// only the children its own component spawned and their descendants.
+@unstable(feature = agent-spawn)
+interface session-tree {
+    @unstable(feature = agent-spawn)
+    use spawn-types.{session-id, session-info, remaining-spawn-budget};
+
+    /// Where the caller sits in the tree.
+    @unstable(feature = agent-spawn)
+    record lineage {
+        /// Its session id.
+        session-id: session-id,
+        /// Its parent's session id; `none` for a root.
+        parent: option<session-id>,
+        /// How far below its root it sits: 0 for a root, 1 for a root's
+        /// child.
+        depth: u32,
+        /// The tokens, time and runs it has left under its own budget, and
+        /// the tokens and time its tightest ancestor has left.
+        remaining: remaining-spawn-budget,
+    }
+
+    /// Which sessions below the caller a listing covers. A record, so the
+    /// call site names what it asks for.
+    @unstable(feature = agent-spawn)
+    record child-query {
+        /// False lists the caller's direct children only; true lists its
+        /// whole subtree.
+        descendants: bool,
+    }
+
+    /// A change in the caller's subtree.
+    @unstable(feature = agent-spawn)
+    variant child-event {
+        /// A session as it stands when the watch starts. These come first.
+        existing(session-info),
+        /// The snapshot is complete.
+        synced,
+        /// A session appeared or changed. Usage-only changes are coalesced
+        /// to at most one per session per second.
+        changed(session-info),
+        /// A session left the listing.
+        removed(session-id),
+        /// An event this version does not name, by its kebab-case name, never
+        /// empty. Safe to ignore: a later `changed` or `removed` carries the
+        /// session's latest record.
+        other(string),
+    }
+
+    /// Why a read of the tree failed. Detail strings are diagnostic: the
+    /// implementer's own words, safe to show the caller, never to be parsed.
+    @unstable(feature = agent-spawn)
+    variant session-tree-error {
+        /// Reading the tree is not enabled for this caller. Permanent.
+        disabled,
+        /// Policy refused it.
+        denied(option<string>),
+        /// Not served now (the state could not be read, or a limit on open
+        /// watches was reached). Retry may succeed.
+        unavailable(option<string>),
+        /// A failure not captured above.
+        other(option<string>),
+    }
+
+    /// The caller's place and remaining budget now.
+    @unstable(feature = agent-spawn)
+    get-lineage: async func() -> result<lineage, session-tree-error>;
+
+    /// The caller's direct children, oldest first; with `descendants`, its
+    /// whole subtree, each session after its parent. Ended children stay
+    /// listed for a while. A caller that has spawned nothing gets an empty
+    /// list.
+    @unstable(feature = agent-spawn)
+    list-children: async func(query: child-query) -> result<list<session-info>, session-tree-error>;
+
+    /// The same listing, then each change. A slow reader may miss an
+    /// intermediate change but always gets each session's latest record.
+    ///
+    /// A failure before the watch starts is the call's own error. Otherwise
+    /// the call returns the stream of events and a future that resolves once
+    /// the stream has ended or been dropped. Drop the stream to stop
+    /// watching, and the future resolves `ok`. If the watch stops midway,
+    /// the stream ends and the future resolves to what a fresh call would
+    /// answer then: `disabled` when the caller lost the power, `unavailable`
+    /// when the state could not be read. After `unavailable`, watch again
+    /// for a fresh snapshot.
+    @unstable(feature = agent-spawn)
+    watch-children: async func(query: child-query) -> result<tuple<stream<child-event>, future<result<_, session-tree-error>>>, session-tree-error>;
+}

@@ -4,8 +4,9 @@
 outcomes, moves the tool records into `tool-types`, reshapes tool input and
 arguments, carries citations and refusals, and adds the unstable `run` and
 `compact` exports behind `agent-run`. Update imports from
-`cosmonic:agent@0.3.0` to `cosmonic:agent@0.4.2`, which corrects 0.4.0's docs
-without changing its types. The published 0.3.0 artifact remains unchanged.
+`cosmonic:agent@0.3.0` to the latest 0.4.x release; patch releases after
+0.4.0 correct docs and add unstable interfaces without changing the stable
+types. The published 0.3.0 artifact remains unchanged.
 
 - Rename `inference-types.capabilities` and `model-description.capabilities` to
   `supported-operations`. The flags remain `chat` and `embeddings`.
@@ -52,13 +53,12 @@ without changing its types. The published 0.3.0 artifact remains unchanged.
   `input-required`.
 - Treat tool output as possibly truncated. A host may cap a tool's output and
   append a short text note stating the original size.
-- Match `other(string)` in every variant 0.4.0 released; `run-types` no
-  longer uses `other(option<string>)`. Unstable error variants added after
-  0.4.0 carry `other(option<string>)` instead, as diagnostic detail. Every
-  stable interface, world and type carries `@since` with the version that
-  introduced its current shape: 0.3.0 for what 0.3.0 had unchanged, 0.4.0
-  for `inference-types` and `tools`, which changed incompatibly, and for
-  `tool-types` and the types new in this release.
+- Match `other(string)` in every released variant; `run-types` no longer uses
+  `other(option<string>)`. Unstable interfaces added since follow the two
+  rules in the [package README](../README.md#catch-all-cases). Every stable
+  interface, world and type carries `@since` with the version that introduced its current shape: 0.3.0 for what
+  0.3.0 had unchanged, 0.4.0 for `inference-types` and `tools`, which changed
+  incompatibly, and for `tool-types` and the types new in this release.
 - Record an unknown tool outcome or abandoned call as an unresolved operation.
   Retry with the same id and arguments only when trusted configuration authorizes
   repeat detection. Provider annotations cannot authorize replay. A not-dispatched

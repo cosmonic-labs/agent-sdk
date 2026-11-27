@@ -1,0 +1,6 @@
+{
+  "agent-run": [],
+  "agent-session-status": ["agent-run"],
+  "agent-tool-loading": [],
+  "agent-spawn": ["agent-run", "agent-session-status", "agent-tool-loading"]
+}

@@ -30,6 +30,33 @@ export function readVersion(dir, pkg) {
   return version;
 }
 
+const FEATURE = /@unstable\s*\(\s*feature\s*=\s*([a-z0-9-]+)\s*\)/g;
+
+// A package with @unstable features lists, in features.json, each feature and
+// the features it needs. A gate cannot name the gates it needs, so this is the
+// record of which sets are supported; each one must resolve on its own.
+// Returns the sets to check, one per feature, each with what it needs.
+export function featureSets(dir) {
+  const used = new Set();
+  for (const f of readdirSync(dir).filter((f) => f.endsWith(".wit"))) {
+    for (const m of readFileSync(join(dir, f), "utf8").matchAll(FEATURE)) used.add(m[1]);
+  }
+  const file = join(dir, "features.json");
+  if (!existsSync(file)) {
+    if (used.size) throw new Error(`${dir} uses @unstable features (${[...used].sort().join(", ")}) but has no features.json`);
+    return [];
+  }
+  const needs = JSON.parse(readFileSync(file, "utf8"));
+  const listed = new Set(Object.keys(needs));
+  for (const f of used) if (!listed.has(f)) throw new Error(`features.json does not list ${f}`);
+  for (const f of listed) if (!used.has(f)) throw new Error(`features.json lists ${f}, which no item uses`);
+  for (const [f, deps] of Object.entries(needs)) {
+    if (!Array.isArray(deps)) throw new Error(`features.json: ${f} must list the features it needs`);
+    for (const d of deps) if (!listed.has(d)) throw new Error(`features.json: ${f} needs ${d}, which is not listed`);
+  }
+  return Object.entries(needs).map(([f, deps]) => [f, ...deps]);
+}
+
 async function main([dir, pkg]) {
   if (!dir || !pkg) throw new Error("usage: build.mjs <wit-dir> <package>");
   const info = packageInfo(pkg);
@@ -65,6 +92,10 @@ async function build(dir, pkg, info, version, stage) {
   }
 
   await run("wasm-tools", ["component", "wit", join(stage, "wit")]);
+  for (const set of featureSets(dir)) {
+    await run("wasm-tools", ["component", "wit", "--features", set.join(","), join(stage, "wit")]);
+    console.log(`resolves with --features ${set.join(",")}`);
+  }
   mkdirSync("dist", { recursive: true });
   const out = resolve("dist", `${info.name}.wasm`);
   await run("wash", ["wit", "build", "--output-file", out], { cwd: stage });

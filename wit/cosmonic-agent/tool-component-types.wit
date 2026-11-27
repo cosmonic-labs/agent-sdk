@@ -1,0 +1,161 @@
+package cosmonic:agent@0.4.4;
+
+/// Types for describing a component's reach and the tool components an agent
+/// may load or hand to a child. No functions: importing it grants nothing.
+/// Unstable behind `agent-tool-loading`. `spawn-types` uses
+/// `pending-approval`, and `spawn` uses `grants`, `component-ref`,
+/// `tool-component-source` and `catalog-name`, which is why `agent-spawn`
+/// builds on this feature.
+///
+/// Reach is what a component can actually touch: its grants, limited to the
+/// interfaces it imports. A grant for an interface the component does not
+/// import adds nothing. An implementer reads a component's imports from the
+/// pinned binary before it runs anything, refuses a component that imports a
+/// capability its grants and its world do not cover, and shows the import
+/// list to whoever approves it.
+///
+/// A tool component is one component with its own grants that offers tools: a
+/// tool provider (exports `cosmonic:agent/tools`) or a typed tool (exports
+/// its own interfaces). The caller reaches it only through the implementer's
+/// dispatch, never by linking, and inherits none of its grants.
+///
+/// Catch-alls follow two rules. A variant that names something (a state, a
+/// source, a limit) ends in `other(string)`, carrying the kebab-case name of
+/// a case this version does not name; it is never empty. A variant that
+/// describes a failure ends in `other(option<string>)`, carrying optional
+/// diagnostic detail that a caller logs and never parses.
+@unstable(feature = agent-tool-loading)
+interface tool-component-types {
+    /// The name of an entry in the implementer's catalog.
+    @unstable(feature = agent-tool-loading)
+    type catalog-name = string;
+
+    /// A component image pinned by content digest, so a moving tag cannot
+    /// change what was approved.
+    @unstable(feature = agent-tool-loading)
+    record component-ref {
+        /// An OCI reference, for display; `digest` is authoritative.
+        image: string,
+        /// An OCI digest, `sha256:<hex>`.
+        digest: string,
+    }
+
+    /// A named volume mounted into one component.
+    @unstable(feature = agent-tool-loading)
+    record volume-mount {
+        /// A volume the implementer knows, by name. Never a path on the
+        /// machine.
+        volume: string,
+        /// Where the component sees it.
+        mount-path: string,
+        /// True mounts it read-only.
+        read-only: bool,
+    }
+
+    /// An interface granted to one component, with its configuration (such as
+    /// a bucket or topic). Never a `cosmonic:agent` interface: those powers
+    /// reach a component only through its world or a parent's grant of
+    /// powers. A kind of reach this package does not name is granted this
+    /// way, by the interface that carries it.
+    @unstable(feature = agent-tool-loading)
+    record interface-grant {
+        /// Fully qualified, with version.
+        name: string,
+        /// Interface-specific configuration, as key and value pairs.
+        config: list<tuple<string, string>>,
+    }
+
+    /// What one component may touch. Empty grants nothing.
+    @unstable(feature = agent-tool-loading)
+    record grants {
+        /// Hosts it may reach.
+        allowed-hosts: list<string>,
+        /// Volumes mounted into it.
+        volumes: list<volume-mount>,
+        /// Interfaces it may import beyond its world.
+        interfaces: list<interface-grant>,
+        /// Secret names delivered into its memory. Refused (`invalid`) on a
+        /// spawned agent's own component.
+        secrets: list<string>,
+        /// Credential references the implementer applies to its outbound
+        /// requests, only to the destinations each credential's binding
+        /// names; the value never enters the component.
+        credentials: list<string>,
+    }
+
+    /// A tool component the caller describes itself.
+    @unstable(feature = agent-tool-loading)
+    record tool-component-spec {
+        /// A DNS label of at most 32 characters, unique among one agent's
+        /// tool components. Display only; never used for routing or
+        /// authorization.
+        name: string,
+        /// A tool provider or a typed tool.
+        component: component-ref,
+        /// What it may touch.
+        grants: grants,
+        /// The functions to offer, by name; `none` offers all of them. An
+        /// empty list is `invalid`.
+        functions: option<list<string>>,
+    }
+
+    /// Where a tool component comes from. The caller builds it.
+    @unstable(feature = agent-tool-loading)
+    variant tool-component-source {
+        /// An entry of the implementer's catalog, by the name
+        /// `tool-discovery` lists. The implementer supplies its component
+        /// and grants.
+        catalog(catalog-name),
+        /// A tool component the caller describes.
+        custom(tool-component-spec),
+        /// A source this version does not name, by its kebab-case name, never
+        /// empty. An implementer that does not serve it answers `invalid`. An
+        /// empty name is `invalid` too.
+        other(string),
+    }
+
+    /// A request waiting on a grantor (policy, an auditor, or a person).
+    /// Also how `spawn-types` shows a pending child.
+    @unstable(feature = agent-tool-loading)
+    record pending-approval {
+        /// Implementer-issued, to match the approval interface and audit
+        /// log.
+        id: string,
+        /// What the grantor is asked, as the implementer wrote it. Never the
+        /// caller's free text; a name the caller chose appears only quoted,
+        /// marked as the caller's, and limited to `[a-z0-9-_./:]`.
+        summary: string,
+    }
+
+    /// Where a tool component stands in the caller's session.
+    @unstable(feature = agent-tool-loading)
+    variant tool-component-state {
+        /// Waiting on a grantor. Nothing is bound.
+        awaiting-approval(pending-approval),
+        /// Refused by a grantor or by policy, or the request expired
+        /// undecided. Listed until the caller loads it again or sets it
+        /// aside; a request the caller withdraws leaves the listing instead.
+        /// The detail is diagnostic.
+        denied(option<string>),
+        /// Admitted; its component is starting. Not callable yet.
+        loading,
+        /// Admitted and bound, but callable only from the caller's next run,
+        /// on an implementer that cannot change the tools of a run in
+        /// progress. A harness ends its run rather than wait.
+        next-run,
+        /// In the model's tool list and callable.
+        offered,
+        /// Set aside: out of the model's tool list, with its approval kept.
+        /// Its tools answer `unknown-tool`. A `load` brings it back as a new
+        /// load would resolve, at `offered` or `next-run`, without asking a
+        /// grantor again.
+        set-aside,
+        /// Its rollout failed or ran out of time. Listed until the caller
+        /// loads it again, which starts over, or sets it aside. The detail is
+        /// diagnostic.
+        failed(option<string>),
+        /// A state this version does not name, by its kebab-case name, never
+        /// empty. Treat it as not callable.
+        other(string),
+    }
+}

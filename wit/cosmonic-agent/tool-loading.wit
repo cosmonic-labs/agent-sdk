@@ -1,0 +1,197 @@
+package cosmonic:agent@0.4.4;
+
+/// The caller may change its own tool components while it runs: load one and
+/// set one aside. Unstable behind `agent-tool-loading`.
+///
+/// A loaded tool component is one more component in the caller's own
+/// workload, with its own grants, offered through the caller's `tools` import
+/// to the component that loaded it only. A `load_tools` tool the implementer
+/// offers the model is an adapter over `load`, made on the agent's behalf,
+/// and exists only where the caller holds this power.
+///
+/// Admission. A load needs no grantor when it is within the caller's ceiling
+/// (its own reach, plus its declared tool components and those a person
+/// approved earlier in this session) and policy does not ask for one; otherwise it waits on a grantor
+/// as `awaiting-approval`. `tool-discovery` reports the same decision as an
+/// offer's `fit`. A person's approval lasts for the session: loading the
+/// identical tool component again later needs no prompt, until the person
+/// removes it. Identical means the same image digests, the same resolved
+/// reach and no more functions than were approved; offering more functions
+/// asks again. A request nobody decides expires after a while.
+///
+/// Timing. A load serves the run in progress where the implementer can: the
+/// caller's `tools.list` includes the tool component's tools once it is
+/// `offered`. A harness that loads tools, or lets its model call
+/// `load_tools`, calls `tools.list` again before its next model call. An
+/// implementer that can change tools only between runs answers `next-run`.
+///
+/// Budget. The model's function budget (how many functions it is offered at
+/// once) comes from the model binding. When a load would exceed it, the
+/// implementer sets aside the least recently called tool component the
+/// agent loaded, and says which. Tool components the workload declared or a
+/// person added are never set aside automatically.
+@unstable(feature = agent-tool-loading)
+interface tool-loading {
+    @unstable(feature = agent-tool-loading)
+    use tool-component-types.{tool-component-source, tool-component-state};
+
+    /// Who put a tool component in the session.
+    @unstable(feature = agent-tool-loading)
+    variant origin {
+        /// The workload declared it. The implementer never sets it aside on
+        /// its own to make room.
+        workload-declared,
+        /// A person added it. The implementer never sets it aside on its own
+        /// to make room.
+        person-added,
+        /// The caller or its model loaded it. Only these are set aside
+        /// automatically, and only these can be set aside by the caller.
+        agent-loaded,
+        /// An origin this version does not name, by its kebab-case name,
+        /// never empty. Treat it like `workload-declared`: never set it
+        /// aside.
+        other(string),
+    }
+
+    /// One tool component in the caller's session.
+    @unstable(feature = agent-tool-loading)
+    record tool-component-info {
+        /// Its name, unique among the caller's tool components: the spec's
+        /// `name` for one the caller described, and the catalog name for one
+        /// loaded from the catalog. A catalog load whose name another tool
+        /// component already holds answers `name-taken`.
+        name: string,
+        /// The model-facing names its tools are offered under. They carry no
+        /// authority and do not change during the session.
+        aliases: list<string>,
+        /// Where it stands.
+        state: tool-component-state,
+        /// Who added it.
+        origin: origin,
+    }
+
+    /// What a load did.
+    @unstable(feature = agent-tool-loading)
+    record load-result {
+        /// The tool component as it now stands.
+        tool-component: tool-component-info,
+        /// The names of tool components set aside to stay within the
+        /// function budget.
+        set-aside: list<string>,
+    }
+
+    /// The caller's tool components and its function budget.
+    @unstable(feature = agent-tool-loading)
+    record working-set {
+        /// Declared first, then loaded, in order.
+        tool-components: list<tool-component-info>,
+        /// Functions offered to the model now.
+        offered-functions: u32,
+        /// The model's function budget, where one applies.
+        max-offered-functions: option<u32>,
+    }
+
+    /// Which limit a load would exceed.
+    @unstable(feature = agent-tool-loading)
+    variant load-limit {
+        /// Nothing can be set aside to stay within the function budget.
+        offered-functions,
+        /// Tool components bound in the workload.
+        tool-components,
+        /// Approvals pending at once.
+        pending-approvals,
+        /// A limit this version does not name, by its kebab-case name, never
+        /// empty. Treat it like the others: retry only after something
+        /// changes.
+        other(string),
+    }
+
+    /// A limit a load would exceed.
+    @unstable(feature = agent-tool-loading)
+    record load-limit-exceeded {
+        /// Which limit.
+        limit: load-limit,
+        /// The configured limit, where the implementer reports it. Never a
+        /// live count.
+        max: option<u64>,
+    }
+
+    /// Why a load failed. Detail strings are diagnostic: the implementer's
+    /// own words, safe to show the caller, never to be parsed.
+    @unstable(feature = agent-tool-loading)
+    variant load-error {
+        /// Loading is not enabled for this caller. Permanent.
+        disabled,
+        /// Policy or a person refused, a refusal's cooldown is running, or
+        /// the tool component reaches beyond what an ancestor above the
+        /// caller holds.
+        denied(option<string>),
+        /// Another tool component already holds the name.
+        name-taken,
+        /// A limit would be exceeded.
+        over-limit(load-limit-exceeded),
+        /// Malformed: an unknown catalog name or function, an empty function
+        /// list, a source this implementer does not serve, an image that
+        /// could not be read, or a component whose imports its grants do not
+        /// cover.
+        invalid(option<string>),
+        /// Could not be served now, or the tool component failed to start.
+        /// Retry may succeed.
+        unavailable(option<string>),
+        /// A failure not captured above.
+        other(option<string>),
+    }
+
+    /// Why a set-aside did nothing.
+    @unstable(feature = agent-tool-loading)
+    variant set-aside-error {
+        /// Loading is not enabled for this caller. Permanent.
+        disabled,
+        /// The caller holds no tool component of that name.
+        unknown,
+        /// The workload declared it or a person added it; only tool
+        /// components the agent loaded can be set aside.
+        not-agent-loaded,
+        /// It is still starting. Set it aside once its `load` resolves.
+        loading,
+        /// Could not be served now. Retry may succeed.
+        unavailable(option<string>),
+        /// A failure not captured above.
+        other(option<string>),
+    }
+
+    /// Why the working set could not be read.
+    @unstable(feature = agent-tool-loading)
+    variant read-error {
+        /// Loading is not enabled for this caller. Permanent.
+        disabled,
+        /// Could not be served now. Retry may succeed.
+        unavailable(option<string>),
+        /// A failure not captured above.
+        other(option<string>),
+    }
+
+    /// Load a tool component. Resolves when it is `offered`, `next-run` or
+    /// `awaiting-approval`, or with an error if it cannot load (a rollout
+    /// that fails or runs out of time answers `unavailable`). If the caller
+    /// already holds the identical one, a `set-aside` one comes back (after
+    /// the same checks, setting another aside if the budget needs room), a
+    /// `loading` one is joined, a `failed` or `denied` one is loaded afresh
+    /// (a refusal's cooldown still applies), and any other is returned as it
+    /// stands. Dropping the call stops waiting; the load goes on.
+    @unstable(feature = agent-tool-loading)
+    load: async func(source: tool-component-source) -> result<load-result, load-error>;
+
+    /// Set aside a tool component the caller loaded: its tools leave the
+    /// model's list from the next `tools.list`, and it becomes `set-aside`.
+    /// Its approval stays. A call in progress finishes. Setting aside one
+    /// that is already `set-aside` does nothing. On one `awaiting-approval`,
+    /// this withdraws the request; on one `failed` or `denied`, it removes it
+    /// from the listing.
+    @unstable(feature = agent-tool-loading)
+    set-aside: async func(name: string) -> result<_, set-aside-error>;
+
+    /// The caller's tool components now.
+    @unstable(feature = agent-tool-loading)
+    list-loaded: async func() -> result<working-set, read-error>;
+}
